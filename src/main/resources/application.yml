@@ -35,4 +35,7 @@ logging:
     com.chainpay: DEBUG
 
 server:
-  port: 8090
+  # 8095 而不是 8090：flow-pay 后端占用 8090，两个项目同时开着会撞。
+  # 用 ${VAR:默认值} 语法可被环境变量覆盖，换端口不用改代码也不用重新打包：
+  #     CHAINPAY_PORT=9099 java -jar target/chainpay-0.1.0-SNAPSHOT.jar
+  port: ${CHAINPAY_PORT:8095}
