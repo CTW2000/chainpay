@@ -1,0 +1,29 @@
+### 构建产物
+target/
+*.jar
+*.class
+
+### IDE
+.idea/
+*.iml
+.vscode/
+.settings/
+.classpath
+.project
+
+### 系统
+.DS_Store
+
+### 密钥 —— 绝不入库
+env/*.env
+!env/*.env.example
+*.key
+*.pem
+secrets/
+
+### 本地工作笔记（复盘留在本地，不入库）
+docs/retro/
+
+### 日志
+logs/
+*.log

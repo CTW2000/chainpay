@@ -1,0 +1,30 @@
+spring:
+  application:
+    name: chainpay
+
+  datasource:
+    # 对应 docker-compose.yml 里绑在 127.0.0.1:5433 的 Postgres 18
+    url: jdbc:postgresql://127.0.0.1:5433/chainpay
+    username: chainpay
+    password: chainpay_local_dev
+    hikari:
+      # 故意开小：并发测试时更容易把连接池竞争暴露出来。
+      # 池子开得大，很多并发问题会被"恰好没撞上"掩盖过去。
+      maximum-pool-size: 10
+      connection-timeout: 3000
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    # 迁移失败必须让应用启动失败，不能带着半个 schema 跑起来。
+    # 这是 flow-pay 部署链条里缺的一格（见 LEARNING-PATH.md M6）。
+    validate-on-migrate: true
+
+logging:
+  level:
+    # 想看每条 SQL 时把这行打开 —— 账本层的一个核心目的就是"SQL 看得见"
+    # org.springframework.jdbc.core: DEBUG
+    com.chainpay: DEBUG
+
+server:
+  port: 8090

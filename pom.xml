@@ -1,0 +1,130 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <!--
+      Spring Boot 4.1.0 (Spring Framework 7.0.x) —— 当前最新稳定版。
+      基线是 Java 17，我们用 Java 25 (LTS)。
+      注意：4.x 的网上示例还不多，遇到和 3.x 不同的写法属于正常，不是你写错了。
+    -->
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>4.1.0</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>com.chainpay</groupId>
+    <artifactId>chainpay</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+    <name>chainpay</name>
+    <description>加密支付网关 —— 学习项目</description>
+
+    <properties>
+        <java.version>25</java.version>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    </properties>
+
+    <dependencies>
+        <!-- Web：M1 才真正用到，先放着以便起进程 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+
+        <!--
+          JDBC 而不是 JPA：账本层要看得见每一条 SQL。
+          用的是 Spring 6.1+ 引入的 JdbcClient（在 spring-jdbc 里）。
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-jdbc</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
+
+        <!--
+          迁移。这里有两个都会咬人的版本陷阱，各来自一个不同的项目：
+
+          ① Flyway 10+ 把各数据库的支持拆成了独立模块
+             → flyway-database-postgresql 必须单独加，否则运行时报「不支持 postgresql」
+
+          ② Spring Boot 4 把自动配置从 spring-boot-autoconfigure 里拆了出来
+             → 只加 flyway-core 只能拿到 Flyway 这个库本身，
+               拿不到 Spring 的 FlywayAutoConfiguration，迁移根本不会执行。
+               现象很隐蔽：应用正常启动、数据源连得上、
+               只是表一张都没有（relation "xxx" does not exist）。
+               必须显式加 org.springframework.boot:spring-boot-flyway。
+
+          Boot 3.x 的示例里没有这一行 —— 这就是选最新版的代价。
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-flyway</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-database-postgresql</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+
+        <!-- ===== 测试 ===== -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!--
+          Testcontainers：测试跑真 PostgreSQL 18，不用 H2。
+          用 H2 会让你以为自己测过了 —— H2 的 NUMERIC 语义、隔离级别、锁行为
+          和 Postgres 都不一样，而这三处正好是本项目最要命的地方。
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-testcontainers</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!--
+          注意坐标：Testcontainers 2.x 把所有模块改名加了 testcontainers- 前缀。
+          1.x 时代是 org.testcontainers:postgresql / :junit-jupiter，
+          网上绝大多数示例还是旧坐标 —— 照抄会得到
+          "'dependencies.dependency.version' ... is missing"。
+          这就是选最新版的代价，也是这个项目要练的能力之一：
+          不要信示例，去 BOM 里查真相。
+        -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers-postgresql</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers-junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>

@@ -1,0 +1,18 @@
+# flow-pay 就是缺了这个文件 —— 一旦 Dockerfile 里出现 COPY . .，
+# .git/、target/、env/*.env（真密钥）会一起被打进镜像层。
+#
+# 关键：镜像的层是不可变的。COPY 进去再 RUN rm 删掉，
+# 密钥仍然留在前一层里，任何人 docker save 都能扒出来。
+
+.git
+.gitignore
+target
+docs
+env/*.env
+*.md
+!README.md
+.idea
+.vscode
+.DS_Store
+logs
+*.log

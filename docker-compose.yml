@@ -1,0 +1,35 @@
+# 本地开发用的中间件。应用本身不在这里跑（M6 再说）。
+#
+# 端口一律绑 127.0.0.1 —— 不要写成 "5433:5432"。
+# 那样会绑到 0.0.0.0，而且 Docker 直接写 iptables 的 DOCKER 链，
+# 优先级在 UFW 之前，你以为封住的端口其实是开的。
+# 参见 OWASP Docker_Security RULE #5a。
+
+services:
+  postgres:
+    image: postgres:18
+    container_name: chainpay-postgres
+    environment:
+      POSTGRES_DB: chainpay
+      POSTGRES_USER: chainpay
+      # 本地开发密码，不是密钥。真实密钥永远走环境注入，见 env/README.md
+      POSTGRES_PASSWORD: chainpay_local_dev
+    ports:
+      - "127.0.0.1:5433:5432"   # 用 5433 避开你本机可能已有的 5432
+    volumes:
+      # Postgres 18 起，官方镜像推荐把卷挂在 /var/lib/postgresql（而不是它下面的 data/）。
+      # 数据会落到子目录里，这样将来 pg_upgrade --link 不会跨挂载点边界。
+      # 沿用 17 及以前的 /var/lib/postgresql/data 会导致容器反复重启，
+      # 报 "there appears to be PostgreSQL data in ... (unused mount/volume)"。
+      - chainpay-pgdata:/var/lib/postgresql
+    healthcheck:
+      # 健康检查要区分「进程活着」和「真的能干活」——M6 会展开讲
+      test: ["CMD-SHELL", "pg_isready -U chainpay -d chainpay"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  chainpay-pgdata:
+    name: chainpay-pgdata
