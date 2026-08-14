@@ -1,5 +1,8 @@
 package com.chainpay.api;
 
+import com.chainpay.api.auth.AccountAccessService;
+import com.chainpay.api.auth.AccountAccessService.AuthorizedAccount;
+import com.chainpay.api.auth.ApiKeyAuthFilter;
 import com.chainpay.ledger.service.LedgerService;
 import com.chainpay.ledger.service.LedgerService.TransferCode;
 import com.chainpay.ledger.service.LedgerService.TransferCommand;
@@ -7,29 +10,28 @@ import java.math.BigDecimal;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestAttribute;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * M1 第一步 · 把账本开成 HTTP 接口。
+ * 商户对外接口。
  *
- * <p><b>⚠️ 这个版本是故意不设防的。</b>没有认证、没有签名、没有限频、没有校验。
- * 它存在的意义是先让整条链路跑通，然后我们一起攻击它 ——
- * 每发现一个洞，加一层防护，这样每层防护在防什么是看得见的。
- *
- * <p>不要把这个版本部署到任何能被外部访问的地方。
+ * <p>身份由 {@link ApiKeyAuthFilter} 在进入本类之前认证完毕，
+ * 商户 id 通过请求属性传进来（见 {@code @RequestAttribute}）。
+ * 本类<b>不</b>处理「你是谁」，只处理「你要干什么、能不能干」。
  */
 @RestController
 @RequestMapping("/api/v1")
 public class TransferController {
 
     private final LedgerService ledger;
+    private final AccountAccessService accounts;
 
-    // 构造器注入：Spring 启动时把 LedgerService 的实例传进来。
-    // 不用 @Autowired 字段注入 —— 构造器注入能让这个类在测试里被直接 new 出来。
-    public TransferController(LedgerService ledger) {
+    public TransferController(LedgerService ledger, AccountAccessService accounts) {
         this.ledger = ledger;
+        this.accounts = accounts;
     }
 
     /**
@@ -62,24 +64,61 @@ public class TransferController {
 
     public record BalanceResponse(String accountId, String balance) {}
 
+    /**
+     * 在<b>自己名下的两个账户之间</b>转账。
+     *
+     * <p><b>为什么借贷双方都必须属于调用方（默认拒绝）：</b>
+     *
+     * <ul>
+     *   <li><b>借方必须是你的</b> —— 这是显然的，钱从这里出。上一步 evilco
+     *       就是靠指定别人的借方账户把 acme 的钱转走的。</li>
+     *   <li><b>贷方也必须是你的</b> —— 这条不那么显然。放开贷方看似无害
+     *       （你的钱爱给谁给谁），但它会变成一个<b>账户探测器</b>：
+     *       给任意 id 转一个极小的金额，成功就说明那个账户存在。
+     *       攻击者能借此画出整个系统的账户分布。</li>
+     * </ul>
+     *
+     * <p>所以这个接口目前<b>只支持商户在自己账户之间划转</b>。
+     * 充值（M3）、提现（M4）、手续费扣收都有各自的流程和各自的规则，
+     * 不共用这个入口。
+     *
+     * <p><b>这是「默认拒绝、按需放开」</b>：先关到最小，等真有业务需要再逐个开口子。
+     * 反过来（先全开，出事了再收）意味着每个口子都要有人记得去关。
+     */
     @PostMapping("/transfers")
-    public CreateTransferResponse create(@RequestBody CreateTransferRequest request) {
+    public CreateTransferResponse create(
+            @RequestAttribute(ApiKeyAuthFilter.ATTR_MERCHANT_ID) long merchantId,
+            @RequestBody CreateTransferRequest request) {
+
+        // ★ 授权发生在这里，而且绕不过去 ★
+        //
+        // requireOwned 要么返回一个「已校验的账户」，要么抛异常 —— 它不返回布尔值。
+        // 如果它返回 boolean，调用方可以忘记看返回值，而忘记看一个布尔值
+        // 不会有任何编译错误。返回校验过的对象，意味着想拿到账户就必须先过校验。
+        AuthorizedAccount debit = accounts.requireOwned(merchantId, request.debitAccountId());
+        AuthorizedAccount credit = accounts.requireOwned(merchantId, request.creditAccountId());
+
         long transferId = ledger.transfer(new TransferCommand(
                 request.clientTransferId(),
                 request.currency(),
                 new BigDecimal(request.amount()),
-                request.debitAccountId(),
-                request.creditAccountId(),
+                debit.id(),
+                credit.id(),
                 TransferCode.valueOf(request.code()),
                 null));
 
         return new CreateTransferResponse(String.valueOf(transferId));
     }
 
+    /** 查询自己名下账户的余额。别人的账户查不了 —— 余额本身就是敏感信息。 */
     @GetMapping("/accounts/{accountId}/balance")
-    public BalanceResponse balance(@PathVariable long accountId) {
+    public BalanceResponse balance(
+            @RequestAttribute(ApiKeyAuthFilter.ATTR_MERCHANT_ID) long merchantId,
+            @PathVariable long accountId) {
+
+        AuthorizedAccount account = accounts.requireOwned(merchantId, accountId);
         return new BalanceResponse(
-                String.valueOf(accountId),
-                ledger.balanceOf(accountId).toPlainString());
+                String.valueOf(account.id()),
+                ledger.balanceOf(account.id()).toPlainString());
     }
 }
