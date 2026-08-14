@@ -22,6 +22,11 @@ public class LedgerException extends RuntimeException {
     public enum Reason {
         /** 幂等键缺失。调用方必须提供，服务端不替它生成——见 LedgerService 的 javadoc。 */
         MISSING_IDEMPOTENCY_KEY,
+        /**
+         * 业务类型缺失。每笔转账都必须说明「为什么」——
+         * 事后从借贷双方猜不出这是充值、提现还是冲正。
+         */
+        MISSING_TRANSFER_CODE,
         /** 金额非正，或小数位超过 18 位（超了会被数据库静默四舍五入，必须提前拒绝）。 */
         INVALID_AMOUNT,
         /** 借贷方是同一个账户。余额不变却产生两条分录，会让统计翻倍。 */

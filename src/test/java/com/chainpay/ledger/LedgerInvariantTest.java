@@ -3,6 +3,7 @@ package com.chainpay.ledger;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.chainpay.ledger.service.LedgerService;
+import com.chainpay.ledger.service.LedgerService.TransferCode;
 import com.chainpay.ledger.service.LedgerService.TransferCommand;
 import com.chainpay.support.AbstractPostgresTest;
 import java.math.BigDecimal;
@@ -47,7 +48,8 @@ class LedgerInvariantTest extends AbstractPostgresTest {
     @Test
     @DisplayName("一笔转账之后：账本平、余额对")
     void singleTransferKeepsLedgerBalanced() {
-        ledger.transfer(new TransferCommand("t-1", USDT, new BigDecimal("100"), mint, alice));
+        ledger.transfer(new TransferCommand("t-1", USDT, new BigDecimal("100"), mint, alice,
+                TransferCode.SEED, null));
 
         assertThat(invariantViolations())
                 .as("每种币的分录之和必须恒为 0")
@@ -59,7 +61,8 @@ class LedgerInvariantTest extends AbstractPostgresTest {
     @Test
     @DisplayName("余额不足必须拒绝，且不留下任何痕迹")
     void insufficientBalanceIsRejectedAtomically() {
-        ledger.transfer(new TransferCommand("t-seed", USDT, new BigDecimal("10"), mint, alice));
+        ledger.transfer(new TransferCommand("t-seed", USDT, new BigDecimal("10"), mint, alice,
+                TransferCode.SEED, null));
 
         assertThat(catchTransfer("t-toomuch", new BigDecimal("11"), alice, bob))
                 .as("余额 10 却要转 11，必须失败")
@@ -79,7 +82,8 @@ class LedgerInvariantTest extends AbstractPostgresTest {
     @Test
     @DisplayName("同一个幂等键并发提交 50 次，只能产生 1 笔")
     void sameIdempotencyKeyProducesExactlyOneTransfer() {
-        ledger.transfer(new TransferCommand("t-seed", USDT, new BigDecimal("1000"), mint, alice));
+        ledger.transfer(new TransferCommand("t-seed", USDT, new BigDecimal("1000"), mint, alice,
+                TransferCode.SEED, null));
 
         final int attempts = 50;
         AtomicInteger succeeded = new AtomicInteger();
@@ -114,7 +118,8 @@ class LedgerInvariantTest extends AbstractPostgresTest {
     @Test
     @DisplayName("余额 500，并发发起 1000 笔 1 元转账 —— 必须恰好成功 500 笔")
     void concurrentTransfersCannotOverdraw() {
-        ledger.transfer(new TransferCommand("t-seed", USDT, new BigDecimal("500"), mint, alice));
+        ledger.transfer(new TransferCommand("t-seed", USDT, new BigDecimal("500"), mint, alice,
+                TransferCode.SEED, null));
 
         final int threads = 100;
         final int perThread = 10;   // 共 1000 次尝试，但只有 500 元可用
@@ -162,7 +167,7 @@ class LedgerInvariantTest extends AbstractPostgresTest {
     /** 执行一次转账，返回「是否抛异常」。true = 被拒绝。 */
     private boolean catchTransfer(String key, BigDecimal amount, long from, long to) {
         try {
-            ledger.transfer(new TransferCommand(key, USDT, amount, from, to));
+            ledger.transfer(new TransferCommand(key, USDT, amount, from, to, TransferCode.INTERNAL, null));
             return false;
         } catch (RuntimeException e) {
             return true;
