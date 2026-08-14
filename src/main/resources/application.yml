@@ -3,8 +3,16 @@ spring:
     name: chainpay
 
   datasource:
-    # 对应 docker-compose.yml 里绑在 127.0.0.1:5433 的 Postgres 18
-    url: jdbc:postgresql://127.0.0.1:5433/chainpay
+    # 对应 docker-compose.yml 里绑在 127.0.0.1:5433 的 Postgres 18。
+    #
+    # 主机名必须写 localhost，不能写 127.0.0.1 —— 这是实测出来的，原因未查明：
+    #   InetAddress.getByName("127.0.0.1")   → 正常
+    #   JDBC 连 jdbc:postgresql://127.0.0.1  → UnknownHostException: 127.0.0.1
+    #   JDBC 连 jdbc:postgresql://localhost   → 正常
+    # 同一个 JVM、同一个 pgjdbc 42.7.11、同一个数据库，只差主机名写法。
+    # 已排除：macOS SOCKS 代理、HTTP(S)_PROXY 环境变量、preferIPv4Stack。
+    # 这是「知其然不知其所以然」的修法。查清之后把这段注释换成真正的原因。
+    url: jdbc:postgresql://localhost:5433/chainpay
     username: chainpay
     password: chainpay_local_dev
     hikari:
