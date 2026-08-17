@@ -1,0 +1,20 @@
+# 测试专用配置。
+#
+# Spring Boot 在测试时优先加载类路径下的这份，覆盖 src/main/resources/application.yml
+# 里的同名属性。生产那份里 chainpay.secret-key 没有默认值，缺了就起不来 ——
+# 那是刻意的，但测试不能因此跑不起来。
+#
+# 这里这把密钥是**固定的、公开的、只用于测试**。
+# 它出现在 git 里没有关系，因为它从不加密任何真实数据。
+#
+# ★ 真正危险的做法是把它写进 src/main/resources ★
+# 那样它就成了"默认值"，会跟着应用一路带进生产，而且不会有任何报错。
+# 一个人人都知道的默认密钥等于没有加密。
+# 解码后必须正好 32 字节（AES-256）。
+# 这里明文是 "chainpay-test-key-not-for-prod!!"，刚好 32 个 ASCII 字符。
+# 写这份配置时第一版少了一个字节（31），SecretCipher 的构造器直接抛异常 ——
+# 这正是那个长度检查存在的意义：配错了就起不来，而不是「起来了但加密是弱的」。
+chainpay:
+  secret-key: "Y2hhaW5wYXktdGVzdC1rZXktbm90LWZvci1wcm9kISE="
+
+# 数据源不用配：测试走 Testcontainers，由 @ServiceConnection 自动注入。

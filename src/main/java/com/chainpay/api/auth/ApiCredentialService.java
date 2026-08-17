@@ -2,56 +2,128 @@ package com.chainpay.api.auth;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
-import java.util.HexFormat;
+import java.time.Duration;
+import java.util.Base64;
 import java.util.Optional;
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
 
 /**
- * 验证 API 凭证 —— 回答「你是谁」。
+ * 验证 API 请求的签名 —— 回答「你是谁」，而且<b>不需要你把钥匙发过来</b>。
  *
- * <p>注意它<b>不</b>回答「你能动谁的钱」。那是授权，是下一步的事。
- * 把这两件事分成两个类，是为了让「只做认证不做授权会怎样」看得见。
+ * <p><b>上一版的问题：</b>请求头里带着 secret 明文。
+ * 这等于每次开门都把钥匙复印一份留在门口 —— 反向代理的访问日志、
+ * 中间任何一跳、一次不小心的 {@code log.debug(headers)}，
+ * 谁看到一次就永久拥有这把钥匙。而且截获一个请求原样重发，服务端分辨不出来。
+ *
+ * <p><b>这一版：</b>双方各自用 secret 对「请求内容」算一个签名，只发签名。
+ * 服务端用自己存的 secret 重算一遍，对得上就说明对方确实知道 secret。
+ * <b>钥匙从不离开双方。</b>
+ *
+ * <p>签名串的构造照 OKX v5，比币安更严：
+ *
+ * <pre>
+ *   prehash   = timestamp + method + requestPath + body
+ *   signature = Base64( HMAC-SHA256(prehash, secret) )
+ * </pre>
+ *
+ * <p>四个部分各自防一件事：
+ * <ul>
+ *   <li>{@code timestamp} —— 防重放（配合服务端的时间窗校验）</li>
+ *   <li>{@code method}    —— 防止把 GET 改成 DELETE 重放（币安只签 query string，挡不住这个）</li>
+ *   <li>{@code path}      —— 防止把请求打到另一个接口上</li>
+ *   <li>{@code body}      —— 防止改金额、改收款账户</li>
+ * </ul>
  */
 @Service
 public class ApiCredentialService {
 
-    private final JdbcClient jdbcClient;
+    private static final String HMAC_ALGORITHM = "HmacSHA256";
 
-    public ApiCredentialService(JdbcClient jdbcClient) {
+    /**
+     * 允许的时间偏差。
+     *
+     * <p>对应币安的 {@code recvWindow}（默认 5 秒）。它同时满足 OWASP
+     * Transaction_Authorization 的两条要求：
+     * <ul>
+     *   <li><b>2.9</b> 授权凭据只在有限时间窗内有效 ——
+     *       挡住「凭据被恶意软件送到攻击者机器上，稍后再用」</li>
+     *   <li><b>2.10</b> 每次操作的凭据必须唯一 ——
+     *       timestamp 参与签名，换一秒签名就完全不同</li>
+     * </ul>
+     *
+     * <p><b>窗口大小是个取舍</b>：
+     * 太小，客户端和服务器时钟差几秒就全部失败；
+     * 太大，攻击者重放的窗口就有那么长。5 秒是业界常见值。
+     *
+     * <p>注意它是<b>双向</b>的：也要挡住「时间戳在未来」的请求，
+     * 否则攻击者可以预先用未来时间戳签好，等到那一刻再发。
+     */
+    private static final Duration MAX_CLOCK_SKEW = Duration.ofSeconds(5);
+
+    private final JdbcClient jdbcClient;
+    private final SecretCipher cipher;
+
+    public ApiCredentialService(JdbcClient jdbcClient, SecretCipher cipher) {
         this.jdbcClient = jdbcClient;
+        this.cipher = cipher;
     }
 
     /** 认证成功后我们知道的全部信息。 */
     public record AuthenticatedMerchant(long merchantId, String merchantCode) {}
 
     /**
-     * 用 api key + secret 换取商户身份。
+     * 一个待验证的已签名请求。
      *
-     * <p>失败时返回空 {@link Optional}，<b>不区分失败原因</b>：
-     * 「这个 key 不存在」和「key 存在但 secret 错了」如果给出不同的回答，
-     * 攻击者就能用它来枚举出哪些 key 是真的。
+     * @param timestampMillis 客户端声称的发起时刻（毫秒纪元）
+     * @param method          HTTP 方法，大写
+     * @param path            请求路径，含查询串
+     * @param body            请求体原文；GET 请求为空字符串
+     * @param signature       Base64 的 HMAC-SHA256
      */
-    public Optional<AuthenticatedMerchant> authenticate(String apiKey, String secret) {
-        if (apiKey == null || apiKey.isBlank() || secret == null || secret.isBlank()) {
+    public record SignedRequest(
+            String apiKey,
+            long timestampMillis,
+            String method,
+            String path,
+            String body,
+            String signature
+    ) {}
+
+    /**
+     * 验证签名并返回商户身份。
+     *
+     * <p>失败一律返回空 {@link Optional}，<b>不区分原因</b>：
+     * 「key 不存在」「签名不对」「时间戳过期」如果给出不同回答，
+     * 攻击者就能据此枚举出哪些 key 是真的、以及服务器的时钟。
+     */
+    public Optional<AuthenticatedMerchant> authenticate(SignedRequest request) {
+        if (request.apiKey() == null || request.apiKey().isBlank()
+                || request.signature() == null || request.signature().isBlank()) {
             return Optional.empty();
         }
 
-        // 一次查询同时校验三件事：凭证有效、商户存在、商户未被停用。
-        // 分成三次查询也能做，但那样会出现「凭证有效但商户已停用」这种中间状态，
-        // 而中间状态是要被处理的分支，分支就是出错的机会。
+        // ★ 先查时间窗，再查数据库 ★
+        //
+        // 顺序是有意的：时间窗校验是纯内存计算，几乎零成本；查数据库要一次 IO。
+        // 把便宜的检查放前面，攻击者用过期时间戳刷请求时打不到数据库上。
+        if (!withinClockSkew(request.timestampMillis())) {
+            return Optional.empty();
+        }
+
         var row = jdbcClient.sql("""
-                        SELECT c.secret_hash, m.id AS merchant_id, m.code AS merchant_code
+                        SELECT c.secret_encrypted, m.id AS merchant_id, m.code AS merchant_code
                         FROM api_credential c
                                  JOIN merchant m ON m.id = c.merchant_id
                         WHERE c.api_key = :apiKey
                           AND c.status  = 'ACTIVE'
                           AND m.status  = 'ACTIVE'
                         """)
-                .param("apiKey", apiKey)
+                .param("apiKey", request.apiKey())
                 .query((rs, rowNum) -> new CredentialRow(
-                        rs.getString("secret_hash"),
+                        rs.getString("secret_encrypted"),
                         rs.getLong("merchant_id"),
                         rs.getString("merchant_code")))
                 .optional();
@@ -60,61 +132,65 @@ public class ApiCredentialService {
             return Optional.empty();
         }
 
-        // ★ 用常量时间比较，不用 String.equals ★
-        //
-        // String.equals 一发现某个字符不同就立刻返回，所以「前 1 个字符对」
-        // 和「前 20 个字符对」耗时不同。攻击者反复请求、测量响应时间差，
-        // 理论上可以一个字符一个字符地把正确值试出来 —— 这叫时序攻击。
-        //
-        // 对我们这种 32 字节随机 secret，时序攻击实际上很难成功（网络抖动远大于
-        // 那点时间差）。但 MessageDigest.isEqual 是免费的，
-        // 而「这里可以偷懒」的判断一旦形成习惯，会被带到真正要命的地方去。
+        String secret = cipher.decrypt(row.get().secretEncrypted());
+        String expected = sign(prehash(request), secret);
+
+        // 常量时间比较：String.equals 一发现字符不同就返回，
+        // 「前 1 个字符对」和「前 20 个字符对」耗时不同，理论上可被逐字符试探。
         if (!MessageDigest.isEqual(
-                sha256Hex(secret).getBytes(StandardCharsets.UTF_8),
-                row.get().secretHash().getBytes(StandardCharsets.UTF_8))) {
+                expected.getBytes(StandardCharsets.UTF_8),
+                request.signature().getBytes(StandardCharsets.UTF_8))) {
             return Optional.empty();
         }
 
-        touchLastUsed(apiKey);
-        return Optional.of(new AuthenticatedMerchant(row.get().merchantId(), row.get().merchantCode()));
+        touchLastUsed(request.apiKey());
+        return Optional.of(new AuthenticatedMerchant(
+                row.get().merchantId(), row.get().merchantCode()));
     }
 
     /**
-     * 计算 secret 的 SHA-256 十六进制。
+     * 构造被签名的字符串。
      *
-     * <p><b>为什么用快哈希 SHA-256，而不是存密码常用的 bcrypt：</b>
+     * <p><b>拼接顺序和分隔方式必须双方完全一致</b>，差一个字符签名就对不上。
+     * 这里不加分隔符，与 OKX v5 一致 —— 因为 timestamp 是定长数字、
+     * method 是大写字母、path 以 {@code /} 开头，天然不会有歧义。
      *
-     * <ul>
-     *   <li>用户密码是人记的，熵低（"abc123"），必须用<b>故意很慢</b>的算法，
-     *       让暴力破解每次尝试都付出代价。</li>
-     *   <li>API secret 是服务端生成的 32 字节随机串，猜不出来，慢哈希没有意义；
-     *       而且<b>每个请求都要验一次</b>，bcrypt 会让每个请求多花几百毫秒。</li>
-     * </ul>
-     *
-     * <p>这个取舍成立的前提是：<b>secret 必须由服务端随机生成，绝不允许商户自选</b>。
-     * 一旦允许自选，商户会填 "123456"，快哈希就守不住了。
+     * <p>（如果各段长度可变且字符集重叠，就必须加分隔符，
+     * 否则 {@code "ab"+"c"} 和 {@code "a"+"bc"} 会算出同一个签名 ——
+     * 这是拼接式签名的经典漏洞。）
      */
-    public static String sha256Hex(String value) {
+    public static String prehash(SignedRequest request) {
+        return request.timestampMillis() + request.method() + request.path() + request.body();
+    }
+
+    /** 用 secret 对内容算 HMAC-SHA256，返回 Base64。 */
+    public static String sign(String content, String secret) {
         try {
-            byte[] digest = MessageDigest.getInstance("SHA-256")
-                    .digest(value.getBytes(StandardCharsets.UTF_8));
-            return HexFormat.of().formatHex(digest);
-        } catch (NoSuchAlgorithmException e) {
-            // SHA-256 是 Java 平台规范要求必须提供的算法，走不到这里。
-            throw new IllegalStateException("当前 JVM 不支持 SHA-256", e);
+            Mac mac = Mac.getInstance(HMAC_ALGORITHM);
+            mac.init(new SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), HMAC_ALGORITHM));
+            return Base64.getEncoder()
+                    .encodeToString(mac.doFinal(content.getBytes(StandardCharsets.UTF_8)));
+        } catch (Exception e) {
+            throw new IllegalStateException("签名计算失败", e);
         }
     }
 
     /**
-     * 记录凭证最近一次被使用的时间。
+     * 时间戳必须落在 [现在 - 窗口, 现在 + 窗口] 之内。
      *
-     * <p>用途：找出「三个月没用过却一直有效」的凭证并回收 ——
-     * 长期闲置又有效的凭证是最容易被忘掉、也最容易被滥用的那种。
+     * <p>两端都要卡：只卡「过期」不卡「未来」的话，
+     * 攻击者可以预先用未来时间戳签好请求，等到那一刻再发。
+     */
+    private boolean withinClockSkew(long timestampMillis) {
+        long skew = Math.abs(System.currentTimeMillis() - timestampMillis);
+        return skew <= MAX_CLOCK_SKEW.toMillis();
+    }
+
+    /**
+     * 记录凭证最近一次被使用的时间，用来回收长期闲置的僵尸凭证。
      *
-     * <p><b>已知代价</b>：这是<b>每个 API 请求一次数据库写</b>。
-     * 请求量上来之后它会成为热点（每次写都产生 WAL、都要拿行锁）。
-     * 常见优化是「距上次更新超过 N 分钟才写」，等真的有量了再改，
-     * 现在先用最简单的写法，把代价写在这里。
+     * <p><b>已知代价</b>：每个 API 请求一次数据库写，量大后会成为写入热点。
+     * 常见优化是「距上次更新超过 N 分钟才写」，等真有量了再改。
      */
     private void touchLastUsed(String apiKey) {
         jdbcClient.sql("UPDATE api_credential SET last_used_at = now() WHERE api_key = :apiKey")
@@ -122,5 +198,5 @@ public class ApiCredentialService {
                 .update();
     }
 
-    private record CredentialRow(String secretHash, long merchantId, String merchantCode) {}
+    private record CredentialRow(String secretEncrypted, long merchantId, String merchantCode) {}
 }

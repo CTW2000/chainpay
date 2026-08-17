@@ -28,6 +28,19 @@ spring:
     # 这是 flow-pay 部署链条里缺的一格（见 LEARNING-PATH.md M6）。
     validate-on-migrate: true
 
+chainpay:
+  # 加密 API secret 用的 AES-256 密钥（Base64 的 32 字节）。
+  # 生成：openssl rand -base64 32
+  #
+  # ★ 故意不给默认值 ★
+  # 没设这个环境变量，应用**直接起不来**。这是刻意的：
+  # 如果这里写一个默认值，它迟早会被带进生产 —— 而一个人人都知道的默认密钥
+  # 等于没有加密，且不会有任何报错，没有人会发现。
+  # 「配错了就起不来」远好过「配错了但看起来正常」。
+  #
+  # 测试用的固定密钥在 src/test/resources/application.yml，只对测试生效。
+  secret-key: ${CHAINPAY_SECRET_KEY}
+
 logging:
   level:
     # 想看每条 SQL 时把这行打开 —— 账本层的一个核心目的就是"SQL 看得见"
