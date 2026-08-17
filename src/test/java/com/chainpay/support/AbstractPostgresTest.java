@@ -2,6 +2,7 @@ package com.chainpay.support;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.chainpay.api.auth.RateLimiter;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -47,10 +48,22 @@ public abstract class AbstractPostgresTest {
     @Autowired
     protected JdbcClient jdbc;
 
-    /** 每个测试方法前清空数据，保证测试之间互不影响。 */
+    /** 限流器是单例，计数跨测试累积，必须在每个测试前重置。 */
+    @Autowired
+    protected RateLimiter rateLimiter;
+
+    /**
+     * 每个测试方法前清空数据与限流计数，保证测试之间互不影响。
+     *
+     * <p><b>限流器必须一起重置</b>：它是单例 bean，计数会跨测试累积。
+     * 不重置的话，跑在后面的测试会因为「前面的测试已经把配额用掉了」
+     * 而莫名其妙地返回 429 —— 而且这种失败<b>取决于测试执行顺序</b>，
+     * 单独跑绿、一起跑红，是最难查的一类测试问题。
+     */
     @BeforeEach
     void resetLedger() {
         jdbc.sql("TRUNCATE entry, transfer, account RESTART IDENTITY CASCADE").update();
+        rateLimiter.resetAll();
     }
 
     /**

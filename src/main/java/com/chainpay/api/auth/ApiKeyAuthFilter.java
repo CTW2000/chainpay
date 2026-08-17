@@ -14,16 +14,22 @@ import org.springframework.util.StreamUtils;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 /**
- * 每个请求进业务代码之前，先在这里验签名。
+ * 每个请求进业务代码之前，先在这里限频 + 验签名。
  *
- * <p><b>相比上一版的变化：不再接收 secret 明文。</b>
- * 客户端用 secret 对「时间戳 + 方法 + 路径 + 请求体」算一个 HMAC 签名，
- * 只把签名发过来；服务端用自己存的 secret 重算比对。<b>钥匙从不上路。</b>
+ * <p><b>两道闸门的顺序是关键：</b>
  *
  * <pre>
- *   prehash = timestamp + method + path + body
- *   sign    = Base64(HMAC-SHA256(prehash, secret))
+ *   ① 认证失败次数限流（按 IP）  —— 挡住暴力破解，在验签之前就拒
+ *   ② 验签名                    —— 计算 HMAC、查库、解密，有真实成本
+ *   ③ 请求配额限流（按 API key） —— 认证通过后才知道是谁，才能按 key 计
  * </pre>
+ *
+ * <p>为什么 ① 必须在 ② 之前：验签要算 HMAC、要查数据库、要解密，
+ * <b>这些成本攻击者不用付，我们要付</b>。先按 IP 拦住反复失败的来源，
+ * 攻击流量就打不到昂贵的那一步上。
+ *
+ * <p>为什么 ③ 必须在 ② 之后：认证成功之前<b>我们不知道调用方是谁</b> ——
+ * 它给的 api key 可能根本不存在。按一个攻击者能随意伪造的字段限流，等于没限。
  */
 @Component
 public class ApiKeyAuthFilter extends OncePerRequestFilter {
@@ -41,7 +47,7 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
      *
      * <p>为了算签名，整个请求体必须先读进内存。<b>没有上限的话，
      * 一个几 GB 的请求体就能把服务的内存吃光</b> —— 而且这发生在认证<b>之前</b>，
-     * 也就是说不需要任何凭证就能发起。
+     * 不需要任何凭证。
      *
      * <p>这是「为了做安全检查而引入新攻击面」的典型例子：
      * 加一层防护时要问一句，这层防护本身能不能被用来打我。
@@ -49,9 +55,11 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
     private static final int MAX_BODY_BYTES = 1024 * 1024;
 
     private final ApiCredentialService credentials;
+    private final RateLimiter rateLimiter;
 
-    public ApiKeyAuthFilter(ApiCredentialService credentials) {
+    public ApiKeyAuthFilter(ApiCredentialService credentials, RateLimiter rateLimiter) {
         this.credentials = credentials;
+        this.rateLimiter = rateLimiter;
     }
 
     /**
@@ -73,6 +81,8 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
                                     FilterChain chain) throws ServletException, IOException {
 
+        String clientIp = clientIp(request);
+
         // 先读 body —— 它是被签名的内容之一。
         // 读完必须用 CachedBodyHttpServletRequest 包一层，否则控制器读到的是空流：
         // HttpServletRequest 的输入流只能读一次。
@@ -83,8 +93,10 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
         }
         CachedBodyHttpServletRequest cached = new CachedBodyHttpServletRequest(request, body);
 
+        String apiKey = request.getHeader(HEADER_API_KEY);
+
         var merchant = credentials.authenticate(new SignedRequest(
-                request.getHeader(HEADER_API_KEY),
+                apiKey,
                 parseTimestamp(request.getHeader(HEADER_TIMESTAMP)),
                 request.getMethod(),
                 fullPath(request),
@@ -92,12 +104,25 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
                 request.getHeader(HEADER_SIGNATURE)));
 
         if (merchant.isEmpty()) {
-            // ★ 所有失败给同一个回答 ★
-            //
-            // 不能分别回「缺少请求头」「这个 key 不存在」「签名不对」「时间戳过期」——
+            // 认证失败按 IP 计数。超过阈值后连 401 都不再回，直接 429 ——
+            // 对应 OWASP Transaction_Authorization 2.4：失败达上限后整个流程重来。
+            if (!rateLimiter.recordAuthFailure(clientIp)) {
+                tooManyRequests(response, 60);
+                return;
+            }
+            // ★ 所有认证失败给同一个回答 ★
+            // 不能分别回「缺少请求头」「key 不存在」「签名不对」「时间戳过期」——
             // 那等于告诉攻击者「你猜的 key 是真的，只是签名错了」，可用于枚举；
             // 「时间戳过期」还会泄露服务器的时钟。
-            reject(response);
+            unauthorized(response);
+            return;
+        }
+
+        // 认证通过，清掉该来源的失败计数：正常用户不该被自己历史上的几次失败拖累。
+        rateLimiter.clearAuthFailures(clientIp);
+
+        if (!rateLimiter.allowRequest(apiKey)) {
+            tooManyRequests(response, rateLimiter.secondsUntilWindowReset(apiKey));
             return;
         }
 
@@ -106,6 +131,25 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
 
         // 往下传的是包装后的请求，控制器才能读到 body
         chain.doFilter(cached, response);
+    }
+
+    /**
+     * 取客户端 IP。
+     *
+     * <p><b>⚠️ X-Forwarded-For 是客户端可以随便伪造的请求头。</b>
+     * 只有在「请求一定经过我们自己的反向代理、且代理会覆写这个头」时才可信。
+     * 直接暴露在公网的服务读这个头做限流，等于让攻击者每次换一个假 IP 绕过限流。
+     *
+     * <p>这里读它是因为我们的部署形态是 nginx 反代（见 M6）。
+     * <b>如果哪天这个前提变了，这里必须改。</b>
+     */
+    private String clientIp(HttpServletRequest request) {
+        String forwarded = request.getHeader("X-Forwarded-For");
+        if (forwarded != null && !forwarded.isBlank()) {
+            // 该头可能是逗号分隔的链路，第一段是最初的客户端
+            return forwarded.split(",")[0].trim();
+        }
+        return request.getRemoteAddr();
     }
 
     /**
@@ -128,11 +172,31 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
         }
     }
 
-    private void reject(HttpServletResponse response) throws IOException {
-        response.setStatus(HttpStatus.UNAUTHORIZED.value());
+    private void unauthorized(HttpServletResponse response) throws IOException {
+        writeJson(response, HttpStatus.UNAUTHORIZED,
+                "{\"code\":\"UNAUTHORIZED\",\"message\":\"签名校验失败\"}");
+    }
+
+    /**
+     * 429 必须带 {@code Retry-After}。
+     *
+     * <p>不带的话，客户端只知道「被拒了」，不知道该等多久，
+     * 于是它会立刻重试 —— <b>限流反而制造了更多请求</b>。
+     * OWASP REST Security 把 429 单列出来，正是因为它是给机器读的指令。
+     */
+    private void tooManyRequests(HttpServletResponse response, long retryAfterSeconds)
+            throws IOException {
+        response.setHeader("Retry-After", String.valueOf(retryAfterSeconds));
+        writeJson(response, HttpStatus.TOO_MANY_REQUESTS,
+                "{\"code\":\"RATE_LIMITED\",\"message\":\"请求过于频繁\"}");
+    }
+
+    private void writeJson(HttpServletResponse response, HttpStatus status, String json)
+            throws IOException {
+        response.setStatus(status.value());
         response.setContentType(MediaType.APPLICATION_JSON_VALUE);
         response.setCharacterEncoding(StandardCharsets.UTF_8.name());
         // 响应体里不含任何内部细节：不说是哪一步失败的，也不回显收到的 key。
-        response.getWriter().write("{\"code\":\"UNAUTHORIZED\",\"message\":\"签名校验失败\"}");
+        response.getWriter().write(json);
     }
 }
