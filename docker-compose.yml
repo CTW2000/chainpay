@@ -30,6 +30,28 @@ services:
       retries: 10
     restart: unless-stopped
 
+  redis:
+    image: redis:8.10
+    container_name: chainpay-redis
+    # 6380 而不是默认的 6379：避开你本机或别的项目可能已经在跑的 Redis。
+    ports:
+      - "127.0.0.1:6380:6379"
+    # ★ 故意不挂数据卷、关掉持久化 ★
+    # 这个 Redis 只存限流计数 —— 那是「丢了也无所谓」的数据：
+    # 重启后计数归零，最坏情况是某个商户多打了一个窗口的请求量。
+    # 加持久化只会带来额外的磁盘 IO 和运维负担，换不到任何东西。
+    #
+    # 这个判断的前提是「Redis 里只放可丢弃的数据」。
+    # 哪天往里塞了不能丢的东西（比如 M4 的 nonce 分配），前提就不成立了，
+    # 那时要么加持久化，要么把那份数据放回 Postgres。
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
 volumes:
   chainpay-pgdata:
     name: chainpay-pgdata

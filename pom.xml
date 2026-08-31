@@ -49,6 +49,20 @@
         </dependency>
 
         <!--
+          Redis：限流计数需要在所有实例之间共享。
+          进程内的 AtomicLong 在单实例下是对的，扩容到两个实例的那一刻就不对了
+          （各自允许 120，商户实际能打 240）。
+
+          底层客户端是 Lettuce（Boot 托管 7.5.2）—— 它是线程安全的，
+          一个连接可以被所有线程共用，不需要连接池。
+          Jedis 不是线程安全的，必须配池；这是两者最主要的区别。
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-redis</artifactId>
+        </dependency>
+
+        <!--
           迁移。这里有两个都会咬人的版本陷阱，各来自一个不同的项目：
 
           ① Flyway 10+ 把各数据库的支持拆成了独立模块
@@ -115,6 +129,20 @@
         <dependency>
             <groupId>org.testcontainers</groupId>
             <artifactId>testcontainers-junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!--
+          测试跑真 Redis，理由同真 Postgres：内存桩测不出真实行为
+          （尤其 Lua 脚本的原子性，桩根本模拟不了）。
+
+          注意 groupId 是 com.redis 而不是 org.testcontainers ——
+          Redis 模块不在 Testcontainers 官方 BOM 里，是 Redis 官方维护的第三方模块。
+          我第一次写成了 org.testcontainers:testcontainers-redis，查 BOM 才发现不存在。
+          Spring Boot 托管它的版本（testcontainers-redis-module.version = 2.2.4）。
+        -->
+        <dependency>
+            <groupId>com.redis</groupId>
+            <artifactId>testcontainers-redis</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>

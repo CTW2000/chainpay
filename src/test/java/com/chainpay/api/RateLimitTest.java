@@ -3,6 +3,8 @@ package com.chainpay.api;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.chainpay.api.auth.ApiCredentialService;
+import com.chainpay.api.auth.RateLimiter;
+import com.chainpay.api.auth.RedisRateLimiter;
 import com.chainpay.api.auth.SecretCipher;
 import com.chainpay.support.AbstractPostgresTest;
 import java.net.URI;
@@ -11,6 +13,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.Optional;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.BeforeEach;
@@ -126,6 +129,64 @@ class RateLimitTest extends AbstractPostgresTest {
                 .as("放行数必须恰好等于配额；多出来就说明计数不是原子的")
                 .isEqualTo(REQUESTS_PER_MINUTE);
         assertThat(limited.get()).isEqualTo(attempts - REQUESTS_PER_MINUTE);
+    }
+
+    // ==================================================================
+    // 计数到底存在哪里 —— 这两个测试防的是「静默降级」
+    // ==================================================================
+
+    @Test
+    @DisplayName("★ 计数必须真的走 Redis，而不是悄悄退回本地内存")
+    void countingActuallyGoesThroughRedis() {
+        // 没有这个断言的话，Redis 连不上时限流器会静默降级到进程内计数，
+        // 而所有限流测试照样全绿 —— 我们会以为跨实例限流生效了，实际没有。
+        // 静默降级比不降级更危险：系统看起来一切正常，保护却弱了 N 倍。
+        signedGet();
+        signedGet();
+        signedGet();
+
+        assertThat(rateLimiter.isDegraded())
+                .as("Redis 可用时不应处于降级状态")
+                .isFalse();
+        assertThat(redisTemplate.opsForValue().get("cp:rate:ak_acme"))
+                .as("计数必须出现在 Redis 里")
+                .isEqualTo("3");
+        assertThat(redisTemplate.getExpire("cp:rate:ak_acme"))
+                .as("必须设了 TTL，否则这个 key 永不过期，商户会被永久限流")
+                .isPositive();
+    }
+
+    @Test
+    @DisplayName("★ Redis 挂掉时降级到本地计数，而不是放行全部或拒绝全部")
+    void fallsBackToLocalCountingWhenRedisIsUnavailable() {
+        // 用一个「永远连不上」的 RedisRateLimiter 构造限流器，
+        // 而不去停掉共享的测试容器 —— 那会连累其他测试。
+        var alwaysDown = new RedisRateLimiter(null) {
+            @Override
+            public Optional<Long> increment(String key) {
+                return Optional.empty();   // 模拟 Redis 不可用
+            }
+
+            @Override
+            public void clear(String key) {
+                // Redis 挂了，清不掉也不该抛异常
+            }
+        };
+        var degradedLimiter = new RateLimiter(alwaysDown);
+
+        // 关键断言：降级之后限流仍然生效，不是 fail-open 全部放行
+        for (int i = 0; i < REQUESTS_PER_MINUTE; i++) {
+            assertThat(degradedLimiter.allowRequest("ak_test"))
+                    .as("降级后配额内的第 %d 次仍应放行", i + 1)
+                    .isTrue();
+        }
+        assertThat(degradedLimiter.allowRequest("ak_test"))
+                .as("降级后超出配额仍应拒绝 —— 保护变弱了，但没有消失")
+                .isFalse();
+
+        assertThat(degradedLimiter.isDegraded())
+                .as("降级状态必须能被观测到，否则运维不知道保护已经弱了")
+                .isTrue();
     }
 
     // ==================================================================

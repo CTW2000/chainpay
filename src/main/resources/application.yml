@@ -21,6 +21,21 @@ spring:
       maximum-pool-size: 10
       connection-timeout: 3000
 
+  data:
+    redis:
+      # 对应 docker-compose.yml 里绑在 127.0.0.1:6380 的 Redis 8。
+      # 主机名同样写 localhost 而不是 127.0.0.1（原因见上面数据源那段注释）。
+      host: ${CHAINPAY_REDIS_HOST:localhost}
+      port: ${CHAINPAY_REDIS_PORT:6380}
+      # ★ 超时必须设，而且要短 ★
+      # 不设的话，Redis 挂掉时每个请求都会在这里卡住默认的几十秒，
+      # 线程池被耗尽，整个服务跟着一起死 —— 一个「保护措施」把主业务拖垮。
+      # 设成 1 秒：Redis 正常时远远够用；Redis 挂了时快速失败、立刻走降级路径。
+      timeout: 1s
+      connect-timeout: 1s
+      lettuce:
+        shutdown-timeout: 200ms
+
   flyway:
     enabled: true
     locations: classpath:db/migration

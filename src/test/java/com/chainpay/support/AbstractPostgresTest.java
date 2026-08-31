@@ -3,11 +3,13 @@ package com.chainpay.support;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.chainpay.api.auth.RateLimiter;
+import com.redis.testcontainers.RedisContainer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.testcontainers.containers.PostgreSQLContainer;
 
@@ -41,8 +43,19 @@ public abstract class AbstractPostgresTest {
     @ServiceConnection
     static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:18");
 
+    /**
+     * 测试跑<b>真的 Redis</b>，理由和真 Postgres 一样。
+     *
+     * <p>限流的正确性依赖 Lua 脚本的<b>原子执行</b> ——
+     * 那是 Redis 服务端的行为，任何内存桩都模拟不了。
+     * 用桩测出来的「通过」不能证明真 Redis 上也通过。
+     */
+    @ServiceConnection
+    static final RedisContainer REDIS = new RedisContainer("redis:8.10");
+
     static {
         POSTGRES.start();
+        REDIS.start();
     }
 
     @Autowired
@@ -51,6 +64,9 @@ public abstract class AbstractPostgresTest {
     /** 限流器是单例，计数跨测试累积，必须在每个测试前重置。 */
     @Autowired
     protected RateLimiter rateLimiter;
+
+    @Autowired
+    protected StringRedisTemplate redisTemplate;
 
     /**
      * 每个测试方法前清空数据与限流计数，保证测试之间互不影响。
@@ -63,6 +79,8 @@ public abstract class AbstractPostgresTest {
     @BeforeEach
     void resetLedger() {
         jdbc.sql("TRUNCATE entry, transfer, account RESTART IDENTITY CASCADE").update();
+        // Redis 里的计数也要清 —— 现在计数主要存在那里，只清本地等于没清。
+        redisTemplate.getConnectionFactory().getConnection().serverCommands().flushAll();
         rateLimiter.resetAll();
     }
 
