@@ -2,11 +2,11 @@ package com.chainpay.api;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.chainpay.api.auth.ApiCredentialService;
 import com.chainpay.api.auth.RateLimiter;
 import com.chainpay.api.auth.RedisRateLimiter;
 import com.chainpay.api.auth.SecretCipher;
 import com.chainpay.support.AbstractPostgresTest;
+import com.chainpay.support.SignedRequests;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -92,7 +92,8 @@ class RateLimitTest extends AbstractPostgresTest {
         var rejected = signedGet();
 
         assertThat(rejected.statusCode()).isEqualTo(429);
-        assertThat(rejected.body()).contains("RATE_LIMITED");
+        // 契约从可读名改成了数字（M1.5）：名字会诱使人重命名，数字不会。
+        assertThat(rejected.body()).contains("\"code\":\"5001\"");
         // 不带 Retry-After 的话，客户端不知道该等多久，会立刻重试 ——
         // 限流反而制造了更多请求。
         assertThat(rejected.headers().firstValue("Retry-After"))
@@ -235,11 +236,14 @@ class RateLimitTest extends AbstractPostgresTest {
     private HttpResponse<String> signedGet() {
         String path = "/api/v1/accounts/" + acmeAccount + "/balance";
         long ts = System.currentTimeMillis();
+        String nonce = SignedRequests.newNonce();
         return send(HttpRequest.newBuilder()
                 .uri(URI.create("http://localhost:" + port + path))
                 .header("X-CP-API-KEY", "ak_acme")
                 .header("X-CP-API-TIMESTAMP", String.valueOf(ts))
-                .header("X-CP-API-SIGN", ApiCredentialService.sign(ts + "GET" + path, acmeSecret))
+                .header("X-CP-API-NONCE", nonce)
+                .header("X-CP-API-SIGN",
+                        SignedRequests.sign(acmeSecret, ts, nonce, "GET", path, ""))
                 .GET());
     }
 
@@ -249,6 +253,7 @@ class RateLimitTest extends AbstractPostgresTest {
                 .uri(URI.create("http://localhost:" + port + path))
                 .header("X-CP-API-KEY", "ak_acme")
                 .header("X-CP-API-TIMESTAMP", String.valueOf(System.currentTimeMillis()))
+                .header("X-CP-API-NONCE", SignedRequests.newNonce())
                 .header("X-CP-API-SIGN", "this-is-not-a-valid-signature")
                 .GET());
     }

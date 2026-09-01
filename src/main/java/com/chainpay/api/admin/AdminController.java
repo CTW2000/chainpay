@@ -1,5 +1,6 @@
 package com.chainpay.api.admin;
 
+import com.chainpay.api.ApiResponse;
 import com.chainpay.api.admin.AdminService.CredentialSummary;
 import com.chainpay.api.admin.AdminService.IssuedCredential;
 import jakarta.validation.Valid;
@@ -51,11 +52,12 @@ public class AdminController {
     // ==================================================================
 
     @PostMapping("/merchants")
-    public ResponseEntity<CreateMerchantResponse> createMerchant(
+    public ResponseEntity<ApiResponse<CreateMerchantResponse>> createMerchant(
             @Valid @RequestBody CreateMerchantRequest request) {
         long id = admin.createMerchant(request.code(), request.name());
         return ResponseEntity.status(HttpStatus.CREATED)
-                .body(new CreateMerchantResponse(id, request.code(), request.name()));
+                .body(ApiResponse.ok(
+                        new CreateMerchantResponse(id, request.code(), request.name())));
     }
 
     /**
@@ -65,17 +67,17 @@ public class AdminController {
      * 没有任何接口能再把它查出来。丢了只能换一把新的。
      */
     @PostMapping("/merchants/{merchantId}/credentials")
-    public ResponseEntity<IssuedCredential> issueCredential(
+    public ResponseEntity<ApiResponse<IssuedCredential>> issueCredential(
             @PathVariable long merchantId,
             @Valid @RequestBody IssueCredentialRequest request) {
         return ResponseEntity.status(HttpStatus.CREATED)
-                .body(admin.issueCredential(merchantId, request.label()));
+                .body(ApiResponse.ok(admin.issueCredential(merchantId, request.label())));
     }
 
     /** 列出商户全部凭证。响应里<b>没有</b> secret —— 明文不会第二次出现。 */
     @GetMapping("/merchants/{merchantId}/credentials")
-    public List<CredentialSummary> listCredentials(@PathVariable long merchantId) {
-        return admin.listCredentials(merchantId);
+    public ApiResponse<List<CredentialSummary>> listCredentials(@PathVariable long merchantId) {
+        return ApiResponse.ok(admin.listCredentials(merchantId));
     }
 
     /**

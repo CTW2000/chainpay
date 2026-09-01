@@ -1,5 +1,7 @@
 package com.chainpay.api.admin;
 
+import com.chainpay.api.ErrorCode;
+import com.chainpay.api.ErrorResponseWriter;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -61,8 +63,11 @@ public class AdminAuthFilter extends OncePerRequestFilter {
     };
 
     private final byte[] expectedToken;
+    private final ErrorResponseWriter errors;
 
-    public AdminAuthFilter(@Value("${chainpay.admin-token}") String adminToken) {
+    public AdminAuthFilter(@Value("${chainpay.admin-token}") String adminToken,
+                           ErrorResponseWriter errors) {
+        this.errors = errors;
         // 启动即校验：令牌太短等于没有。
         // 让「配错了就起不来」，而不是「配错了但看起来正常」。
         if (adminToken == null || adminToken.length() < 32) {
@@ -157,9 +162,7 @@ public class AdminAuthFilter extends OncePerRequestFilter {
     }
 
     private void unauthorized(HttpServletResponse response) throws IOException {
-        response.setStatus(HttpStatus.UNAUTHORIZED.value());
-        response.setContentType(MediaType.APPLICATION_JSON_VALUE);
-        response.setCharacterEncoding(StandardCharsets.UTF_8.name());
-        response.getWriter().write("{\"code\":\"UNAUTHORIZED\",\"message\":\"无权访问管理接口\"}");
+        errors.write(response, HttpStatus.UNAUTHORIZED,
+                ErrorCode.UNAUTHORIZED, "无权访问管理接口");
     }
 }

@@ -4,8 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.chainpay.api.admin.AdminAuthFilter;
 import com.chainpay.api.admin.AdminService.IssuedCredential;
-import com.chainpay.api.auth.ApiCredentialService;
 import com.chainpay.support.AbstractPostgresTest;
+import com.chainpay.support.SignedRequests;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -110,13 +110,15 @@ class AdminCredentialTest extends AbstractPostgresTest {
         String path = "/admin/v1/merchants/" + merchantId + "/credentials";
         String body = "{\"label\":\"x\"}";
         long ts = System.currentTimeMillis();
+        String nonce = SignedRequests.newNonce();
         var response = send(HttpRequest.newBuilder()
                 .uri(URI.create("http://localhost:" + port + path))
                 .header("Content-Type", "application/json")
                 .header("X-CP-API-KEY", issued.apiKey())
                 .header("X-CP-API-TIMESTAMP", String.valueOf(ts))
+                .header("X-CP-API-NONCE", nonce)
                 .header("X-CP-API-SIGN",
-                        ApiCredentialService.sign(ts + "POST" + path + body, issued.secret()))
+                        SignedRequests.sign(issued.secret(), ts, nonce, "POST", path, body))
                 .POST(HttpRequest.BodyPublishers.ofString(body)));
 
         assertThat(response.statusCode())
@@ -295,12 +297,14 @@ class AdminCredentialTest extends AbstractPostgresTest {
     private HttpResponse<String> signedBalanceGet(long accountId, IssuedCredential credential) {
         String path = "/api/v1/accounts/" + accountId + "/balance";
         long ts = System.currentTimeMillis();
+        String nonce = SignedRequests.newNonce();
         return send(HttpRequest.newBuilder()
                 .uri(URI.create("http://localhost:" + port + path))
                 .header("X-CP-API-KEY", credential.apiKey())
                 .header("X-CP-API-TIMESTAMP", String.valueOf(ts))
+                .header("X-CP-API-NONCE", nonce)
                 .header("X-CP-API-SIGN",
-                        ApiCredentialService.sign(ts + "GET" + path, credential.secret()))
+                        SignedRequests.sign(credential.secret(), ts, nonce, "GET", path, ""))
                 .GET());
     }
 

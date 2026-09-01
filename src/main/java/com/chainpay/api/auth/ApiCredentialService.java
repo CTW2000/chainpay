@@ -25,17 +25,45 @@ import org.springframework.stereotype.Service;
  * <p>签名串的构造照 OKX v5，比币安更严：
  *
  * <pre>
- *   prehash   = timestamp + method + requestPath + body
+ *   prehash   = timestamp + nonce + method + requestPath + body
  *   signature = Base64( HMAC-SHA256(prehash, secret) )
  * </pre>
  *
- * <p>四个部分各自防一件事：
+ * <p>五个部分各自防一件事：
  * <ul>
- *   <li>{@code timestamp} —— 防重放（配合服务端的时间窗校验）</li>
+ *   <li>{@code timestamp} —— 限定请求的有效期（配合服务端的时间窗校验）</li>
+ *   <li>{@code nonce}     —— 保证<b>每个请求各不相同</b>，见下</li>
  *   <li>{@code method}    —— 防止把 GET 改成 DELETE 重放（币安只签 query string，挡不住这个）</li>
  *   <li>{@code path}      —— 防止把请求打到另一个接口上</li>
  *   <li>{@code body}      —— 防止改金额、改收款账户</li>
  * </ul>
+ *
+ * <p><b>nonce 是 OKX / 币安都没有的一段，加它的理由值得写清楚：</b>
+ *
+ * <p>HMAC 是<b>决定性函数</b>——同样的输入永远得到同样的输出。
+ * 这正是验签能成立的前提（服务端要能重算一遍），但它也意味着
+ * <b>签名本身没法回答「这是不是第一次收到」</b>。
+ *
+ * <p>想用签名当「请求的身份证」来挡重放，就得保证输入里有一个每次都不同的成分。
+ * 时间戳<b>不够</b>：它只到毫秒，而一毫秒里能发出去几十个请求。
+ * 实测同时发起 160 次，只用掉了 5 个不同的毫秒值，最挤的一毫秒里挤了 39 个。
+ *
+ * <p>没有 nonce 时，两个内容完全相同的并发 GET 会算出<b>同一个签名</b>，
+ * 于是合法请求被当成重放拒掉。POST 侥幸没事，是因为 body 里的 clientTransferId
+ * 恰好扮演了 nonce ——<b>但那是运气，不是设计</b>：
+ * 将来任何一个 body 为空的 POST 接口都会踩到同一个坑，
+ * 而写那个接口的人根本不会知道原因。
+ *
+ * <p>所以把两个职责拆开：<b>签名只管「是不是你签的」，nonce 只管「是不是第一次」。</b>
+ * 一个东西同时承担两个要求互相矛盾的职责时，正确的做法是拆开，
+ * 而不是让其中一个将就。
+ *
+ * <p><b>币安和 OKX 为什么不需要它</b>（查过文档，2026-08）：
+ * 两家都只靠时间窗——币安 {@code recvWindow} 默认 5 秒、最大 60 秒；
+ * OKX 是固定 30 秒，都没有 nonce、也不拒绝重复签名。
+ * 他们把重放防护押在<b>强制 HTTPS</b> 上：能截获你 TLS 流量的攻击者，
+ * 有比重放更直接的手段。这是取舍，不是疏漏。
+ * 我们加 nonce，是因为它同时解决了上面那个<b>正确性</b>问题，而不只是安全问题。
  */
 @Service
 public class ApiCredentialService {
@@ -78,6 +106,8 @@ public class ApiCredentialService {
      * 一个待验证的已签名请求。
      *
      * @param timestampMillis 客户端声称的发起时刻（毫秒纪元）
+     * @param nonce           客户端每次生成的一次性随机串。参与签名，
+     *                        因此攻击者改不了它——改了签名就对不上
      * @param method          HTTP 方法，大写
      * @param path            请求路径，含查询串
      * @param body            请求体原文；GET 请求为空字符串
@@ -86,6 +116,7 @@ public class ApiCredentialService {
     public record SignedRequest(
             String apiKey,
             long timestampMillis,
+            String nonce,
             String method,
             String path,
             String body,
@@ -160,7 +191,8 @@ public class ApiCredentialService {
      * 这是拼接式签名的经典漏洞。）
      */
     public static String prehash(SignedRequest request) {
-        return request.timestampMillis() + request.method() + request.path() + request.body();
+        return request.timestampMillis() + request.nonce()
+                + request.method() + request.path() + request.body();
     }
 
     /** 用 secret 对内容算 HMAC-SHA256，返回 Base64。 */

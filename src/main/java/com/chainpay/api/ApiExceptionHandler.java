@@ -3,6 +3,7 @@ package com.chainpay.api;
 import com.chainpay.api.admin.AdminService.AlreadyExistsException;
 import com.chainpay.api.auth.AccountAccessService.AccessDeniedException;
 import com.chainpay.ledger.service.LedgerException;
+import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -31,12 +32,33 @@ public class ApiExceptionHandler {
     private static final Logger log = LoggerFactory.getLogger(ApiExceptionHandler.class);
 
     /**
-     * 统一错误体。
+     * 账本拒绝原因 → 对外错误码。
      *
-     * @param code    机器可读。客户端按它分流（该重试还是该改参数），不要去解析 message
-     * @param message 人可读。仅用于排查，措辞可能随时变化，客户端不应依赖它
+     * <p><b>为什么要一张显式的映射表，而不是直接用 {@code reason().name()}：</b>
+     *
+     * <ul>
+     *   <li><b>内部枚举名不该是对外契约。</b>直接暴露的话，
+     *       哪天为了代码可读性把 {@code SAME_ACCOUNT} 改个名字，
+     *       所有客户端一起坏掉 —— 而改名的人完全不知道自己动了公开接口。</li>
+     *   <li><b>ACCOUNT_NOT_FOUND 必须被折叠成「无权访问」。</b>
+     *       分开回答等于给攻击者一个账户枚举器。
+     *       这里映射到 ACCESS_DENIED，连状态码一起变成 403，
+     *       让「不存在」和「不是你的」在<b>码、消息、状态码</b>三个维度上都一样。</li>
+     *   <li><b>漏一项会立刻炸。</b>新增 Reason 却忘了映射，
+     *       下面 {@code LEDGER_CODES.get()} 返回 null，测试当场变红。
+     *       比「默认回一个通用码」好 —— 后者会悄悄把新错误伪装成老错误。</li>
+     * </ul>
      */
-    public record ErrorResponse(String code, String message) {}
+    private static final Map<LedgerException.Reason, ErrorCode> LEDGER_CODES = Map.of(
+            LedgerException.Reason.MISSING_IDEMPOTENCY_KEY, ErrorCode.MISSING_IDEMPOTENCY_KEY,
+            LedgerException.Reason.MISSING_TRANSFER_CODE,   ErrorCode.MISSING_TRANSFER_CODE,
+            LedgerException.Reason.INVALID_AMOUNT,          ErrorCode.INVALID_AMOUNT,
+            LedgerException.Reason.SAME_ACCOUNT,            ErrorCode.SAME_ACCOUNT,
+            LedgerException.Reason.CURRENCY_MISMATCH,       ErrorCode.CURRENCY_MISMATCH,
+            LedgerException.Reason.INSUFFICIENT_BALANCE,    ErrorCode.INSUFFICIENT_BALANCE,
+            // 刻意折叠：不存在 与 无权访问 必须不可区分
+            LedgerException.Reason.ACCOUNT_NOT_FOUND,       ErrorCode.ACCESS_DENIED);
+
 
     /**
      * 无权访问账户 → 403 Forbidden。
@@ -49,11 +71,11 @@ public class ApiExceptionHandler {
      * 回错了会误导客户端：401 会让它去刷新凭证再重试，而这里重试多少次都没用。
      */
     @ExceptionHandler(AccessDeniedException.class)
-    public ResponseEntity<ErrorResponse> handleAccessDenied(AccessDeniedException e) {
+    public ResponseEntity<ApiResponse<Void>> handleAccessDenied(AccessDeniedException e) {
         // 记服务端日志，但响应里不加任何额外信息
         log.warn("拒绝访问账户 {}", e.accountId());
         return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                .body(new ErrorResponse("ACCESS_DENIED", e.getMessage()));
+                .body(ApiResponse.error(ErrorCode.ACCESS_DENIED, e.getMessage()));
     }
 
     /**
@@ -71,9 +93,9 @@ public class ApiExceptionHandler {
      * 表名和约束名对调用方毫无用处，对想摸清库结构的人却很有用。
      */
     @ExceptionHandler(AlreadyExistsException.class)
-    public ResponseEntity<ErrorResponse> handleAlreadyExists(AlreadyExistsException e) {
+    public ResponseEntity<ApiResponse<Void>> handleAlreadyExists(AlreadyExistsException e) {
         return ResponseEntity.status(HttpStatus.CONFLICT)
-                .body(new ErrorResponse("ALREADY_EXISTS", e.getMessage()));
+                .body(ApiResponse.error(ErrorCode.ALREADY_EXISTS, e.getMessage()));
     }
 
     /**
@@ -84,9 +106,14 @@ public class ApiExceptionHandler {
      * 两者都不该重试。
      */
     @ExceptionHandler(LedgerException.class)
-    public ResponseEntity<ErrorResponse> handleLedger(LedgerException e) {
-        return ResponseEntity.badRequest()
-                .body(new ErrorResponse(e.reason().name(), e.getMessage()));
+    public ResponseEntity<ApiResponse<Void>> handleLedger(LedgerException e) {
+        ErrorCode code = LEDGER_CODES.get(e.reason());
+        // 余额不足是 400（你的请求没错，是账户状态不允许）；
+        // ACCOUNT_NOT_FOUND 被映射成 403 + 3001，和「无权访问」完全一致 ——
+        // 见 LEDGER_CODES 上面那段注释。
+        HttpStatus status = code == ErrorCode.ACCESS_DENIED
+                ? HttpStatus.FORBIDDEN : HttpStatus.BAD_REQUEST;
+        return ResponseEntity.status(status).body(ApiResponse.error(code, e.getMessage()));
     }
 
     /**
@@ -100,10 +127,10 @@ public class ApiExceptionHandler {
      * （比如枚举的全部合法值、类名），那属于免费送给攻击者的情报。
      */
     @ExceptionHandler(IllegalArgumentException.class)
-    public ResponseEntity<ErrorResponse> handleBadInput(IllegalArgumentException e) {
+    public ResponseEntity<ApiResponse<Void>> handleBadInput(IllegalArgumentException e) {
         log.warn("请求参数无效: {}", e.getMessage());
         return ResponseEntity.badRequest()
-                .body(new ErrorResponse("INVALID_REQUEST", "请求参数无效"));
+                .body(ApiResponse.error(ErrorCode.INVALID_REQUEST, "请求参数无效"));
     }
 
     /**
@@ -115,9 +142,9 @@ public class ApiExceptionHandler {
      * <p>细节记在服务端日志里 —— 排查问题的人有服务器权限，攻击者没有。
      */
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<ErrorResponse> handleUnexpected(Exception e) {
+    public ResponseEntity<ApiResponse<Void>> handleUnexpected(Exception e) {
         log.error("未预期的异常", e);
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                .body(new ErrorResponse("INTERNAL_ERROR", "服务内部错误"));
+                .body(ApiResponse.error(ErrorCode.INTERNAL_ERROR, "服务内部错误"));
     }
 }

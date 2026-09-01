@@ -90,7 +90,7 @@ public class TransferController {
      * 反过来（先全开，出事了再收）意味着每个口子都要有人记得去关。
      */
     @PostMapping("/transfers")
-    public CreateTransferResponse create(
+    public ApiResponse<CreateTransferResponse> create(
             @RequestAttribute(ApiKeyAuthFilter.ATTR_MERCHANT_ID) long merchantId,
             @RequestBody CreateTransferRequest request) {
 
@@ -115,20 +115,20 @@ public class TransferController {
                     null));
         });
 
-        return new CreateTransferResponse(String.valueOf(transferId));
+        return ApiResponse.ok(new CreateTransferResponse(String.valueOf(transferId)));
     }
 
     /** 查询自己名下账户的余额。别人的账户查不了 —— 余额本身就是敏感信息。 */
     @GetMapping("/accounts/{accountId}/balance")
-    public BalanceResponse balance(
+    public ApiResponse<BalanceResponse> balance(
             @RequestAttribute(ApiKeyAuthFilter.ATTR_MERCHANT_ID) long merchantId,
             @PathVariable long accountId) {
 
-        return tenantScope.asMerchant(merchantId, () -> {
+        return ApiResponse.ok(tenantScope.asMerchant(merchantId, () -> {
             AuthorizedAccount account = accounts.requireOwned(merchantId, accountId);
             return new BalanceResponse(
                     String.valueOf(account.id()),
                     ledger.balanceOf(account.id()).toPlainString());
-        });
+        }));
     }
 }

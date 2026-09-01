@@ -1,14 +1,14 @@
 package com.chainpay.api.auth;
 
+import com.chainpay.api.ErrorCode;
+import com.chainpay.api.ErrorResponseWriter;
 import com.chainpay.api.auth.ApiCredentialService.SignedRequest;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import org.springframework.http.HttpStatus;
-import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StreamUtils;
 import org.springframework.web.filter.OncePerRequestFilter;
@@ -37,6 +37,28 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
     public static final String HEADER_API_KEY = "X-CP-API-KEY";
     public static final String HEADER_TIMESTAMP = "X-CP-API-TIMESTAMP";
     public static final String HEADER_SIGNATURE = "X-CP-API-SIGN";
+    /** 一次性随机串，客户端每个请求生成一个新的。参与签名，所以改不了。 */
+    public static final String HEADER_NONCE = "X-CP-API-NONCE";
+
+    /**
+     * nonce 的长度，必须<b>正好</b>这么多个十六进制字符（16 字节随机数）。
+     *
+     * <p><b>两个理由，两个都是承重的：</b>
+     *
+     * <p><b>① 上限：防止拿 nonce 打我们。</b>不限长的话，攻击者每个请求塞一个
+     * 1MB 的 nonce，Redis 内存几分钟就被吃光 —— 这个「保护措施」本身
+     * 变成了一条攻击通道。和 {@link #MAX_BODY_BYTES} 是同一个道理：
+     * <b>加一层防护时要问一句，这层防护本身能不能被用来打我。</b>
+     *
+     * <p><b>② 定长：签名拼接不能有歧义。</b>prehash 是各段直接拼起来的，
+     * 不加分隔符。nonce 若可变长，{@code "ab"+"c"} 和 {@code "a"+"bc"}
+     * 会拼出同一个串、算出同一个签名，攻击者能据此构造
+     * 「不同的请求、相同的签名」。定长把这个洞焊死。
+     *
+     * <p>16 字节 = 128 位随机。同一个商户在 10 秒窗口内偶然撞出两个相同 nonce 的
+     * 概率约为 2 的负 128 次方级别 —— 比硬件出错的概率低得多。
+     */
+    private static final int NONCE_HEX_LENGTH = 32;
 
     /** 认证成功后，商户 id 放在这个请求属性里，供控制器读取。 */
     public static final String ATTR_MERCHANT_ID = "chainpay.merchantId";
@@ -56,10 +78,15 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
 
     private final ApiCredentialService credentials;
     private final RateLimiter rateLimiter;
+    private final ReplayGuard replayGuard;
+    private final ErrorResponseWriter errors;
 
-    public ApiKeyAuthFilter(ApiCredentialService credentials, RateLimiter rateLimiter) {
+    public ApiKeyAuthFilter(ApiCredentialService credentials, RateLimiter rateLimiter,
+                            ReplayGuard replayGuard, ErrorResponseWriter errors) {
         this.credentials = credentials;
         this.rateLimiter = rateLimiter;
+        this.replayGuard = replayGuard;
+        this.errors = errors;
     }
 
     /**
@@ -95,9 +122,12 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
 
         String apiKey = request.getHeader(HEADER_API_KEY);
 
+        String nonce = request.getHeader(HEADER_NONCE);
+
         var merchant = credentials.authenticate(new SignedRequest(
                 apiKey,
                 parseTimestamp(request.getHeader(HEADER_TIMESTAMP)),
+                nonce == null ? "" : nonce,
                 request.getMethod(),
                 fullPath(request),
                 cached.bodyAsString(),
@@ -120,6 +150,34 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
 
         // 认证通过，清掉该来源的失败计数：正常用户不该被自己历史上的几次失败拖累。
         rateLimiter.clearAuthFailures(clientIp);
+
+        // ★ 重放检查放在验签之后 ★
+        // 放在之前的话，任何人拿一个瞎编的 nonce 就能往 Redis 里塞垃圾，
+        // 这个「保护措施」本身会变成一条不需要凭证的内存耗尽通道。
+        // 放在之后，登记表里只会有**验证过的**请求。
+        //
+        // ★ 长度校验必须在这里：验签之后、碰 Redis 之前 ★
+        //
+        // 不能放在验签**之前**：那样没有凭证的人也能触发它，
+        // 而任何在认证之前就执行的逻辑都是一条免费的攻击面。
+        //
+        // 也不能省掉：验签**拦不住**超长 nonce。
+        // nonce 是签名串的一部分，所以持有 secret 的调用方
+        // 完全可以拿一个 1MB 的 nonce 算出**完全正确**的签名 ——
+        // 验签会通过。挡住它的只有这里这一行。
+        // 也就是说这道检查防的不是外部攻击者，而是**有合法凭证的调用方**
+        // （被盗用的商户凭证、或者我们自己写错的客户端）。
+        //
+        // ApiContractTest.nonceLengthIsEnforced 断言的正是这一点：
+        // 「签名算对了也不行」。把这行删掉，那条测试立刻变红 —— 已实测。
+        if (nonce == null || nonce.length() != NONCE_HEX_LENGTH) {
+            unauthorized(response);
+            return;
+        }
+        if (!replayGuard.isFirstUse(apiKey, nonce)) {
+            replayed(response);
+            return;
+        }
 
         if (!rateLimiter.allowRequest(apiKey)) {
             tooManyRequests(response, rateLimiter.secondsUntilWindowReset(apiKey));
@@ -173,8 +231,25 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
     }
 
     private void unauthorized(HttpServletResponse response) throws IOException {
-        writeJson(response, HttpStatus.UNAUTHORIZED,
-                "{\"code\":\"UNAUTHORIZED\",\"message\":\"签名校验失败\"}");
+        errors.write(response, HttpStatus.UNAUTHORIZED,
+                ErrorCode.UNAUTHORIZED, "签名校验失败");
+    }
+
+    /**
+     * 重放同样回 401：它和「签名无效」在客户端看来都是「这个请求不能再用了」。
+     *
+     * <p>码不同（1002 vs 1001）是为了让客户端知道<b>该怎么办</b> ——
+     * 1002 明确告诉它「换一个新 nonce 重发即可；上一次可能已经成功了，
+     * 保持同一个 clientTransferId 就不会重复扣款」。
+     *
+     * <p><b>已知的一处不理想</b>：很多通用 HTTP 客户端遇到 401 的默认反应是
+     * 「去刷新凭证再重试」，而这里凭证是好的，需要的只是换 nonce 重发。
+     * 保留 401 是因为它确实是「这次认证不被接受」；
+     * 正确的引导靠错误码和文档，不靠状态码。
+     */
+    private void replayed(HttpServletResponse response) throws IOException {
+        errors.write(response, HttpStatus.UNAUTHORIZED,
+                ErrorCode.REPLAYED, "该 nonce 已使用过，请换一个新 nonce 重新签名后重发");
     }
 
     /**
@@ -187,16 +262,7 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
     private void tooManyRequests(HttpServletResponse response, long retryAfterSeconds)
             throws IOException {
         response.setHeader("Retry-After", String.valueOf(retryAfterSeconds));
-        writeJson(response, HttpStatus.TOO_MANY_REQUESTS,
-                "{\"code\":\"RATE_LIMITED\",\"message\":\"请求过于频繁\"}");
-    }
-
-    private void writeJson(HttpServletResponse response, HttpStatus status, String json)
-            throws IOException {
-        response.setStatus(status.value());
-        response.setContentType(MediaType.APPLICATION_JSON_VALUE);
-        response.setCharacterEncoding(StandardCharsets.UTF_8.name());
-        // 响应体里不含任何内部细节：不说是哪一步失败的，也不回显收到的 key。
-        response.getWriter().write(json);
+        errors.write(response, HttpStatus.TOO_MANY_REQUESTS,
+                ErrorCode.RATE_LIMITED, "请求过于频繁");
     }
 }

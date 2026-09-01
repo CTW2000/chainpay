@@ -2,9 +2,9 @@ package com.chainpay.api;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.chainpay.api.auth.ApiCredentialService;
 import com.chainpay.api.auth.SecretCipher;
 import com.chainpay.support.AbstractPostgresTest;
+import com.chainpay.support.SignedRequests;
 import java.math.BigDecimal;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -112,7 +112,8 @@ class ApiSecurityTest extends AbstractPostgresTest {
         String tamperedBody = transferBody("t-1", "9999", acmeAccountA, acmeAccountB);
 
         long ts = System.currentTimeMillis();
-        String signature = sign(acmeSecret, ts, "POST", "/api/v1/transfers", honestBody);
+        String nonce = SignedRequests.newNonce();
+        String signature = sign(acmeSecret, ts, nonce, "POST", "/api/v1/transfers", honestBody);
 
         var response = send(HttpRequest.newBuilder()
                 .uri(url("/api/v1/transfers"))
@@ -130,7 +131,9 @@ class ApiSecurityTest extends AbstractPostgresTest {
     @DisplayName("★ 拿查余额的签名去打转账接口（换 path）—— 401")
     void signatureFromAnotherPathIsRejected() {
         long ts = System.currentTimeMillis();
-        String otherPathSignature = sign(acmeSecret, ts, "GET", balancePath(acmeAccountA), "");
+        String otherNonce = SignedRequests.newNonce();
+        String otherPathSignature =
+                sign(acmeSecret, ts, otherNonce, "GET", balancePath(acmeAccountA), "");
         String body = transferBody("t-2", "1", acmeAccountA, acmeAccountB);
 
         var response = send(HttpRequest.newBuilder()
@@ -198,7 +201,7 @@ class ApiSecurityTest extends AbstractPostgresTest {
         var response = signedPost(evilSecret, "ak_evilco", "/api/v1/transfers", body);
 
         assertThat(response.statusCode()).isEqualTo(403);
-        assertThat(response.body()).contains("ACCESS_DENIED");
+        assertThat(response.body()).contains("\"code\":\"3001\"");
         assertThat(balanceOf(acmeAccountA)).as("acme 的余额一分不能少")
                 .isEqualByComparingTo("1000");
     }
@@ -247,7 +250,7 @@ class ApiSecurityTest extends AbstractPostgresTest {
         var response = signedPost(acmeSecret, "ak_acme", "/api/v1/transfers", body);
 
         assertThat(response.statusCode()).isEqualTo(400);
-        assertThat(response.body()).contains("INSUFFICIENT_BALANCE");
+        assertThat(response.body()).contains("\"code\":\"4001\"");
     }
 
     @Test
@@ -293,20 +296,48 @@ class ApiSecurityTest extends AbstractPostgresTest {
     }
 
     @Test
-    @DisplayName("★ 原样重放合法请求 —— 不重复扣款")
-    void replayingAValidRequestDoesNotDoubleSpend() {
-        // 签名机制本身挡不住「原样重放」：那个请求的签名是真的。
-        // 挡住它的是账本层的幂等键 —— 防护是分层的，不是单点的。
+    @DisplayName("★ 原样重放 —— 被 nonce 挡住；换新 nonce 的重试 —— 被幂等键兜住")
+    void replayIsBlockedAndLegitimateRetryStillWorks() {
+        // ★ 这条测试在 M1.5 变了语义，值得记下来为什么 ★
+        //
+        // 原来的版本断言「重放返回 200，靠幂等键不重复扣款」。
+        // 那时挡住损失的只有账本层，认证层是放行的 ——
+        // 意味着任何一个**不经过账本**的接口（发通知、触发结算）都会中招。
+        //
+        // M1.5 加了签名唯一性之后，原样重放在认证层就被拒了（1002）。
+        // 但这带来一个新问题：客户端超时后重试，发的就是一模一样的请求。
+        // 如果它被永久拒绝，客户端就卡住了 —— 它不知道原来那笔到底成没成功。
+        //
+        // 答案是两个机制各管一件事：
+        //   nonce  —— 防「别人」截获你的请求原样重发
+        //   幂等键 —— 防「你自己」超时后重发
+        // 所以客户端重试的正确姿势是：**换一个新 nonce 重新签名，保持 clientTransferId 不变**。
         String body = transferBody("replay-1", "10", acmeAccountA, acmeAccountB);
         long ts = System.currentTimeMillis();
-        String signature = sign(acmeSecret, ts, "POST", "/api/v1/transfers", body);
+        String nonce = SignedRequests.newNonce();
+        String signature = sign(acmeSecret, ts, nonce, "POST", "/api/v1/transfers", body);
 
-        var first = sendSigned(ts, signature, "ak_acme", body);
-        var replay = sendSigned(ts, signature, "ak_acme", body);
+        var first = sendSigned(ts, nonce, signature, "ak_acme", body);
+        var identicalReplay = sendSigned(ts, nonce, signature, "ak_acme", body);
 
         assertThat(first.statusCode()).isEqualTo(200);
-        assertThat(replay.statusCode()).as("重放也返回成功，这是幂等的定义").isEqualTo(200);
-        assertThat(balanceOf(acmeAccountB)).as("但只能到账一次").isEqualByComparingTo("10");
+        assertThat(identicalReplay.statusCode())
+                .as("nonce 重复的重放必须在认证层就被拒，不进业务逻辑")
+                .isEqualTo(401);
+        assertThat(identicalReplay.body()).contains("\"code\":\"1002\"");
+
+        // 合法重试：新 nonce、新签名，但 clientTransferId 不变
+        String retryNonce = SignedRequests.newNonce();
+        var legitimateRetry = sendSigned(ts, retryNonce,
+                sign(acmeSecret, ts, retryNonce, "POST", "/api/v1/transfers", body),
+                "ak_acme", body);
+
+        assertThat(legitimateRetry.statusCode())
+                .as("换新 nonce 的重试必须放行 —— 否则超时的客户端会永远卡住")
+                .isEqualTo(200);
+        assertThat(balanceOf(acmeAccountB))
+                .as("而且只能到账一次 —— 这是幂等键的活")
+                .isEqualByComparingTo("10");
     }
 
     // ==================================================================
@@ -328,8 +359,14 @@ class ApiSecurityTest extends AbstractPostgresTest {
                 .formatted(key, amount, debit, credit);
     }
 
-    private String sign(String secret, long timestamp, String method, String path, String body) {
-        return ApiCredentialService.sign(timestamp + method + path + body, secret);
+    /**
+     * 算签名。nonce 由调用方显式传入 —— <b>不在这里自动生成</b>，
+     * 因为有的测试需要「同一个 nonce 发两次」来验证重放防护。
+     * 自动生成会让那种测试永远绿，因为每次都是新 nonce。
+     */
+    private String sign(String secret, long timestamp, String nonce,
+                        String method, String path, String body) {
+        return SignedRequests.sign(secret, timestamp, nonce, method, path, body);
     }
 
     private HttpResponse<String> signedGet(String secret, String apiKey, String path) {
@@ -337,31 +374,38 @@ class ApiSecurityTest extends AbstractPostgresTest {
     }
 
     private HttpResponse<String> signedGetAtTime(String secret, String apiKey, String path, long ts) {
+        String nonce = SignedRequests.newNonce();
         return send(HttpRequest.newBuilder()
                 .uri(url(path))
                 .header("X-CP-API-KEY", apiKey)
                 .header("X-CP-API-TIMESTAMP", String.valueOf(ts))
-                .header("X-CP-API-SIGN", sign(secret, ts, "GET", path, ""))
+                .header("X-CP-API-NONCE", nonce)
+                .header("X-CP-API-SIGN", sign(secret, ts, nonce, "GET", path, ""))
                 .GET());
     }
 
     private HttpResponse<String> signedPost(String secret, String apiKey, String path, String body) {
         long ts = System.currentTimeMillis();
+        String nonce = SignedRequests.newNonce();
         return send(HttpRequest.newBuilder()
                 .uri(url(path))
                 .header("Content-Type", "application/json")
                 .header("X-CP-API-KEY", apiKey)
                 .header("X-CP-API-TIMESTAMP", String.valueOf(ts))
-                .header("X-CP-API-SIGN", sign(secret, ts, "POST", path, body))
+                .header("X-CP-API-NONCE", nonce)
+                .header("X-CP-API-SIGN", sign(secret, ts, nonce, "POST", path, body))
                 .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8)));
     }
 
-    private HttpResponse<String> sendSigned(long ts, String signature, String apiKey, String body) {
+    /** nonce 显式传入：重放测试要用同一个 nonce 发两次。 */
+    private HttpResponse<String> sendSigned(long ts, String nonce, String signature,
+                                            String apiKey, String body) {
         return send(HttpRequest.newBuilder()
                 .uri(url("/api/v1/transfers"))
                 .header("Content-Type", "application/json")
                 .header("X-CP-API-KEY", apiKey)
                 .header("X-CP-API-TIMESTAMP", String.valueOf(ts))
+                .header("X-CP-API-NONCE", nonce)
                 .header("X-CP-API-SIGN", signature)
                 .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8)));
     }
