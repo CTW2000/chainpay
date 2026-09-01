@@ -1,7 +1,10 @@
-package com.chainpay.api;
+package com.chainpay.common.web;
 
-import com.chainpay.api.admin.AdminService.AlreadyExistsException;
-import com.chainpay.api.auth.AccountAccessService.AccessDeniedException;
+import com.chainpay.merchant.service.AdminService;
+import com.chainpay.security.service.AccountAccessService;
+
+import com.chainpay.merchant.service.AdminService.AlreadyExistsException;
+import com.chainpay.security.service.AccountAccessService.AccessDeniedException;
 import com.chainpay.ledger.service.LedgerException;
 import java.util.Map;
 import org.slf4j.Logger;

@@ -1,4 +1,4 @@
-package com.chainpay.api;
+package com.chainpay.common.web;
 
 import tools.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.HttpServletResponse;

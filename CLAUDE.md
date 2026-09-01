@@ -36,9 +36,40 @@
 
 **版本相关的既有教训见 `README.md` 末尾**，改 pom 前先读。
 
+### 包结构（2026-08-31 重整）
+
+**顶层按功能分，包内按类型分**——和 flow-pay 同一套规矩，切换项目不用换脑子。
+
+```
+com.chainpay
+├── common/web/          横切的对外契约：信封、错误码、异常处理、错误写出
+├── ledger/              账本领域
+│   ├── controller/      对外的转账 / 余额接口
+│   └── service/         ★ 账本核心，禁止 ORM（见下）
+├── merchant/            控制面：开户、发凭证、吊销、停用
+│   ├── controller/
+│   └── service/
+└── security/            认证、授权、限流、重放、加密
+    ├── filter/          进业务代码之前跑的东西
+    ├── service/         验签、归属校验、租户降权、限流、重放登记
+    └── crypto/          AES-GCM
+```
+
+**为什么不是纯按类型分**（`controller/` `service/` 各一个大包）：
+那样 `AdminService` 会和 `RateLimiter` 放在一起——两个毫不相干的东西挨着，
+而一个功能的相关文件散在三四个包里。改一个功能要同时开好几个目录。
+
+**为什么也不是纯按功能分**（一个包里塞 controller + service + filter）：
+这正是重整前的状态，`api/auth/` 里 8 个文件混着过滤器、服务、加密工具三类东西，
+看目录看不出哪个是入口、哪个是被调用的。
+
 ### 账本层禁止 ORM
 
-`com.chainpay.ledger` 下只允许 `JdbcClient` + 手写 SQL。
+**`com.chainpay.ledger.service` 下只允许 `JdbcClient` + 手写 SQL。**
+
+注意范围是 `.service`，不是整个 `ledger` 包——`ledger.controller` 不做数据访问，
+这条规则对它不适用（它只负责把 HTTP 请求翻译成 service 调用）。
+
 理由：账本是唯一不能错的地方，抽象越薄越好。ORM 的隐式行为
 （几条 SQL、加不加锁、插件拦截）是 flow-pay 已经付过学费的坑。
 

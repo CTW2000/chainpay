@@ -1,9 +1,9 @@
-package com.chainpay.api;
+package com.chainpay.merchant;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.chainpay.api.admin.AdminAuthFilter;
-import com.chainpay.api.admin.AdminService.IssuedCredential;
+import com.chainpay.security.filter.AdminAuthFilter;
+import com.chainpay.merchant.service.AdminService.IssuedCredential;
 import com.chainpay.support.AbstractPostgresTest;
 import com.chainpay.support.SignedRequests;
 import java.net.URI;

@@ -1,10 +1,10 @@
-package com.chainpay.api;
+package com.chainpay.security;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.chainpay.api.auth.RateLimiter;
-import com.chainpay.api.auth.RedisRateLimiter;
-import com.chainpay.api.auth.SecretCipher;
+import com.chainpay.security.service.RateLimiter;
+import com.chainpay.security.service.RedisRateLimiter;
+import com.chainpay.security.crypto.SecretCipher;
 import com.chainpay.support.AbstractPostgresTest;
 import com.chainpay.support.SignedRequests;
 import java.net.URI;

@@ -1,4 +1,4 @@
-package com.chainpay.api.auth;
+package com.chainpay.security.service;
 
 import java.time.Duration;
 import java.util.List;

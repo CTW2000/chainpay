@@ -1,7 +1,7 @@
-package com.chainpay.api.admin;
+package com.chainpay.security.filter;
 
-import com.chainpay.api.ErrorCode;
-import com.chainpay.api.ErrorResponseWriter;
+import com.chainpay.common.web.ErrorCode;
+import com.chainpay.common.web.ErrorResponseWriter;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;

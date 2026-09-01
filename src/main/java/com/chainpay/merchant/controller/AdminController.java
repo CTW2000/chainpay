@@ -1,8 +1,10 @@
-package com.chainpay.api.admin;
+package com.chainpay.merchant.controller;
 
-import com.chainpay.api.ApiResponse;
-import com.chainpay.api.admin.AdminService.CredentialSummary;
-import com.chainpay.api.admin.AdminService.IssuedCredential;
+import com.chainpay.merchant.service.AdminService;
+
+import com.chainpay.common.web.ApiResponse;
+import com.chainpay.merchant.service.AdminService.CredentialSummary;
+import com.chainpay.merchant.service.AdminService.IssuedCredential;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;

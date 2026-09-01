@@ -1,4 +1,6 @@
-package com.chainpay.api.auth;
+package com.chainpay.security.service;
+
+import com.chainpay.security.crypto.SecretCipher;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;

@@ -1,4 +1,4 @@
-package com.chainpay.api.auth;
+package com.chainpay.security.service;
 
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;

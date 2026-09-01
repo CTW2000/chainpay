@@ -1,4 +1,4 @@
-package com.chainpay.api.auth;
+package com.chainpay.security.crypto;
 
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;

@@ -2,7 +2,7 @@ package com.chainpay.support;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.chainpay.api.auth.RateLimiter;
+import com.chainpay.security.service.RateLimiter;
 import com.redis.testcontainers.RedisContainer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;

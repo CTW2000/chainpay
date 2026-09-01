@@ -1,4 +1,4 @@
-package com.chainpay.api.auth;
+package com.chainpay.security.filter;
 
 import jakarta.servlet.ReadListener;
 import jakarta.servlet.ServletInputStream;

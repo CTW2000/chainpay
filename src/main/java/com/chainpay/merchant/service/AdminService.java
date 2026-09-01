@@ -1,6 +1,6 @@
-package com.chainpay.api.admin;
+package com.chainpay.merchant.service;
 
-import com.chainpay.api.auth.SecretCipher;
+import com.chainpay.security.crypto.SecretCipher;
 import java.time.OffsetDateTime;
 import java.util.List;
 import org.springframework.dao.DuplicateKeyException;

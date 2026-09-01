@@ -1,8 +1,8 @@
-package com.chainpay.api;
+package com.chainpay.common.web;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.chainpay.api.auth.SecretCipher;
+import com.chainpay.security.crypto.SecretCipher;
 import com.chainpay.support.AbstractPostgresTest;
 import com.chainpay.support.SignedRequests;
 import java.net.URI;

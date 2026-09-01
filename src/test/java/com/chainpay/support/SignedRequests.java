@@ -1,6 +1,6 @@
 package com.chainpay.support;
 
-import com.chainpay.api.auth.ApiCredentialService;
+import com.chainpay.security.service.ApiCredentialService;
 import java.security.SecureRandom;
 import java.util.HexFormat;
 

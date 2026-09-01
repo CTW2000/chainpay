@@ -1,4 +1,4 @@
-package com.chainpay.api;
+package com.chainpay.common.web;
 
 /**
  * 分段错误码。<b>段位（第一位数字）就是「客户端该怎么办」。</b>

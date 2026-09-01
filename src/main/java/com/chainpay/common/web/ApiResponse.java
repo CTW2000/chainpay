@@ -1,4 +1,4 @@
-package com.chainpay.api;
+package com.chainpay.common.web;
 
 /**
  * 统一响应信封。所有 {@code /api/**} 与 {@code /admin/**} 的响应都是这个形状。

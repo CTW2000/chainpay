@@ -1,9 +1,9 @@
-package com.chainpay.api;
+package com.chainpay.security;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import com.chainpay.api.auth.TenantScope;
+import com.chainpay.security.service.TenantScope;
 import com.chainpay.support.AbstractPostgresTest;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
