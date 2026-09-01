@@ -17,4 +17,8 @@
 chainpay:
   secret-key: "Y2hhaW5wYXktdGVzdC1rZXktbm90LWZvci1wcm9kISE="
 
+  # 测试用的管理员令牌，同样是固定且公开的。
+  # AdminAuthFilter 要求至少 32 个字符 —— 这串是 38 个。
+  admin-token: "chainpay-test-admin-token-not-for-prod"
+
 # 数据源不用配：测试走 Testcontainers，由 @ServiceConnection 自动注入。

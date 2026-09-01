@@ -3,6 +3,7 @@ package com.chainpay.api;
 import com.chainpay.api.auth.AccountAccessService;
 import com.chainpay.api.auth.AccountAccessService.AuthorizedAccount;
 import com.chainpay.api.auth.ApiKeyAuthFilter;
+import com.chainpay.api.auth.TenantScope;
 import com.chainpay.ledger.service.LedgerService;
 import com.chainpay.ledger.service.LedgerService.TransferCode;
 import com.chainpay.ledger.service.LedgerService.TransferCommand;
@@ -28,10 +29,13 @@ public class TransferController {
 
     private final LedgerService ledger;
     private final AccountAccessService accounts;
+    private final TenantScope tenantScope;
 
-    public TransferController(LedgerService ledger, AccountAccessService accounts) {
+    public TransferController(LedgerService ledger, AccountAccessService accounts,
+                              TenantScope tenantScope) {
         this.ledger = ledger;
         this.accounts = accounts;
+        this.tenantScope = tenantScope;
     }
 
     /**
@@ -95,17 +99,21 @@ public class TransferController {
         // requireOwned 要么返回一个「已校验的账户」，要么抛异常 —— 它不返回布尔值。
         // 如果它返回 boolean，调用方可以忘记看返回值，而忘记看一个布尔值
         // 不会有任何编译错误。返回校验过的对象，意味着想拿到账户就必须先过校验。
-        AuthorizedAccount debit = accounts.requireOwned(merchantId, request.debitAccountId());
-        AuthorizedAccount credit = accounts.requireOwned(merchantId, request.creditAccountId());
+        // 整段工作跑在「以该商户身份」的事务里：即使下面某一步忘了做授权检查，
+        // 数据库也查不出别人的行。两道锁，不是二选一。
+        long transferId = tenantScope.asMerchant(merchantId, () -> {
+            AuthorizedAccount debit = accounts.requireOwned(merchantId, request.debitAccountId());
+            AuthorizedAccount credit = accounts.requireOwned(merchantId, request.creditAccountId());
 
-        long transferId = ledger.transfer(new TransferCommand(
-                request.clientTransferId(),
-                request.currency(),
-                new BigDecimal(request.amount()),
-                debit.id(),
-                credit.id(),
-                TransferCode.valueOf(request.code()),
-                null));
+            return ledger.transfer(new TransferCommand(
+                    request.clientTransferId(),
+                    request.currency(),
+                    new BigDecimal(request.amount()),
+                    debit.id(),
+                    credit.id(),
+                    TransferCode.valueOf(request.code()),
+                    null));
+        });
 
         return new CreateTransferResponse(String.valueOf(transferId));
     }
@@ -116,9 +124,11 @@ public class TransferController {
             @RequestAttribute(ApiKeyAuthFilter.ATTR_MERCHANT_ID) long merchantId,
             @PathVariable long accountId) {
 
-        AuthorizedAccount account = accounts.requireOwned(merchantId, accountId);
-        return new BalanceResponse(
-                String.valueOf(account.id()),
-                ledger.balanceOf(account.id()).toPlainString());
+        return tenantScope.asMerchant(merchantId, () -> {
+            AuthorizedAccount account = accounts.requireOwned(merchantId, accountId);
+            return new BalanceResponse(
+                    String.valueOf(account.id()),
+                    ledger.balanceOf(account.id()).toPlainString());
+        });
     }
 }

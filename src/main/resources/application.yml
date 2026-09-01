@@ -56,6 +56,18 @@ chainpay:
   # 测试用的固定密钥在 src/test/resources/application.yml，只对测试生效。
   secret-key: ${CHAINPAY_SECRET_KEY}
 
+  # 控制面（/admin/**）的管理员令牌。
+  # 生成：openssl rand -hex 32
+  #
+  # 同样故意不给默认值 —— 理由和上面那把密钥一样，而且更强：
+  # 这是一把能给任意商户发钥匙的**万能令牌**，一个人人都知道的默认值
+  # 等于把开户接口直接开放给所有人。
+  #
+  # 它不是唯一的防线：AdminAuthFilter 还要求请求来自本机、且未经代理转发。
+  # 两层都要有 —— 令牌会出现在部署脚本、CI 变量、终端历史里；
+  # 而回环检查在「nginx 与应用同机」的部署下会静默失效。
+  admin-token: ${CHAINPAY_ADMIN_TOKEN}
+
 logging:
   level:
     # 想看每条 SQL 时把这行打开 —— 账本层的一个核心目的就是"SQL 看得见"

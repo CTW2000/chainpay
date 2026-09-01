@@ -1,5 +1,6 @@
 package com.chainpay.api;
 
+import com.chainpay.api.admin.AdminService.AlreadyExistsException;
 import com.chainpay.api.auth.AccountAccessService.AccessDeniedException;
 import com.chainpay.ledger.service.LedgerException;
 import org.slf4j.Logger;
@@ -53,6 +54,26 @@ public class ApiExceptionHandler {
         log.warn("拒绝访问账户 {}", e.accountId());
         return ResponseEntity.status(HttpStatus.FORBIDDEN)
                 .body(new ErrorResponse("ACCESS_DENIED", e.getMessage()));
+    }
+
+    /**
+     * 要建的东西已经存在 --&gt; 409 Conflict。
+     *
+     * <p>没有这一条的话，重复创建商户会走到兜底的 500 ——
+     * 而 500 对客户端的含义是「我坏了，请重试」，于是它会不停重试一个
+     * 永远不会成功的请求。这和上面余额不足被伪装成 500 是同一个错误。
+     *
+     * <p>409 的准确含义是「你的请求本身没问题，但和服务端当前状态冲突」。
+     * 客户端据此知道：改个 code 再来，别重试原样的。
+     *
+     * <p>响应里<b>不带</b>数据库的原始报错。Postgres 的唯一约束冲突消息长这样：
+     * {@code duplicate key value violates unique constraint "merchant_code_uk"} ——
+     * 表名和约束名对调用方毫无用处，对想摸清库结构的人却很有用。
+     */
+    @ExceptionHandler(AlreadyExistsException.class)
+    public ResponseEntity<ErrorResponse> handleAlreadyExists(AlreadyExistsException e) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(new ErrorResponse("ALREADY_EXISTS", e.getMessage()));
     }
 
     /**

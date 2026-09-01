@@ -121,7 +121,27 @@ public class SecretCipher {
      * OWASP 的原话是 PRNG <i>"must not be used for anything security critical"</i>。
      */
     public String generateSecret() {
-        byte[] raw = new byte[32];
+        return randomToken(32);
+    }
+
+    /**
+     * 生成一段十六进制随机串，用于 api_key 这类<b>公开但不该被猜到</b>的标识。
+     *
+     * <p>api_key 不是秘密（它明文出现在请求头里，也明文存在库里），
+     * 那为什么还要用 {@link SecureRandom}？
+     *
+     * <p>因为<b>可猜的标识本身就是一个信息泄露</b>：如果 api_key 是
+     * {@code ak_1}、{@code ak_2} 这样递增的，攻击者不用猜就知道
+     * 「系统里现在有多少个商户」「昨天新增了几个」——
+     * 这是竞争对手花钱都买不到的经营数据。
+     *
+     * <p>而且递增标识让暴力破解有了立足点：攻击者知道 key 一定存在，
+     * 只需要猜签名。随机 key 让他连「这个 key 存不存在」都不知道。
+     *
+     * @param byteCount 随机字节数；返回的十六进制字符串长度是它的两倍
+     */
+    public String randomToken(int byteCount) {
+        byte[] raw = new byte[byteCount];
         random.nextBytes(raw);
         return HexFormat.of().formatHex(raw);
     }
