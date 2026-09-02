@@ -89,16 +89,6 @@ public class RedisRateLimiter {
         }
     }
 
-    /** 删除某个键的计数。认证成功后用来清掉该来源的失败记录。 */
-    public void clear(String key) {
-        try {
-            redis.delete(key);
-        } catch (RuntimeException e) {
-            // 清不掉不影响正确性：那条计数会在 TTL 到期后自己消失。
-            // 最坏情况是该来源在这一分钟内被多算了几次失败。
-        }
-    }
-
     /** Redis 当前是否可用。用于测试与健康检查。 */
     public boolean isAvailable() {
         try {

@@ -167,11 +167,6 @@ class RateLimitTest extends AbstractPostgresTest {
             public Optional<Long> increment(String key) {
                 return Optional.empty();   // 模拟 Redis 不可用
             }
-
-            @Override
-            public void clear(String key) {
-                // Redis 挂了，清不掉也不该抛异常
-            }
         };
         var degradedLimiter = new RateLimiter(alwaysDown);
 
@@ -211,22 +206,55 @@ class RateLimitTest extends AbstractPostgresTest {
     }
 
     @Test
-    @DisplayName("认证成功会清掉该来源的失败计数")
-    void successfulAuthClearsFailureCounter() {
-        // 正常用户不该被自己历史上的几次失败拖累：
-        // 客户端时钟偶尔偏一下、重启时签名算错几次，都是常态。
+    @DisplayName("★ 合法凭证不能当重置令牌 —— 一次成功认证不归还该 IP 的失败额度")
+    void aValidCredentialIsNotAResetToken() {
+        // ★ 这条测试在 2026-08-31 质询扫描后重写，值得记下来为什么 ★
+        //
+        // 第一版叫 successfulAuthClearsFailureCounter，断言「成功后失败计数清零、
+        // 可以再失败满一整轮」——那正是绕过本身，被当成正确行为钉了下来。
+        // 它的理由「正常用户不该被历史失败拖累」是真的，但只对着诚实客户端权衡过。
+        //
+        // 清单 5.12：把断言的主语从「正常用户」换成「持有一把合法凭证的攻击者」——
+        // 用自己的 key A 成功一次，就能把同一 IP 上探测别人 key B 的失败记录整桶清掉。
+        // 实测：9 坏 + 1 好循环 6 轮，54 次失败 → 401×54、429×0，设计上限是 10。
+        // 放大倍数约 108×（每轮只消耗自己 1 次配额，换 9 次免费探测）。
+        //
+        // 固定窗口计数器只该有一条重置路径：TTL 到期。攻击者控制不了时间。
         for (int i = 0; i < AUTH_FAILURES_PER_MINUTE - 1; i++) {
-            assertThat(badSignatureGet().statusCode()).isEqualTo(401);
+            assertThat(badSignatureGet().statusCode()).isEqualTo(401);     // 失败 1..9
         }
 
-        assertThat(signedGet().statusCode()).as("正确签名应当放行").isEqualTo(200);
+        assertThat(signedGet().statusCode()).as("正确签名照常放行").isEqualTo(200);
 
-        // 计数已清零，可以重新失败满一整轮而不被 429
-        for (int i = 0; i < AUTH_FAILURES_PER_MINUTE; i++) {
-            assertThat(badSignatureGet().statusCode())
-                    .as("失败计数应已被成功认证清零")
+        assertThat(badSignatureGet().statusCode())
+                .as("第 10 次失败：仍在额度内，401")
+                .isEqualTo(401);
+        assertThat(badSignatureGet().statusCode())
+                .as("★ 第 11 次失败必须 429 —— 中间那次成功不能把额度还回去")
+                .isEqualTo(429);
+    }
+
+    @Test
+    @DisplayName("★ 换假的 X-Forwarded-For 换不到新桶 —— 限流身份必须来自 TCP 对端")
+    void spoofedForwardedForDoesNotEscapeTheFailureBucket() {
+        // 质询扫描 8.5：clientIp() 读 X-Forwarded-For 的第一段——那是客户端自己填的。
+        // 每个请求换一个假 IP，每个都是新桶，认证失败限流对攻击者不存在，且不需要凭证。
+        //
+        // 注释里的前提有两层错：① 全仓 nginx 只出现在注释里，反代不存在；
+        // ② 即使有 nginx，最常见的 $proxy_add_x_forwarded_for 是「追加」不是「覆写」，
+        //    第一段仍是客户端填的，最右边由我方代理写的那段才是真的。
+        //
+        // 信任边界属于容器配置（M6 加 nginx 时配 server.tomcat.remoteip），
+        // 应用代码不该自己解析一个客户端可写的头。
+        for (int i = 1; i <= AUTH_FAILURES_PER_MINUTE; i++) {
+            assertThat(badSignatureGetClaimingToBeFrom("10.0.0." + i).statusCode())
+                    .as("前 %d 次失败仍在额度内", i)
                     .isEqualTo(401);
         }
+
+        assertThat(badSignatureGetClaimingToBeFrom("10.0.0.99").statusCode())
+                .as("★ 第 11 次失败必须 429 —— 不管它声称自己来自哪里")
+                .isEqualTo(429);
     }
 
     // ==================================================================
@@ -244,6 +272,19 @@ class RateLimitTest extends AbstractPostgresTest {
                 .header("X-CP-API-NONCE", nonce)
                 .header("X-CP-API-SIGN",
                         SignedRequests.sign(acmeSecret, ts, nonce, "GET", path, ""))
+                .GET());
+    }
+
+    /** 坏签名 + 一个自称的来源 IP。真实的 TCP 对端始终是 127.0.0.1。 */
+    private HttpResponse<String> badSignatureGetClaimingToBeFrom(String claimedIp) {
+        String path = "/api/v1/accounts/" + acmeAccount + "/balance";
+        return send(HttpRequest.newBuilder()
+                .uri(URI.create("http://localhost:" + port + path))
+                .header("X-Forwarded-For", claimedIp)
+                .header("X-CP-API-KEY", "ak_acme")
+                .header("X-CP-API-TIMESTAMP", String.valueOf(System.currentTimeMillis()))
+                .header("X-CP-API-NONCE", SignedRequests.newNonce())
+                .header("X-CP-API-SIGN", "this-is-not-a-valid-signature")
                 .GET());
     }
 

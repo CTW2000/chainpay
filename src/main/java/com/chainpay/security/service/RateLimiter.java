@@ -87,12 +87,6 @@ public class RateLimiter {
         return within(KEY_AUTH_FAILURE + clientIp, AUTH_FAILURES_PER_MINUTE);
     }
 
-    /** 认证成功后清掉该来源的失败计数，避免正常用户被历史失败拖累。 */
-    public void clearAuthFailures(String clientIp) {
-        redis.clear(KEY_AUTH_FAILURE + clientIp);
-        localWindows.remove(KEY_AUTH_FAILURE + clientIp);
-    }
-
     /** 距当前窗口结束还有多少秒 —— 用于 Retry-After 响应头。 */
     public long secondsUntilWindowReset(String apiKey) {
         String key = KEY_REQUEST + apiKey;

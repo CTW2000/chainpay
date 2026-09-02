@@ -175,8 +175,13 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
             return;
         }
 
-        // 认证通过，清掉该来源的失败计数：正常用户不该被自己历史上的几次失败拖累。
-        rateLimiter.clearAuthFailures(clientIp);
+        // ★ 认证通过**不**清失败计数 ★
+        // 第一版这里 clearAuthFailures(clientIp)，理由是「正常用户不该被历史失败拖累」。
+        // 那句话只对着诚实客户端说：持有一把合法凭证的攻击者用自己的 key 成功一次，
+        // 就能把同一 IP 上探测别人 key 的失败记录整桶清掉——
+        // 实测 9 坏 + 1 好循环，54 次失败 429×0，设计上限 10，放大约 108 倍。
+        // 固定窗口计数器只该有一条重置路径：TTL 到期。攻击者控制不了时间。
+        // 诚实客户端连续失败 10 次说明签名实现坏了，429 + Retry-After 一分钟是对它最有用的信号。
 
         // ★ 重放检查放在验签之后 ★
         // 放在之前的话，任何人拿一个瞎编的 nonce 就能往 Redis 里塞垃圾，
@@ -219,21 +224,24 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
     }
 
     /**
-     * 取客户端 IP。
+     * 取客户端 IP —— <b>只信 TCP 对端，不解析任何转发头</b>。
      *
-     * <p><b>⚠️ X-Forwarded-For 是客户端可以随便伪造的请求头。</b>
-     * 只有在「请求一定经过我们自己的反向代理、且代理会覆写这个头」时才可信。
-     * 直接暴露在公网的服务读这个头做限流，等于让攻击者每次换一个假 IP 绕过限流。
+     * <p><b>★ 2026-09-02 之前这里读 X-Forwarded-For 的第一段（质询扫描 8.5）★</b>
+     * 那一段是客户端自己填的：每个请求换一个假 IP，每个都是新桶，
+     * 认证失败限流对攻击者不存在，而且不需要凭证。
+     * 当时注释里的前提有两层错：① 全仓 nginx 只出现在注释里，反代根本不存在；
+     * ② 即使有 nginx，最常见的 {@code $proxy_add_x_forwarded_for} 是<b>追加</b>不是覆写，
+     * 第一段仍是客户端填的——最右边由我方代理写的那一段才是真的。
      *
-     * <p>这里读它是因为我们的部署形态是 nginx 反代（见 M6）。
-     * <b>如果哪天这个前提变了，这里必须改。</b>
+     * <p>「前面有没有代理、信任哪几跳」是基础设施层的知识，不该出现在应用代码里。
+     * 没有代理时 {@code getRemoteAddr()} 就是 TCP 对端，不可伪造。
+     * M6 加 nginx 时配 {@code server.forward-headers-strategy=native} +
+     * {@code server.tomcat.remoteip.internal-proxies}：Tomcat 的 RemoteIpValve 从 XFF
+     * 右侧跳过可信代理、把第一个不可信 IP 写进 getRemoteAddr()——<b>代码一行不动</b>。
+     * 漏配的后果是所有客户端落进 nginx 那一个桶、成批 429，几分钟内就会被发现——
+     * 失误方向朝着立刻暴露，不是静默放行。
      */
     private String clientIp(HttpServletRequest request) {
-        String forwarded = request.getHeader("X-Forwarded-For");
-        if (forwarded != null && !forwarded.isBlank()) {
-            // 该头可能是逗号分隔的链路，第一段是最初的客户端
-            return forwarded.split(",")[0].trim();
-        }
         return request.getRemoteAddr();
     }
 
