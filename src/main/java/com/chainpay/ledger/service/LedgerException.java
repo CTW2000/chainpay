@@ -36,7 +36,15 @@ public class LedgerException extends RuntimeException {
         /** 账户币种与转账币种不符。跨币种数值不可直接搬运。 */
         CURRENCY_MISMATCH,
         /** 借方余额不足，且该账户不允许为负。 */
-        INSUFFICIENT_BALANCE
+        INSUFFICIENT_BALANCE,
+        /**
+         * 幂等键已被<b>另一笔不同的</b>请求使用。
+         *
+         * <p>与「同键同体」严格区分：后者是超时重发，必须幂等返回；
+         * 前者是调用方复用了键（最常见：把订单号当幂等键，退款时又用同一个订单号），
+         * 必须拒绝——否则第二笔会被静默吞掉并回 200。
+         */
+        IDEMPOTENCY_CONFLICT
     }
 
     private final transient Reason reason;

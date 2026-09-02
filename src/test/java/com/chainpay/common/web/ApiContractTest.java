@@ -329,6 +329,20 @@ class ApiContractTest extends AbstractPostgresTest {
                 .isEqualTo(401);
     }
 
+    @Test
+    @DisplayName("★ 每一个 LedgerException.Reason 都必须映射到一个 ErrorCode")
+    void everyLedgerReasonIsMapped() {
+        // 质询扫描 6.1 指出：ApiExceptionHandler 的注释声称「新增 Reason 忘了映射会让测试当场变红」，
+        // 但全仓没有任何测试遍历 Reason.values()——那句话是空头支票。
+        // 漏映射的真实后果是 Map.get() 返回 null，然后在 ApiResponse.error() 里 NPE，
+        // 一个业务拒绝被伪装成 500。这条把支票兑现。
+        for (var reason : com.chainpay.ledger.service.LedgerException.Reason.values()) {
+            assertThat(ApiExceptionHandler.errorCodeFor(reason))
+                    .as("Reason.%s 没有对应的 ErrorCode", reason)
+                    .isNotNull();
+        }
+    }
+
     // ==================================================================
     // 错误信息的转义
     // ==================================================================

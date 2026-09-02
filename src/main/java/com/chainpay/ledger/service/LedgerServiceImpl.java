@@ -67,10 +67,16 @@ public class LedgerServiceImpl implements LedgerService {
         //    "先查再插"在并发下必然失败——两个线程可以同时查到"不存在"。
         Optional<Long> created = insertTransferIfAbsent(command);
         if (created.isEmpty()) {
-            // 这个幂等键已经被别人用过了 → 返回那一笔的 id。
-            // 注意是"成功返回"而不是抛异常：幂等的定义是重复调用得到同样的结果，
-            // 而不是"第二次开始报错"。客户端网络超时后重试是正常行为，不该被惩罚。
-            return existingTransferId(command.idempotencyKey());
+            // 这个幂等键（在本提交方名下）已经用过了。
+            //
+            // ★ 不能直接返回那一笔的 id —— 必须先核对请求体 ★
+            // 「同一个键」有两种完全不同的来历，系统手里有区分它们的全部信息：
+            //   键相同 + 体相同 → 超时重发，幂等返回，客户端不该被惩罚
+            //   键相同 + 体不同 → 复用了键（订单号当幂等键，退款又用同一个），必须拒绝
+            // 2026-08-31 扫描前这里只看了键：第二笔回 200 + 第一笔的 id，777 一分没动，
+            // 响应体里没有金额，商户无从察觉。清单 9.8 原话：
+            // 「返回上次结果 = 用同一个键把另一笔钱吞掉」。
+            return existingTransferIdIfSameRequest(command);
         }
         long transferId = created.get();
 
@@ -234,17 +240,24 @@ public class LedgerServiceImpl implements LedgerService {
     /**
      * 尝试写入 transfer。
      *
-     * <p>返回空 = 这个幂等键已经存在。{@code ON CONFLICT DO NOTHING} 在并发下的行为：
+     * <p><b>submitter_merchant_id 取自会话变量 {@code current_merchant_id()}，不从命令里传。</b>
+     * 它和 RLS 用的是同一个来源（TenantScope 在事务内 set_config），
+     * 所以调用方<b>伪造不了</b>——一个从请求参数里传进来的 merchantId 可以被写错，
+     * 一个从已认证会话里读出来的不会。租户作用域之外（测试注资、系统任务）它是 NULL，
+     * 由 V7 的 {@code NULLS NOT DISTINCT} 保证系统级操作照样幂等。
+     *
+     * <p>返回空 = 这个幂等键在本提交方名下已经存在。{@code ON CONFLICT DO NOTHING} 在并发下的行为：
      * 后到的事务会等先到的那个提交或回滚——先到的提交则本次什么都不做，
      * 先到的回滚（比如余额不足）则本次正常插入。这正是我们要的语义。
      */
     private Optional<Long> insertTransferIfAbsent(TransferCommand command) {
         return jdbcClient.sql("""
                         INSERT INTO transfer
-                            (idempotency_key, currency, amount, debit_account_id, credit_account_id,
-                             code, occurred_at)
-                        VALUES (:key, :currency, :amount, :debit, :credit, :code, :occurredAt)
-                        ON CONFLICT (idempotency_key) DO NOTHING
+                            (submitter_merchant_id, idempotency_key, currency, amount,
+                             debit_account_id, credit_account_id, code, occurred_at)
+                        VALUES (current_merchant_id(), :key, :currency, :amount,
+                                :debit, :credit, :code, :occurredAt)
+                        ON CONFLICT (submitter_merchant_id, idempotency_key) DO NOTHING
                         RETURNING id
                         """)
                 .param("key", command.idempotencyKey())
@@ -266,11 +279,60 @@ public class LedgerServiceImpl implements LedgerService {
                 .optional();
     }
 
-    private long existingTransferId(String idempotencyKey) {
-        return jdbcClient.sql("SELECT id FROM transfer WHERE idempotency_key = :key")
-                .param("key", idempotencyKey)
-                .query(Long.class)
-                .single();
+    /**
+     * 幂等键命中后的回读：<b>核对请求体，相同才返回原 id，不同就拒绝</b>。
+     *
+     * <p>「同一笔请求」的定义就写在这里的五个字段比对上，不藏在哈希里：
+     * 改定义只改这几行，不需要迁移数据。
+     *
+     * <p>查询条件带 {@code submitter_merchant_id IS NOT DISTINCT FROM current_merchant_id()}：
+     * 和 INSERT 用同一个来源，于是回读到的一定是<b>自己</b>那一笔——
+     * V7 之前这里能撞到别人的行（UNIQUE 是全表的），而 RLS 又把它藏起来，
+     * 回读 0 行 → {@code .single()} 抛出一个没人设计过的异常 → 500。
+     * 现在约束按提交方分域，跨租户根本不会冲突，这条路结构上消失了。
+     *
+     * <p>仍用 {@code .optional()} 而不是 {@code .single()}：
+     * 万一哪天前提再变（比如有人绕过 TenantScope 写入），
+     * 要炸也要炸成一句能读懂的话，而不是「expected 1, actual 0」。
+     */
+    private long existingTransferIdIfSameRequest(TransferCommand command) {
+        var existing = jdbcClient.sql("""
+                        SELECT id, currency, amount, debit_account_id, credit_account_id, code
+                        FROM transfer
+                        WHERE submitter_merchant_id IS NOT DISTINCT FROM current_merchant_id()
+                          AND idempotency_key = :key
+                        """)
+                .param("key", command.idempotencyKey())
+                .query((rs, n) -> new ExistingTransfer(
+                        rs.getLong("id"),
+                        rs.getString("currency"),
+                        rs.getBigDecimal("amount"),
+                        rs.getLong("debit_account_id"),
+                        rs.getLong("credit_account_id"),
+                        rs.getString("code")))
+                .optional()
+                .orElseThrow(() -> new IllegalStateException(
+                        "幂等键冲突但回读不到本提交方的记录：" + command.idempotencyKey()
+                                + "。这在 V7 之后不该发生，说明有写入绕过了 TenantScope"));
+
+        if (!existing.matches(command)) {
+            throw new LedgerException(
+                    Reason.IDEMPOTENCY_CONFLICT,
+                    "幂等键 %s 已被另一笔不同的请求使用".formatted(command.idempotencyKey()));
+        }
+        return existing.id();
+    }
+
+    /** 回读到的那一笔，以及「和这次请求是不是同一笔」的判定。 */
+    private record ExistingTransfer(long id, String currency, BigDecimal amount,
+                                    long debit, long credit, String code) {
+        boolean matches(TransferCommand c) {
+            return currency.equals(c.currency())
+                    && amount.compareTo(c.amount()) == 0     // 10 与 10.000 是同一个数
+                    && debit == c.debitAccountId()
+                    && credit == c.creditAccountId()
+                    && code.equals(c.code().name());
+        }
     }
 
     /** 借方为负、贷方为正。两行一条语句，SUM 恒为 0 由此保证。 */

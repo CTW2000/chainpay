@@ -341,6 +341,74 @@ class ApiSecurityTest extends AbstractPostgresTest {
     }
 
     // ==================================================================
+    // 幂等键的作用域与内容（质询扫描 9.8 / 8.4 修复）
+    // ==================================================================
+
+    @Test
+    @DisplayName("★ 同一个幂等键、不同的请求体 —— 409 拒绝，一分钱不动")
+    void sameKeyWithDifferentBodyIsRejected() {
+        // 扫描前的行为：第二笔回 200 + 第一笔的 id，777 一分没动，
+        // 而响应体里没有金额，商户无从察觉。这是清单 9.8 那句
+        // 「返回上次结果 = 用同一个键把另一笔钱吞掉」的原型。
+        //
+        // 系统手里有判断所需的全部信息（上一笔的金额、方向；这一笔的金额、方向），
+        // 之前只看了键就返回了。修法：键相同时必须比对请求体。
+        //   键相同 + 体相同 → 超时重发，幂等返回（下一条测试守着）
+        //   键相同 + 体不同 → 复用了键，409
+        String first = transferBody("order-1001", "10", acmeAccountA, acmeAccountB);
+        assertThat(signedPost(acmeSecret, "ak_acme", "/api/v1/transfers", first).statusCode())
+                .isEqualTo(200);
+
+        String different = transferBody("order-1001", "777", acmeAccountA, acmeAccountB);
+        var rejected = signedPost(acmeSecret, "ak_acme", "/api/v1/transfers", different);
+
+        assertThat(rejected.statusCode())
+                .as("同键不同体必须被拒，而不是伪装成成功")
+                .isEqualTo(409);
+        assertThat(rejected.body()).contains("\"code\":\"4003\"");
+        assertThat(balanceOf(acmeAccountB))
+                .as("只有第一笔的 10 到账，777 不能动")
+                .isEqualByComparingTo("10");
+        assertThat(transferCount()).isEqualTo(2);   // seed 那一笔 + order-1001
+    }
+
+    @Test
+    @DisplayName("★ 两个商户各用同一个幂等键 —— 互不干扰，各自 200")
+    void sameKeyAcrossMerchantsIsIndependent() {
+        // 扫描前：evilco 用 acme 用过的键 → UNIQUE 冲突 → 回读被 RLS 藏住 → 0 行
+        // → .single() 炸 → 500，且 9001 标了可重试。
+        // 后果：① 跨租户存在性预言机（200/500 就能探测别人的键）
+        //      ② 可抢占——预先占掉受害者要用的键，让他永久拿 500
+        // 根源在 V1 那行 UNIQUE (idempotency_key)：作用域是全表而不是每个商户。
+        long evilAccount2 = createOwnedAccount("user:evil-2:USDT", merchantIdOf("evilco"));
+        long mint = jdbc.sql("SELECT id FROM account WHERE code = 'house:mint:USDT'")
+                .query(Long.class).single();
+        seedBalance(mint, evilAccount, new BigDecimal("100"));
+
+        var acme = signedPost(acmeSecret, "ak_acme", "/api/v1/transfers",
+                transferBody("order-1", "5", acmeAccountA, acmeAccountB));
+        var evil = signedPost(evilSecret, "ak_evilco", "/api/v1/transfers",
+                transferBody("order-1", "7", evilAccount, evilAccount2));
+
+        assertThat(acme.statusCode()).isEqualTo(200);
+        assertThat(evil.statusCode())
+                .as("同一个键在另一个商户名下必须是全新的一笔，不能撞到 acme 的")
+                .isEqualTo(200);
+        assertThat(evil.body()).doesNotContain(digitsOnly(acme.body()));
+        assertThat(balanceOf(acmeAccountB)).isEqualByComparingTo("5");
+        assertThat(balanceOf(evilAccount2)).isEqualByComparingTo("7");
+    }
+
+    private String digitsOnly(String body) {
+        return body.replaceAll("\\D", "");
+    }
+
+    private long merchantIdOf(String code) {
+        return jdbc.sql("SELECT id FROM merchant WHERE code = :c").param("c", code)
+                .query(Long.class).single();
+    }
+
+    // ==================================================================
     // 辅助
     // ==================================================================
 

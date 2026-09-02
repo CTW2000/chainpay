@@ -59,6 +59,7 @@ public class ApiExceptionHandler {
             LedgerException.Reason.SAME_ACCOUNT,            ErrorCode.SAME_ACCOUNT,
             LedgerException.Reason.CURRENCY_MISMATCH,       ErrorCode.CURRENCY_MISMATCH,
             LedgerException.Reason.INSUFFICIENT_BALANCE,    ErrorCode.INSUFFICIENT_BALANCE,
+            LedgerException.Reason.IDEMPOTENCY_CONFLICT,    ErrorCode.IDEMPOTENCY_CONFLICT,
             // 刻意折叠：不存在 与 无权访问 必须不可区分
             LedgerException.Reason.ACCOUNT_NOT_FOUND,       ErrorCode.ACCESS_DENIED);
 
@@ -108,14 +109,26 @@ public class ApiExceptionHandler {
      * {@code INSUFFICIENT_BALANCE} 要改金额，{@code CURRENCY_MISMATCH} 要改币种，
      * 两者都不该重试。
      */
+    /**
+     * 暴露给测试：{@code ApiContractTest.everyLedgerReasonIsMapped} 遍历全部 Reason
+     * 断言这里不返回 null。没有那条测试之前，「漏映射会让测试变红」只是一句空话。
+     */
+    static ErrorCode errorCodeFor(LedgerException.Reason reason) {
+        return LEDGER_CODES.get(reason);
+    }
+
     @ExceptionHandler(LedgerException.class)
     public ResponseEntity<ApiResponse<Void>> handleLedger(LedgerException e) {
-        ErrorCode code = LEDGER_CODES.get(e.reason());
+        ErrorCode code = errorCodeFor(e.reason());
         // 余额不足是 400（你的请求没错，是账户状态不允许）；
         // ACCOUNT_NOT_FOUND 被映射成 403 + 3001，和「无权访问」完全一致 ——
         // 见 LEDGER_CODES 上面那段注释。
-        HttpStatus status = code == ErrorCode.ACCESS_DENIED
-                ? HttpStatus.FORBIDDEN : HttpStatus.BAD_REQUEST;
+        HttpStatus status = switch (code) {
+            case ACCESS_DENIED -> HttpStatus.FORBIDDEN;
+            // 409：你的请求本身没错，是和服务端已有状态冲突——和重复建商户同一个语义
+            case IDEMPOTENCY_CONFLICT -> HttpStatus.CONFLICT;
+            default -> HttpStatus.BAD_REQUEST;
+        };
         return ResponseEntity.status(status).body(ApiResponse.error(code, e.getMessage()));
     }
 

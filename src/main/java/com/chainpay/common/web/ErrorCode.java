@@ -72,6 +72,14 @@ public enum ErrorCode {
     INSUFFICIENT_BALANCE("4001", false),
     /** 要创建的东西已经存在。改个标识再来，别原样重试。 */
     ALREADY_EXISTS("4002", false),
+    /**
+     * 幂等键已被另一笔<b>不同的</b>请求用过。
+     *
+     * <p>4xxx 且不可重试：原样重发永远是同一个结果。客户端该做的是
+     * 换一个新的 clientTransferId——它复用了键，而不是网络抖了。
+     * 与 1002（nonce 重放）的区别：那个换 nonce 重签即可，这个要换业务标识。
+     */
+    IDEMPOTENCY_CONFLICT("4003", false),
 
     // ---- 5xxx 限流 ---------------------------------------------------
     /** 唯一一个「等一会儿再试就能成功」的错误。响应必带 {@code Retry-After}。 */
