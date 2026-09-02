@@ -2,7 +2,9 @@ package com.chainpay.support;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.chainpay.ledger.service.LedgerService;
 import com.chainpay.security.service.RateLimiter;
+import com.chainpay.security.service.TenantScope;
 import com.redis.testcontainers.RedisContainer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -11,7 +13,11 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.utility.MountableFile;
 
 /**
  * 所有账本测试的基类：跑<b>真的 PostgreSQL 18</b>，不用 H2。
@@ -40,8 +46,11 @@ public abstract class AbstractPostgresTest {
      * <p>手工 {@code start()} 之后不需要也不应该手工 {@code stop()} ——
      * Testcontainers 的 Ryuk 伴生容器会在 JVM 退出后回收。
      */
-    @ServiceConnection
-    static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:18");
+    static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:18")
+            // 和 docker-compose 用同一份初始化脚本建 chainpay_app——一处定义，两处使用
+            .withCopyFileToContainer(
+                    MountableFile.forHostPath("db/init/01-roles.sql"),
+                    "/docker-entrypoint-initdb.d/01-roles.sql");
 
     /**
      * 测试跑<b>真的 Redis</b>，理由和真 Postgres 一样。
@@ -58,8 +67,34 @@ public abstract class AbstractPostgresTest {
         REDIS.start();
     }
 
-    @Autowired
-    protected JdbcClient jdbc;
+    /**
+     * <b>被测应用</b>以普通角色 chainpay_app 连库；<b>Flyway</b> 以容器属主跑迁移。
+     *
+     * <p>不用 {@code @ServiceConnection}，因为它会把容器的超级用户塞给应用——
+     * 那正是 2026-08-31 质询扫描抓到的根源：超级用户无条件绕过 RLS，
+     * 忘了调 asMerchant 就看到全库，而所有测试照样全绿。
+     * 测试环境必须和生产一样，让应用以它真正会用的那个角色跑。
+     */
+    @DynamicPropertySource
+    static void connectAsTheRealAppRole(DynamicPropertyRegistry r) {
+        r.add("spring.datasource.url", POSTGRES::getJdbcUrl);
+        r.add("spring.datasource.username", () -> "chainpay_app");
+        r.add("spring.datasource.password", () -> "chainpay_app_dev");   // 同 db/init/01-roles.sql
+        r.add("spring.flyway.url", POSTGRES::getJdbcUrl);
+        r.add("spring.flyway.user", POSTGRES::getUsername);
+        r.add("spring.flyway.password", POSTGRES::getPassword);
+    }
+
+    /**
+     * <b>属主</b>连接，只给测试脚手架用：TRUNCATE、seed 数据、三个判官读视图。
+     *
+     * <p>它<b>不是</b>应用的连接。第一版用 {@code @Autowired JdbcClient jdbc} 拿的是应用的 bean，
+     * 那时应用是超级用户，seed 和被测混在一条连接上没人察觉。
+     * 现在应用是普通角色：seed 要绕过 RLS 写任意商户的账户、判官要读没授权给应用的视图，
+     * 都只有属主做得到。需要「以应用身份跑 SQL」的测试自己注入 {@code JdbcClient}。
+     */
+    protected final JdbcClient jdbc = JdbcClient.create(new DriverManagerDataSource(
+            POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword()));
 
     /** 限流器是单例，计数跨测试累积，必须在每个测试前重置。 */
     @Autowired
@@ -67,6 +102,19 @@ public abstract class AbstractPostgresTest {
 
     @Autowired
     protected StringRedisTemplate redisTemplate;
+
+    @Autowired
+    private LedgerService realLedger;
+
+    @Autowired
+    protected TenantScope tenantScope;
+
+    /**
+     * 给直接调账本的测试（M0）用的、<b>已进入系统作用域</b>的账本。
+     * 走 HTTP 的测试（M1+）不用它——它们的作用域由控制器决定。
+     * 见 {@link SystemScopedLedger}。
+     */
+    protected LedgerService ledger;
 
     /**
      * 每个测试方法前清空数据与限流计数，保证测试之间互不影响。
@@ -78,6 +126,7 @@ public abstract class AbstractPostgresTest {
      */
     @BeforeEach
     void resetLedger() {
+        ledger = new SystemScopedLedger(realLedger, tenantScope);
         jdbc.sql("TRUNCATE entry, transfer, account RESTART IDENTITY CASCADE").update();
         // Redis 里的计数也要清 —— 现在计数主要存在那里，只清本地等于没清。
         redisTemplate.getConnectionFactory().getConnection().serverCommands().flushAll();

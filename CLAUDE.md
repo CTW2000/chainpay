@@ -95,6 +95,24 @@ SELECT * FROM ledger_invariant WHERE total <> 0;   -- 必须 0 行
 **幂等尤其如此**：靠 `UNIQUE` 约束，不靠「先 SELECT 查一遍」——
 后者在并发下必然失败，两个线程可以同时查到"不存在"。
 
+### 数据库身份与作用域（2026-08-31 定）
+
+应用以**普通角色** `chainpay_app` 连库（不是超级用户、不是表的所有者），RLS 对它无条件生效。
+角色由 `db/init/01-roles.sql` 建；Flyway 以属主跑迁移。**不要为迁就任何特权角色写代码。**
+
+两种作用域，默认哪个都不设 = 一行都看不到（fail-closed）：
+
+| | 谁用 | 看到什么 |
+|---|---|---|
+| `TenantScope.asMerchant(id, …)` | HTTP 控制器 | 只有该商户的行 |
+| `TenantScope.asSystem(…)` | 注资、结算、M3 入账、M4 出账 | 全部行 |
+
+**已知权宜之计**：`asSystem()` 是用会话变量模拟的 `BYPASSRLS`，
+靠「控制器不得调它」这条纪律守着——一个 public 方法，任何代码都能调。
+**M3 落地第一个真实的系统操作（入账）时，升级为独立的 system 角色 + 独立连接池**，
+让系统权限变成连接身份而不是一个开关。在那之前接口多起来了，先用 ArchUnit
+断言 `controller` 包不得引用 `asSystem`。
+
 ### 金额
 
 - 一律 `BigDecimal` ↔ `NUMERIC(38,18)`，**绝不用 `double`/`float`**

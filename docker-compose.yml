@@ -22,6 +22,9 @@ services:
       # 沿用 17 及以前的 /var/lib/postgresql/data 会导致容器反复重启，
       # 报 "there appears to be PostgreSQL data in ... (unused mount/volume)"。
       - chainpay-pgdata:/var/lib/postgresql
+      # 首次建库时执行 db/init/*.sql，创建应用的运行时角色 chainpay_app。
+      # 只在数据卷为空时跑一次；已有的卷不会重跑（改了脚本要 docker compose down -v）。
+      - ./db/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       # 健康检查要区分「进程活着」和「真的能干活」——M6 会展开讲
       test: ["CMD-SHELL", "pg_isready -U chainpay -d chainpay"]

@@ -32,6 +32,13 @@ class TenantIsolationTest extends AbstractPostgresTest {
     @Autowired
     private TenantScope tenantScope;
 
+    /**
+     * <b>应用自己的</b>连接——和基类里做 seed 的 {@code jdbc}（属主）不是同一个。
+     * 「以应用的身份跑 SQL 会看到什么」只能拿这一个来问。
+     */
+    @Autowired
+    private org.springframework.jdbc.core.simple.JdbcClient appJdbc;
+
     private long acmeId;
     private long evilcoId;
     private long acmeAccount;
@@ -64,7 +71,7 @@ class TenantIsolationTest extends AbstractPostgresTest {
         // 注意这里**完全没有**经过 AccountAccessService。
         // 这条 SQL 就是「将来某个忘了做授权的新接口」会写出来的样子。
         var visible = tenantScope.asMerchant(acmeId, () ->
-                jdbc.sql("SELECT id FROM account ORDER BY id").query(Long.class).list());
+                appJdbc.sql("SELECT id FROM account ORDER BY id").query(Long.class).list());
 
         assertThat(visible)
                 .as("只能看到自己的账户；别人的和平台自有的都不该出现")
@@ -75,7 +82,7 @@ class TenantIsolationTest extends AbstractPostgresTest {
     @DisplayName("★ 点名查别人的账户 —— 返回 0 行，不是报错")
     void namingSomeoneElsesAccountReturnsNothing() {
         var found = tenantScope.asMerchant(acmeId, () ->
-                jdbc.sql("SELECT id FROM account WHERE id = :id")
+                appJdbc.sql("SELECT id FROM account WHERE id = :id")
                         .param("id", evilcoAccount).query(Long.class).optional());
 
         // 「不存在」和「无权访问」给同一个回答，攻击者无法用它枚举账户 ——
@@ -92,27 +99,35 @@ class TenantIsolationTest extends AbstractPostgresTest {
         // 而 LedgerServiceImpl.balanceOf() 读的正是这个视图，
         // 也就是说不加 security_invoker，整套隔离在最常用的路径上是个大洞。
         var visible = tenantScope.asMerchant(acmeId, () ->
-                jdbc.sql("SELECT account_id FROM account_balance ORDER BY account_id")
+                appJdbc.sql("SELECT account_id FROM account_balance ORDER BY account_id")
                         .query(Long.class).list());
 
         assertThat(visible).containsExactly(acmeAccount);
     }
 
     @Test
-    @DisplayName("★ 忘了设租户 —— 什么都查不到，而不是什么都查得到")
-    void forgettingTheTenantContextSeesNothing() {
-        // 这是本次设计里最关键的一条不对称：
-        //   没有 RLS 时，漏掉一次授权检查 → 数据泄露，且没人会发现
-        //   有 RLS 时，漏掉一次设置租户   → 一行都查不到，立刻炸给你看
-        // 让失误的方向指向「立刻暴露」，而不是「悄悄地错」。
-        var visible = tenantScope.asMerchant(acmeId, () -> {
-            // 手动把租户变量清成空 —— 模拟「谁忘了设」
-            jdbc.sql("SELECT set_config('chainpay.merchant_id', '', true)")
-                    .query(String.class).single();
-            return jdbc.sql("SELECT id FROM account").query(Long.class).list();
-        });
+    @DisplayName("★ 根本没调 asMerchant —— 什么都查不到，而不是什么都查得到")
+    void forgettingTheTenantScopeEntirelySeesNothing() {
+        // ★ 这条测试在 2026-08-31 的质询扫描后重写，值得记下来为什么 ★
+        //
+        // 第一版在 asMerchant **里面**清掉租户变量，模拟的是「降了权但没设变量」。
+        // 那个状态在生产里构造不出来：enterTenantScope 的两行同生同死。
+        // 真实的失误形态是「整个 asMerchant 都没调」——而第一版一次都没测过它。
+        //
+        // 更糟的是，当时应用以超级用户连库，「没调 asMerchant」的真实后果是
+        // **看到全库**（超级用户无条件绕过 RLS），和 TenantScope 的 javadoc
+        // 写的「一行都查不到，立刻炸」恰好相反。实测：acme 拿到了 evilco 的账户。
+        //
+        // 现在应用以普通角色 chainpay_app 连库，RLS 对它无条件生效。
+        // 没调 asMerchant → 租户变量没设 → current_merchant_id() 为 NULL →
+        // merchant_id = NULL 恒为假 → 一行都看不到。**失误方向终于朝着立刻暴露。**
+        //
+        // 这是清单 5.4 的原型：唯一能区分对错的输入是「根本不调」，第一版不在集合里。
+        var visible = appJdbc.sql("SELECT id FROM account").query(Long.class).list();
 
-        assertThat(visible).isEmpty();
+        assertThat(visible)
+                .as("没有租户作用域的查询必须一无所获——这是 RLS 存在的全部意义")
+                .isEmpty();
     }
 
     // ==================================================================
@@ -125,7 +140,7 @@ class TenantIsolationTest extends AbstractPostgresTest {
         // 这是 RLS 的 WITH CHECK 那一半。
         // 哪怕有人手写 SQL 完全绕开 Java 层，也挂不上别人账户的分录。
         assertThatThrownBy(() -> tenantScope.asMerchant(acmeId, () -> {
-            long transferId = jdbc.sql("""
+            long transferId = appJdbc.sql("""
                             INSERT INTO transfer(idempotency_key, currency, amount,
                                                  debit_account_id, credit_account_id, code)
                             VALUES ('attack-1','USDT',1,:d,:c,'ADJUSTMENT') RETURNING id
@@ -133,7 +148,7 @@ class TenantIsolationTest extends AbstractPostgresTest {
                     .param("d", acmeAccount).param("c", evilcoAccount)
                     .query(Long.class).single();
 
-            return jdbc.sql("""
+            return appJdbc.sql("""
                             INSERT INTO entry(transfer_id, account_id, currency, amount)
                             VALUES (:t, :a, 'USDT', 1)
                             """)
@@ -148,7 +163,7 @@ class TenantIsolationTest extends AbstractPostgresTest {
         // 只写 USING 不写 WITH CHECK 的话，这条 UPDATE 会成功 ——
         // 商户可以一次性把账户「送」给别人（或者把别人的账户认领过来）。
         assertThatThrownBy(() -> tenantScope.asMerchant(acmeId, () ->
-                jdbc.sql("UPDATE account SET merchant_id = :other WHERE id = :id")
+                appJdbc.sql("UPDATE account SET merchant_id = :other WHERE id = :id")
                         .param("other", evilcoId).param("id", acmeAccount)
                         .update()))
                 .hasStackTraceContaining("row-level security policy");
@@ -167,9 +182,9 @@ class TenantIsolationTest extends AbstractPostgresTest {
         // 结果被 @AfterEach 里的 balanceDrift() 抓住 ——
         // 物化余额和分录求和对不上了。判官连我自己的测试都一起管，这是对的。
         var result = tenantScope.asMerchant(acmeId, () -> {
-            jdbc.sql("UPDATE account SET code = 'user:acme:USDT:renamed' WHERE id = :id")
+            appJdbc.sql("UPDATE account SET code = 'user:acme:USDT:renamed' WHERE id = :id")
                     .param("id", acmeAccount).update();
-            return jdbc.sql("SELECT code FROM account WHERE id = :id")
+            return appJdbc.sql("SELECT code FROM account WHERE id = :id")
                     .param("id", acmeAccount).query(String.class).single();
         });
 
@@ -177,23 +192,24 @@ class TenantIsolationTest extends AbstractPostgresTest {
     }
 
     @Test
-    @DisplayName("★ 事务结束后角色和租户变量都必须复位 —— 否则连接池会串号")
+    @DisplayName("★ 事务结束后租户变量必须复位 —— 否则连接池会串号")
     void theTenantContextDoesNotLeakBackIntoThePool() {
-        tenantScope.asMerchant(acmeId, () -> jdbc.sql("SELECT 1").query(Integer.class).single());
+        tenantScope.asMerchant(acmeId, () -> appJdbc.sql("SELECT 1").query(Integer.class).single());
 
-        // 出了作用域之后，同一个池子里的连接必须已经变回原来的身份。
-        // 用 SET 而不是 SET LOCAL 的话，这里会读到 chainpay_app 和 acme 的 id ——
+        // 出了作用域之后，同一个池子里的连接必须已经清掉租户变量。
+        // 用 SET 而不是 SET LOCAL 的话，这里会读到 acme 的 id——
         // 下一个借到这条连接的请求就继承了 acme 的租户上下文。
-        // 这种 bug 只在并发下出现，单跑测试永远是绿的。
-        String role = jdbc.sql("SELECT current_user").query(String.class).single();
-        String tenant = jdbc.sql("SELECT coalesce(current_setting('chainpay.merchant_id', true),'')")
+        String tenant = appJdbc.sql(
+                "SELECT coalesce(current_setting('chainpay.merchant_id', true),'')")
                 .query(String.class).single();
-
-        assertThat(role).isNotEqualTo("chainpay_app");
         assertThat(tenant).isEmpty();
-        // 顺带证明脱离作用域后又能看到全部账户
-        assertThat(jdbc.sql("SELECT count(*) FROM account").query(Long.class).single())
-                .isEqualTo(3);
+
+        // ★ 第一版这里断言「脱离作用域后又能看到全部账户 = 3」★
+        // 那是把真实的失效形态（超级用户绕过 RLS）当成正常行为钉了下来。
+        // 现在的正确断言：脱离作用域后**一行都看不到**，和上一条测试同一个方向。
+        assertThat(appJdbc.sql("SELECT count(*) FROM account").query(Long.class).single())
+                .as("脱离作用域后不该看到任何账户——看得到就说明连接是特权角色")
+                .isZero();
     }
 
     // ==================================================================

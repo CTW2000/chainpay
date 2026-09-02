@@ -26,9 +26,6 @@ class LedgerInvariantTest extends AbstractPostgresTest {
 
     private static final String USDT = "USDT";
 
-    @Autowired
-    private LedgerService ledger;
-
     /** 资金来源账户。复式记账里钱不能凭空出现，注资时它是那个变负的对手方。 */
     private long mint;
     private long alice;

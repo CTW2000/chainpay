@@ -34,9 +34,6 @@ class LedgerModelingTest extends AbstractPostgresTest {
 
     private static final String USDT = "USDT";
 
-    @Autowired
-    private LedgerService ledger;
-
     private long mint;
     private long alice;
 

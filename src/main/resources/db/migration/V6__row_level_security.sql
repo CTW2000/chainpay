@@ -19,33 +19,32 @@
 
 
 -- ----------------------------------------------------------------------------
--- 一、受限角色
+-- 一、应用的运行时角色
 --
--- ★ 为什么必须换角色，不能就用现在这个 ★
+-- 角色本身**不在这里创建**——它由基础设施建（见 db/init/01-roles.sql），
+-- 这里只负责授权。角色是带密码的集群对象，迁移是进 git 的模式对象，两者不该混。
 --
--- 实测（PostgreSQL 18）：
---   角色 chainpay：rolsuper = t，rolbypassrls = t
---   开了 RLS、建了策略、设了租户上下文 —— alice 依然看得到 bob 的全部数据。
---   **超级用户无条件绕过 RLS，连 FORCE ROW LEVEL SECURITY 都治不了它。**
+-- ★ 这段的历史值得记下来 ★
+-- 第一版在这里 CREATE ROLE chainpay_app NOLOGIN，让超级用户连接在事务内
+-- SET LOCAL ROLE 切过去。2026-08-31 质询扫描实测：忘了切就以超级用户跑，
+-- RLS 整套失效、看到全库、零报错——和当时 TenantScope 注释写的
+-- 「忘了会一行都查不到」恰好相反。
 --
--- 这是本次最危险的一个坑：策略写得再对，只要连库的角色是超级用户，
--- 整套 RLS 就是**完全无效的装饰**，而且不会有任何报错、任何日志。
--- 你会以为租户隔离已经做好了。
+-- 修法不是让代码更小心，是让连接本身就是普通角色：
+-- 它不是超级用户、不是表的所有者，RLS 对它**无条件**生效，没有任何路径能绕。
+-- 应用现在以 chainpay_app 直接连库；Flyway 仍以属主（chainpay）跑迁移。
 --
--- NOLOGIN 是有意的：这个角色**不能用来连接数据库**，
--- 只能被已连接的会话通过 SET LOCAL ROLE 临时切换过去。
--- 少一份可以被盗用的登录凭据。
+-- 这份迁移在角色不存在时会失败——那是**对的**：基础设施没就位，应用就不该起来。
 -- ----------------------------------------------------------------------------
-CREATE ROLE chainpay_app NOLOGIN;
-
--- 让当前（迁移用的）角色有权 SET ROLE 到它。
--- 超级用户本来就可以切到任何角色，但生产环境的迁移角色未必是超级用户，
--- 显式授权让这份迁移在两种情况下都成立。
-GRANT chainpay_app TO CURRENT_USER;
-
 GRANT USAGE ON SCHEMA public TO chainpay_app;
 GRANT SELECT, INSERT, UPDATE ON account, transfer, entry TO chainpay_app;
 GRANT SELECT ON account_balance TO chainpay_app;
+
+-- 控制面（AdminService）也以这个角色跑：开户、发凭证、吊销、停用。
+-- merchant / api_credential 没有 RLS——它们本来就是跨租户的管理表。
+GRANT SELECT, INSERT, UPDATE ON merchant, api_credential TO chainpay_app;
+-- IDENTITY 列的序列：INSERT 要用，没有这条会报 permission denied for sequence
+GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO chainpay_app;
 
 -- 注意没有授 DELETE：账本里的行**永远不删**。
 -- 权限层就把这条纪律固化下来，比在代码评审里反复提醒可靠。
@@ -102,19 +101,41 @@ COMMENT ON FUNCTION current_merchant_id() IS
 
 
 -- ----------------------------------------------------------------------------
+-- 系统作用域：不属于任何商户的操作（注资、结算、M3 入账、M4 出账）
+--
+-- ★ 这是应用改用普通角色之后才暴露出来的设计空白 ★
+-- 之前应用是超级用户，平台账户（merchant_id 为 NULL）随手就能读写，
+-- 「系统级操作以什么身份访问平台账户」这个问题从来没被问过——超级用户把它盖住了。
+-- 2026-08-31 换成普通角色的那一刻，M0 的 9 个账本测试全部「账户不存在」。
+--
+-- 答案是显式的第二种作用域：TenantScope.asSystem() 在事务内把 chainpay.system 设为 on。
+-- 系统作用域看得到**全部**行，因为入账要从平台账户转到商户账户，跨两个域。
+--
+-- 它仍然是 fail-closed 的：默认（两个变量都没设）一行都看不到。
+-- 系统模式必须由代码显式开启，HTTP 控制器永远不该调 asSystem()——
+-- 这条目前靠评审守着，见 TenantScope.asSystem 的 javadoc。
+-- ----------------------------------------------------------------------------
+CREATE FUNCTION is_system_scope() RETURNS BOOLEAN
+    LANGUAGE sql
+    STABLE
+    AS $$
+        SELECT current_setting('chainpay.system', true) = 'on'
+    $$;
+
+COMMENT ON FUNCTION is_system_scope() IS
+    '系统作用域开关，由 TenantScope.asSystem() 在事务内设置。开启后策略放行全部行';
+
+
+-- ----------------------------------------------------------------------------
 -- 四、开启 RLS
 --
 -- ENABLE 让策略开始生效；FORCE 让策略**连表的所有者也管**。
 --
--- 目前 FORCE 是空转的：所有者 chainpay 是超级用户，超级用户在 FORCE 之上。
--- 写它是为了「等哪天所有者不再是超级用户，这里不需要再改一次」。
+-- FORCE 只影响**表的所有者**（chainpay，跑迁移的那个），对应用角色没有意义——
+-- 应用角色不是所有者，ENABLE 就已经对它无条件生效了。
+-- 保留 FORCE 是为了：哪天有人拿属主身份写运维脚本，也逃不掉策略。
 --
--- ★ 已知缺口（必须写下来）★
--- 应用现在仍然用超级用户连库。真正的生产配置应该是：
--- 迁移用一个有 DDL 权限的角色，运行时用一个**完全没有** BYPASSRLS 的角色。
--- 现在靠 SET LOCAL ROLE 在事务内降权来达到同样效果 —— 有效，但依赖
--- 「每条租户路径都记得降权」。这一层比"换连接角色"弱，是刻意的取舍：
--- 换连接角色要处理 Flyway 与运行时两套凭据、以及角色创建的先后顺序。
+-- 「应用仍用超级用户连库」这个缺口已于 2026-08-31 关闭，见本文件开头第一节。
 -- ----------------------------------------------------------------------------
 ALTER TABLE account  ENABLE ROW LEVEL SECURITY;
 ALTER TABLE account  FORCE  ROW LEVEL SECURITY;
@@ -132,8 +153,8 @@ ALTER TABLE transfer FORCE  ROW LEVEL SECURITY;
 -- 商户能把自己的账户 UPDATE 成别人的（改 merchant_id），一次性把账户送人。
 -- ----------------------------------------------------------------------------
 CREATE POLICY account_tenant ON account
-    USING      (merchant_id = current_merchant_id())
-    WITH CHECK (merchant_id = current_merchant_id());
+    USING      (is_system_scope() OR merchant_id = current_merchant_id())
+    WITH CHECK (is_system_scope() OR merchant_id = current_merchant_id());
 
 
 -- ----------------------------------------------------------------------------
@@ -144,11 +165,11 @@ CREATE POLICY account_tenant ON account
 -- 哪怕有人手写 SQL 绕过整个 Java 层，也做不到。
 -- ----------------------------------------------------------------------------
 CREATE POLICY entry_tenant ON entry
-    USING (EXISTS (
+    USING (is_system_scope() OR EXISTS (
         SELECT 1 FROM account a
         WHERE a.id = entry.account_id
           AND a.merchant_id = current_merchant_id()))
-    WITH CHECK (EXISTS (
+    WITH CHECK (is_system_scope() OR EXISTS (
         SELECT 1 FROM account a
         WHERE a.id = entry.account_id
           AND a.merchant_id = current_merchant_id()));
@@ -178,11 +199,11 @@ CREATE POLICY entry_tenant ON entry
 -- 表达的还是同一件事（参与方可见），而且少一次子查询。
 -- ----------------------------------------------------------------------------
 CREATE POLICY transfer_tenant ON transfer
-    USING (EXISTS (
+    USING (is_system_scope() OR EXISTS (
         SELECT 1 FROM account a
         WHERE a.id IN (transfer.debit_account_id, transfer.credit_account_id)
           AND a.merchant_id = current_merchant_id()))
-    WITH CHECK (EXISTS (
+    WITH CHECK (is_system_scope() OR EXISTS (
         SELECT 1 FROM account a
         WHERE a.id IN (transfer.debit_account_id, transfer.credit_account_id)
           AND a.merchant_id = current_merchant_id()));
