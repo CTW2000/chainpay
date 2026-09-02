@@ -56,6 +56,8 @@ public enum ErrorCode {
     INVALID_AMOUNT("2004", false),
     SAME_ACCOUNT("2005", false),
     CURRENCY_MISMATCH("2006", false),
+    /** 请求体超过上限。2xxx：请求本身有错，别原样重试。 */
+    PAYLOAD_TOO_LARGE("2007", false),
 
     // ---- 3xxx 权限 ---------------------------------------------------
     /**

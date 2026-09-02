@@ -343,6 +343,24 @@ class ApiContractTest extends AbstractPostgresTest {
         }
     }
 
+    @Test
+    @DisplayName("★ 超过 1 MB 的请求体 —— 413，且和其他错误一样走信封")
+    void oversizedBodyIsRejectedWithEnvelope() throws Exception {
+        // 质询扫描 6.5：过滤器里其他每一处拒绝都走 errors.write，唯独 413 是裸
+        // setStatus + return，空 body。客户端按信封解析会拿到解析异常，多半当传输失败重试。
+        // 这条不需要签名：体积检查必须发生在验签之前（读 body 是验签的前提）。
+        String oversized = "x".repeat(1024 * 1024 + 1);
+        var response = send(HttpRequest.newBuilder()
+                .uri(URI.create("http://localhost:" + port + "/api/v1/transfers"))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(oversized)));
+
+        assertThat(response.statusCode()).isEqualTo(413);
+        assertThat(response.body())
+                .contains("\"code\":\"2007\"")
+                .contains("\"data\":null");
+    }
+
     // ==================================================================
     // 错误信息的转义
     // ==================================================================

@@ -77,6 +77,10 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
      *
      * <p>这是「为了做安全检查而引入新攻击面」的典型例子：
      * 加一层防护时要问一句，这层防护本身能不能被用来打我。
+     *
+     * <p><b>而这段注释曾经守着一个结构上不存在的防护</b>（质询扫描 7.9 / 1.5）：
+     * 上限被实现成「读完之后量一下」，而不是「读的过程中的边界」。
+     * 威胁分析是对的，实现顺序让它失效。见下面 doFilterInternal 第 ② 步。
      */
     private static final int MAX_BODY_BYTES = 1024 * 1024;
 
@@ -114,12 +118,31 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
 
         String clientIp = clientIp(request);
 
-        // 先读 body —— 它是被签名的内容之一。
+        // ① Content-Length 快路径：诚实声明了超大长度的请求，一个字节都不读。
+        //    它**不能单独存在**——chunked 编码没有 Content-Length，② 才是防线。
+        if (request.getContentLengthLong() > MAX_BODY_BYTES) {
+            payloadTooLarge(response);
+            return;
+        }
+
+        // ② 有界读取：最多读 MAX + 1 字节就停手。
+        //
+        // ★ 2026-08-31 之前这里是 StreamUtils.copyToByteArray —— 读到流结束为止 ★
+        // 上面的检查跑在它之后，于是几 GB 的请求体早已进堆，检查永远轮不到。
+        // 实测：对一条永不结束的流，旧代码一路涨到 2 GB 数组上限，
+        // OutOfMemoryError 把整个 JVM 带走——不是「最终会 413」，是进程没了。
+        // 而这发生在验签之前（读 body 是验签的前提），不需要任何凭证。
+        //
+        // readNBytes(n) 最多读 n 字节就返回，攻击者第 n+1 个字节之后的内容永远不进堆。
+        // +1 是承重的：readNBytes(MAX) 读满后无从知道后面还有没有，
+        // 只能全部放行——「超过上限的被截断后当合法请求处理」，静默失效。
+        // 多读一个字节，才分得清「恰好 1 MB」和「超过 1 MB」。
+        //
         // 读完必须用 CachedBodyHttpServletRequest 包一层，否则控制器读到的是空流：
         // HttpServletRequest 的输入流只能读一次。
-        byte[] body = StreamUtils.copyToByteArray(request.getInputStream());
+        byte[] body = request.getInputStream().readNBytes(MAX_BODY_BYTES + 1);
         if (body.length > MAX_BODY_BYTES) {
-            response.setStatus(HttpStatus.PAYLOAD_TOO_LARGE.value());
+            payloadTooLarge(response);
             return;
         }
         CachedBodyHttpServletRequest cached = new CachedBodyHttpServletRequest(request, body);
@@ -232,6 +255,15 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
         } catch (NumberFormatException | NullPointerException e) {
             return 0L;
         }
+    }
+
+    /**
+     * 413 也走信封。之前是裸 {@code setStatus} + 空体（质询扫描 6.5）：
+     * 客户端按信封解析会拿到解析异常，多半当传输失败重试一个永远失败的请求。
+     */
+    private void payloadTooLarge(HttpServletResponse response) throws IOException {
+        errors.write(response, HttpStatus.PAYLOAD_TOO_LARGE,
+                ErrorCode.PAYLOAD_TOO_LARGE, "请求体超过 1 MB 上限");
     }
 
     private void unauthorized(HttpServletResponse response) throws IOException {
