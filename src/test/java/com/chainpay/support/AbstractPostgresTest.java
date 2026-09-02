@@ -14,6 +14,7 @@ import org.springframework.boot.testcontainers.service.connection.ServiceConnect
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -29,6 +30,7 @@ import org.testcontainers.utility.MountableFile;
  * <p>容器是 {@code static} 的，整个测试类共享一个，不会每个方法起一次。
  */
 @SpringBootTest
+@ActiveProfiles("test")   // 加载 application.yml + application-test.yml，后者只覆盖差异
 public abstract class AbstractPostgresTest {
 
     /**
@@ -148,9 +150,17 @@ public abstract class AbstractPostgresTest {
      *
      * <p>所以修法不是"给现有的四个测试各加一行"（那还是靠纪律，而纪律刚失效过），
      * 而是让核账<b>自动发生</b>：放进 {@code @AfterEach}，现有测试和将来所有新测试
-     * 都自动被守护，想漏都漏不掉。
+     * 都自动被核一遍。
      *
      * <p><b>能靠结构保证的，不要靠纪律保证。</b>
+     *
+     * <p><b>但「自动跑」不等于「判了东西」（质询扫描 5.10）：</b>
+     * 不碰账本的测试（限流、凭证、体积上限……）结束时 entry 表是空的，
+     * 三个判官查到 0 行、断言 0 == 0——空洞地为真。扫描时实测 41/67 个测试如此。
+     * 这不是 bug（它们本来就没有账可判），但这段注释曾写成「想漏都漏不掉」，那是夸大。
+     * 判官真正守住的是碰了账本的那些测试；而它们能不能在多币种下仍然响，
+     * 由 {@code LedgerModelingTest.invariantJudgeWorksAcrossMultipleCurrencies} 单独证明——
+     * 在那之前整个测试集只用 USDT，「每种币」这个量词从没量到过第二组。
      */
     @AfterEach
     void ledgerMustStayConsistent() {

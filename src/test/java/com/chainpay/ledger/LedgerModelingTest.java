@@ -47,6 +47,73 @@ class LedgerModelingTest extends AbstractPostgresTest {
     // 缺口 1 · 余额不变量必须由数据库守，不能只由 Java 守
     // ------------------------------------------------------------------
 
+    // ==================================================================
+    // 币种：分录币种必须等于账户币种（质询扫描 9.3 / 3.1-a / 5.10）
+    // ==================================================================
+
+    @Test
+    @DisplayName("★ 币种错配 —— 转账行与分录行都在数据库层被拒，而不是三个判官全绿")
+    void crossCurrencyRowsCannotBeStored() {
+        // 扫描前的现状：这条规则只由 Java 的 requireCurrencyMatches 守。
+        // 绕过 Java 层直接写 SQL，错配分录存得进去，而且——
+        //   ledger_invariant   按 entry.currency 分组，两条 BTC 分录自己配平 → 绿
+        //   balance_consistency 求和不看币种 → 绿
+        //   account_balance_ck  只看数字 → 绿
+        // 判官有盲区，测试集又从不踩进盲区（全是 USDT），两者互相掩护。
+        // 能让状态无法构造的约束，强过任何检测：V8 的复合外键 (account_id, currency)。
+        long a = createAccount("xc:a:USDT", "USDT", "LIABILITY", true);
+        long b = createAccount("xc:b:USDT", "USDT", "LIABILITY");
+
+        // ① 转账行：币种与借贷账户不符 → transfer_*_currency_fk 拒绝
+        assertThatThrownBy(() -> jdbc.sql("""
+                        INSERT INTO transfer(idempotency_key, currency, amount,
+                                             debit_account_id, credit_account_id, code)
+                        VALUES ('xc-t', 'BTC', 1, :a, :b, 'INTERNAL')""")
+                .param("a", a).param("b", b).update())
+                .as("BTC 转账挂在两个 USDT 账户上，转账行就该存不进去")
+                .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+
+        // ② 分录行：转账本身合法，单条分录币种错配 → entry_account_currency_fk 拒绝
+        long t = jdbc.sql("""
+                        INSERT INTO transfer(idempotency_key, currency, amount,
+                                             debit_account_id, credit_account_id, code)
+                        VALUES ('xc-ok', 'USDT', 1, :a, :b, 'INTERNAL') RETURNING id""")
+                .param("a", a).param("b", b).query(Long.class).single();
+        assertThatThrownBy(() -> jdbc.sql("""
+                        INSERT INTO entry(transfer_id, account_id, currency, amount) VALUES
+                            (:t, :a, 'BTC', -1),
+                            (:t, :b, 'BTC',  1)""")
+                .param("t", t).param("a", a).param("b", b).update())
+                .as("USDT 账户上的 BTC 分录必须在数据库层就存不进去")
+                .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+    }
+
+    @Test
+    @DisplayName("★ 多币种同时在账本里 —— ledger_invariant 必须出现两行，且判官在两行下仍能响")
+    void invariantJudgeWorksAcrossMultipleCurrencies() {
+        // 质询扫描 5.10：整个测试集只用 USDT，ledger_invariant 从没出现过第二行。
+        // 「每种币的分录之和为 0」里的「每种币」是个从没量到东西的量词。
+        // 这条先证明分组真的发生了，再证明判官在多组下仍能抓到问题（5.5 的自证）。
+        // USDT 的 mint / alice 由本类 @BeforeEach 建好；这里只补 BTC 的一对
+        long mintBtc = createAccount("mc:mint:BTC", "BTC", "EQUITY", true);
+        long bob     = createAccount("mc:bob:BTC",  "BTC", "LIABILITY");
+
+        ledger.transfer(new TransferCommand("mc-1", "USDT", new BigDecimal("100"), mint, alice,
+                TransferCode.SEED, null));
+        ledger.transfer(new TransferCommand("mc-2", "BTC", new BigDecimal("0.5"), mintBtc, bob,
+                TransferCode.SEED, null));
+
+        assertThat(jdbc.sql("SELECT count(*) FROM ledger_invariant").query(Long.class).single())
+                .as("两种币 → 判官视图必须是两行，否则「每种币」没在分组")
+                .isEqualTo(2);
+        assertThat(invariantViolations()).isZero();
+
+        // 只篡改 BTC 那一组的物化余额：判官必须只在那一组响，且确实响
+        jdbc.sql("UPDATE account SET balance = balance + 1 WHERE id = :id").param("id", bob).update();
+        assertThat(balanceDrift()).as("多币种下漂移判官必须仍能抓到").isEqualTo(1);
+        jdbc.sql("UPDATE account SET balance = balance - 1 WHERE id = :id").param("id", bob).update();
+    }
+
     @Test
     @DisplayName("绕过 LedgerService 直接改余额为负 —— 数据库必须拒绝")
     void databaseRejectsNegativeBalanceEvenWhenServiceIsBypassed() {

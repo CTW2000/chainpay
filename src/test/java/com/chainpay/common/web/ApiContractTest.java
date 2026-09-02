@@ -362,6 +362,35 @@ class ApiContractTest extends AbstractPostgresTest {
     }
 
     // ==================================================================
+    // 账本拒绝路径（质询扫描 5.1a：这些 throw 之前没有任何断言守着）
+    // ==================================================================
+
+    @Test
+    @DisplayName("★ 小数超过 18 位 —— 400 / 2004，而不是被数据库静默四舍五入")
+    void moreThan18DecimalsIsRejectedNotRounded() {
+        // 摘掉 LedgerServiceImpl 的 scale 校验，之前 73 个测试全绿，
+        // 而 0.1234567890123456789 会被 NUMERIC(38,18) 静默存成 0.123456789012345679——
+        // 「不能默默改人家的钱」这句注释当时没有任何断言背书。
+        var r = signedPost("/api/v1/transfers", """
+                {"clientTransferId":"sc-1","currency":"USDT","amount":"0.1234567890123456789",
+                 "debitAccountId":%d,"creditAccountId":%d,"code":"INTERNAL"}"""
+                .formatted(accountId, otherAccountId));
+        assertThat(r.statusCode()).isEqualTo(400);
+        assertThat(r.body()).contains("\"code\":\"2004\"");
+    }
+
+    @Test
+    @DisplayName("★ 转账币种与账户不符 —— 400 / 2006")
+    void currencyMismatchIsRejected() {
+        var r = signedPost("/api/v1/transfers", """
+                {"clientTransferId":"cm-1","currency":"BTC","amount":"1",
+                 "debitAccountId":%d,"creditAccountId":%d,"code":"INTERNAL"}"""
+                .formatted(accountId, otherAccountId));
+        assertThat(r.statusCode()).isEqualTo(400);
+        assertThat(r.body()).contains("\"code\":\"2006\"");
+    }
+
+    // ==================================================================
     // 错误信息的转义
     // ==================================================================
 

@@ -1,7 +1,13 @@
-# 测试专用配置。
+# 测试专用配置（profile: test）。
 #
-# Spring Boot 在测试时优先加载类路径下的这份，覆盖 src/main/resources/application.yml
-# 里的同名属性。生产那份里 chainpay.secret-key 没有默认值，缺了就起不来 ——
+# ★ 文件名是 application-test.yml，不是 application.yml ★
+# 同名的话 Spring Boot 按类路径资源**整份替换**主配置——不是合并。
+# 质询扫描 5.6 抓到的后果：主配置里「故意开小以暴露连接池竞争」的
+# hikari.maximum-pool-size / connection-timeout 在任何测试里都没生效，
+# 池子是 10 只因为那恰好是 HikariCP 的默认值，connection-timeout 实测 30000。
+# 改成 profile 文件后：主配置先加载，这里只覆盖测试需要不同的那几项。
+# 数据源与 Flyway 的凭据由 AbstractPostgresTest 的 @DynamicPropertySource 注入。
+# 生产那份里 chainpay.secret-key 没有默认值，缺了就起不来 ——
 # 那是刻意的，但测试不能因此跑不起来。
 #
 # 这里这把密钥是**固定的、公开的、只用于测试**。
@@ -22,3 +28,8 @@ chainpay:
   admin-token: "chainpay-test-admin-token-not-for-prod"
 
 # 数据源不用配：测试走 Testcontainers，由 @ServiceConnection 自动注入。
+
+logging:
+  level:
+    # 主配置对 com.chainpay 开了 DEBUG；测试里降回 INFO，否则 Surefire 输出会被淹没
+    com.chainpay: INFO

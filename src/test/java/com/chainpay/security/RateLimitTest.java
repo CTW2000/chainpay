@@ -185,6 +185,39 @@ class RateLimitTest extends AbstractPostgresTest {
                 .isTrue();
     }
 
+    @Test
+    @DisplayName("★ 真的连不上的 Redis —— RedisRateLimiter 自己的 catch 必须产出空 Optional")
+    void realUnreachableRedisProducesEmptyOptional() {
+        // 质询扫描 5.9：上面那条降级测试用子类桩顶掉了 RedisRateLimiter，
+        // 真实的 try/catch（生产环境唯一的降级触发点）一行都没执行——
+        // 把那个 catch 改成重新抛出，测试照样全绿。
+        // 这条用一个指向关闭端口、超时 300ms 的真实 Lettuce 连接，让那个 catch 真的跑一次。
+        var config = new org.springframework.data.redis.connection.RedisStandaloneConfiguration("localhost", 1);
+        var client = org.springframework.data.redis.connection.lettuce.LettuceClientConfiguration.builder()
+                .commandTimeout(java.time.Duration.ofMillis(300))
+                .clientOptions(io.lettuce.core.ClientOptions.builder()
+                        .socketOptions(io.lettuce.core.SocketOptions.builder()
+                                .connectTimeout(java.time.Duration.ofMillis(300)).build())
+                        .build())
+                .build();
+        var factory = new org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory(config, client);
+        factory.afterPropertiesSet();
+        var template = new org.springframework.data.redis.core.StringRedisTemplate(factory);
+        template.afterPropertiesSet();
+        try {
+            var dead = new RedisRateLimiter(template);
+
+            assertThat(dead.increment("cp:rate:probe"))
+                    .as("连不上必须返回空 Optional，由调用方决定降级，而不是抛出去")
+                    .isEmpty();
+            assertThat(new RateLimiter(dead).allowRequest("ak_probe"))
+                    .as("上层拿到空 Optional 后降级到本地计数，第一次请求放行")
+                    .isTrue();
+        } finally {
+            factory.destroy();
+        }
+    }
+
     // ==================================================================
     // 认证失败次数
     // ==================================================================

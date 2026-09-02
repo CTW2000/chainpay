@@ -120,9 +120,14 @@ class ApiSecurityTest extends AbstractPostgresTest {
                 .header("Content-Type", "application/json")
                 .header("X-CP-API-KEY", "ak_acme")
                 .header("X-CP-API-TIMESTAMP", String.valueOf(ts))
+                .header("X-CP-API-NONCE", nonce)
                 .header("X-CP-API-SIGN", signature)                          // 对 honestBody 算的
                 .POST(HttpRequest.BodyPublishers.ofString(tamperedBody)));   // 实际发 tamperedBody
 
+        // ★ 2026-09-02 之前这条测试是空转的（质询扫描 5.5/5.4/7.7）：
+        // 它算了 nonce 进签名，却没把 X-CP-API-NONCE 头发出去，服务端代入 ""，
+        // 签名必然对不上——把 body 改回原样照样 401。
+        // 「签名覆盖 body」这个断言当时什么都没守：摘掉 body 的覆盖它也绿。
         assertThat(response.statusCode()).as("签名必须覆盖 body").isEqualTo(401);
         assertThat(transferCount()).as("被拒的请求不能留下任何记录").isEqualTo(1);
     }
@@ -141,6 +146,7 @@ class ApiSecurityTest extends AbstractPostgresTest {
                 .header("Content-Type", "application/json")
                 .header("X-CP-API-KEY", "ak_acme")
                 .header("X-CP-API-TIMESTAMP", String.valueOf(ts))
+                .header("X-CP-API-NONCE", otherNonce)
                 .header("X-CP-API-SIGN", otherPathSignature)
                 .POST(HttpRequest.BodyPublishers.ofString(body)));
 
