@@ -480,13 +480,22 @@ OK-ACCESS-SIGN = Base64(HMAC-SHA256(prehash, secretKey))
 ✅ 对账：随机抽 100 个区块，链上 log 数 == 库内记录数
 ```
 
-#### 需要新下载的清单
+#### 知识补充（2026-09-02 已完成）
 
-**这一块你现有的 313 份清单没有覆盖。** 到 M2 之前要补：
+**这一块原有的 313 份清单没有覆盖。** 已从 web 采集并本机实测，落在
+`docs/knowledge/m2-block-indexer.md`（按"谁在什么时候读"组织，每条带出处）。要点：
 
-- **Ethereum JSON-RPC 官方规范**（`ethereum/execution-apis`）
-- **EIP-20（ERC-20 标准）**原文——特别是"实现可以不 revert 而返回 false"那段
-- **各交易所的确认数政策表**（币安 / OKX 公开的）——**这是别人用钱买来的经验值**
+- JSON-RPC 的 `safe` / `finalized` 标签（合并后才有）：Sepolia 实测分别落后 35 / 66 个区块
+- EIP-20 原文：Transfer **MUST** 含零值；铸币从 `0x0` 是 **SHOULD**；`decimals` **OPTIONAL**；调用方 **MUST** 处理 `false`
+- weird-erc20：fee-on-transfer / rebasing / no-revert-on-failure / uint256.max 转账 → **事件 value ≠ 实际到账**
+- 提供商 `eth_getLogs` 上限各不相同（2 000 区块 / 10 000 条 / 50 区块…），且会**静默漏日志**
+- 确认数：Binance 12，OKX 入账 32、**提现更高**；PoS 最终性 ≈ 2 epoch ≈ 12.8 分钟
+- 重组事实：信标链 7 块（2022-05）、ETC 100+ 块（2019-01，$1.1M）、ETC 7 000+ 块（2020-08）
+- 索引器重组模式：存 hash+parentHash → 找共同祖先 → 回滚派生数据 → 重放；外部副作用回滚不了；Envio 默认最大回滚 200 块
+- **一条清单里没有、从 uint256 与 `NUMERIC(38,18)` 直接推出来的坑**：整数部分只有 20 位，装不下大额代币的原始单位
+- 选型：web3j 5.0.3 已用 Jackson 3（不与 Boot 4 冲突）但拖 OkHttp/RxJava2/WebSocket/**AWS KMS SDK**；裸 JSON-RPC + 30 行解码是更薄的路
+
+「这一步会怎么坏」的提问在 `docs/retro/M2-before.md`（20 问，只问不答）。
 
 ---
 
