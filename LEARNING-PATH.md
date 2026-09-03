@@ -497,6 +497,15 @@ OK-ACCESS-SIGN = Base64(HMAC-SHA256(prehash, secretKey))
 
 「这一步会怎么坏」的提问在 `docs/retro/M2-before.md`（20 问，只问不答）。
 
+#### 进度
+
+- ✅ **M2-①**（2026-09-02）裸奔版：`JsonRpcClient` + `EthRpc` + `TransferLogDecoder`，Sepolia 实测解码正确；离线测试 + 环境变量门控的探针
+- ✅ **M2-②**（2026-09-02）落库 + 书签：V9（`chain_transfer_log` / `indexer_cursor`）、`BlockIndexer`（事件与书签同事务、锁后重读、网络在事务外、重组与解码失败即停）、11 条契约测试对着验收标准写；两面墙（去掉事务 → 崩溃测试红；去掉重读 + 带期望值的 UPDATE → 慢实例把书签推回去）；Sepolia 落库探针对账：链上 3 条 = 库里 3 条
+- ⬜ M2-③ 三态确认（SEEN / SAFE / FINAL，用 safe / finalized 标签）
+- ⬜ M2-④ 重组回滚（parentHash 链、共同祖先、ORPHANED）
+- ⬜ M2-⑤ RPC 不信任（自适应减半、跨节点、回执核对）
+- ⬜ M2-⑥ 代币谎言（decimals、白名单、事件 value ≠ 到账）
+
 ---
 
 ### M3 · 收款 Pay-In

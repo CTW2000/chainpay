@@ -132,6 +132,19 @@ SELECT * FROM ledger_invariant WHERE total <> 0;   -- 必须 0 行
 
 「先查，再改」的每一处都要问：**两个线程同时走到中间会怎样？**
 这是本项目最主要的 bug 来源，M0/M2/M4 会以三种不同形态各出现一次。
+M2 的形态已在 2026-09-02 出现：不是「先查再改」，是「两个写入之间有缝」——写事件与推书签，见 V9 注释与 `BlockIndexer`。
+
+### 链数据（M2 起，2026-09-02 定）
+
+`chain_transfer_log` / `indexer_cursor` 是账本的**上游证据，不是账本**：没有 RLS（链上事实不属于任何商户），
+应用角色没有 DELETE（重组时标 `ORPHANED`，不删行）。
+
+- **事件与书签在同一个事务里提交**；书签只进不退：锁后重读 + `UPDATE … WHERE last_block_number = 期望值` 两道保险
+- **网络 IO 在事务外面**：事务要短，握着行锁等 RPC 会拖垮另一个实例和连接池
+- **重组、解码失败 = 停下，不跳过**：一条被跳过的日志就是一笔静默丢失的入账。M2-② 只检测（parentHash 对不上就抛 `ReorgDetectedException`），回滚在 M2-④
+- `value` 存 `NUMERIC(78,0)` 原始单位；进账本前必须显式检查装不装得下 `NUMERIC(38,18)`，不能静默截断
+- 日志的唯一坐标是 `(block_hash, log_index)`，不是 `tx_hash`：重组后同一笔交易会在另一个区块里再出现一次
+- `BlockIndexer` 不是 Spring bean：设了 `CHAINPAY_CHAIN_RPC_URL` 才由 `ChainIndexerConfig` 装配；测试用内存里的 `FakeChain` 换整条链
 
 ---
 

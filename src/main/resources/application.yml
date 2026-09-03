@@ -76,6 +76,16 @@ chainpay:
   # 而回环检查在「nginx 与应用同机」的部署下会静默失效。
   admin-token: ${CHAINPAY_ADMIN_TOKEN}
 
+  # M2 · 区块索引器（Sepolia）。
+  # rpc-url 故意不在这里给：设了环境变量 CHAINPAY_CHAIN_RPC_URL 才装配索引器
+  #（ChainIndexerConfig 上的 @ConditionalOnProperty），不设时应用照常启动。
+  # 现在用 publicnode 的免 key 节点：https://ethereum-sepolia-rpc.publicnode.com
+  # 需要 key 的时候（撞限流、要归档数据）再去 Alchemy / Infura 申请。
+  chain:
+    token-address: 0x779877A7B0D9E8603169DdbD7836e478b4624789   # Sepolia 上的 LINK
+    cursor-name: sepolia:link:transfer
+    batch-blocks: 100
+
 logging:
   level:
     # 想看每条 SQL 时把这行打开 —— 账本层的一个核心目的就是"SQL 看得见"

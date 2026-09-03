@@ -11,7 +11,7 @@ import tools.jackson.databind.JsonNode;
  * <p>只做「翻译」，不做「判断」：这里不知道什么是 ERC-20、不知道什么是确认数。
  * 那些知识分别在 {@code chain.erc20} 和后续的索引器里。
  */
-public class EthRpc {
+public class EthRpc implements ChainReader {
 
     private final JsonRpcClient rpc;
 
@@ -20,6 +20,7 @@ public class EthRpc {
     }
 
     /** 节点眼中的最新区块号（{@code latest}）。注意：不同节点、同一节点前后两次都可能不一致。 */
+    @Override
     public long blockNumber() {
         return Hex.toLong(rpc.call("eth_blockNumber").asString());
     }
@@ -30,6 +31,7 @@ public class EthRpc {
      * <p>标签除了 {@code latest} 还有合并后才有的 {@code safe} 与 {@code finalized}——
      * 链自己告诉你哪一段是不可逆的，不必自己数确认数。Sepolia 实测二者分别落后约 35 / 66 块。
      */
+    @Override
     public BlockHeader block(String numberOrTag) {
         JsonNode b = rpc.call("eth_getBlockByNumber", numberOrTag, false);
         if (b == null || b.isNull()) {
@@ -42,6 +44,7 @@ public class EthRpc {
                 Hex.toLong(b.get("timestamp").asString()));
     }
 
+    @Override
     public BlockHeader block(long number) {
         return block(Hex.fromLong(number));
     }
@@ -52,6 +55,7 @@ public class EthRpc {
      * <p>提供商对范围和条数各有上限（2 000 块 / 10 000 条 / 50 块……），撞上限时以
      * {@link JsonRpcException}（带 code）的形式报错——调用方据此减半重试。这一层不自动分页。
      */
+    @Override
     public List<RawLog> logs(long fromBlock, long toBlock, String address, String topic0) {
         JsonNode result = rpc.call("eth_getLogs", Map.of(
                 "fromBlock", Hex.fromLong(fromBlock),
