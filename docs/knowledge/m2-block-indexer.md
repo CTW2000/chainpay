@@ -33,6 +33,7 @@
 | eth.merkle.io | 1 000 个区块/次 |
 | rpc.mevblocker.io | 10 000 条/次，超了报 `query returned more than 10000 results. Try with this block range [...]` |
 | publicnode | 只服务近期区块（归档数据收费） |
+| Alchemy 免费档 | **`eth_getLogs` 一次最多 10 块**（2026-09-03 实测）；超了返回 **HTTP 400** + JSON-RPC error（code -32600，message 里给出可用范围）。先看状态码的客户端会把 code 丢掉 |
 
 标准做法：**自适应对半分**——请求一个窗口，撞上限就把范围减半重试，拼接结果。固定页大小要么浪费请求要么溢出。
 

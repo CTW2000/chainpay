@@ -80,7 +80,7 @@ public final class LogReconciler {
         this.reconciles = reconciles;
         this.tx = tx;
         this.cursorName = cursorName;
-        this.token = token.toLowerCase();
+        this.token = BlockIndexer.requireAddress(token);
         this.samplesPerRun = samplesPerRun;
         this.random = random;
     }

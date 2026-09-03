@@ -73,7 +73,7 @@ public final class BlockIndexer {
         this.transferLogs = transferLogs;
         this.tx = tx;
         this.cursorName = cursorName;
-        this.token = token.toLowerCase();
+        this.token = requireAddress(token);
         this.batchBlocks = batchBlocks;
         this.window = new java.util.concurrent.atomic.AtomicInteger(batchBlocks);
     }
@@ -90,6 +90,19 @@ public final class BlockIndexer {
 
     public int currentWindow() {
         return window.get();
+    }
+
+    /**
+     * 合约地址必须是 0x + 40 位十六进制，构造时就拒绝。
+     * 不这么做的后果实测过：YAML 把不加引号的地址转成十进制数，应用起来了、书签放了、链头刷新了，
+     * 然后每一次 eth_getLogs 都是 Invalid params，窗口一路减到 1 块再停机——错误离它的原因隔了四层。
+     */
+    static String requireAddress(String address) {
+        if (address == null || !address.matches("0x[0-9a-fA-F]{40}")) {
+            throw new IllegalArgumentException("合约地址必须是 0x + 40 位十六进制，收到：" + address
+                    + "（YAML 里的地址要加引号，否则会被当成整数）");
+        }
+        return address.toLowerCase();
     }
 
     /** 书签在不在。轮询用它决定要不要先放书签。 */

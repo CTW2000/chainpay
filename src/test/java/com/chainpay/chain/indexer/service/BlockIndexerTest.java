@@ -288,6 +288,15 @@ class BlockIndexerTest extends AbstractPostgresTest {
         assertThat(cursor()).isEqualTo(new IndexerCursor(CURSOR, 0, FakeChain.hashOf(0)));
     }
 
+    @Test
+    @DisplayName("合约地址不成形（比如被 YAML 转成了十进制）：构造时就拒绝，不等到第一次 getLogs")
+    void rejectsATokenAddressThatIsNotHex() {
+        assertThatThrownBy(() -> new BlockIndexer(chain, cursors, transferLogs,
+                new TransactionTemplate(txManager), CURSOR, "682105340000000000000000000000000000000000000000", 100))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("0x");
+    }
+
     // ------------------------------------------------------------------ 脚手架
 
     private long rowCount() {

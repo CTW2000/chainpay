@@ -46,4 +46,14 @@ class TestConfigurationSanityTest extends AbstractPostgresTest {
                 .isEqualTo(3000L);
         assertThat(hikari.getMaximumPoolSize()).isEqualTo(10);
     }
+
+    @Test
+    @DisplayName("★ 合约地址必须以字符串到达应用：YAML 1.1 会把不加引号的 0x 十六进制当整数")
+    void tokenAddressSurvivesYamlAsAString() {
+        // 2026-09-03 本地起应用实测：不加引号的 0x779877A7… 被解析成整数，再转回字符串成了 48 位十进制，
+        // Alchemy 对每一次 eth_getLogs 都回 Invalid params，窗口一路减到 1 块然后停机。
+        assertThat(env.getProperty("chainpay.chain.token-address"))
+                .as("到达应用的地址必须是 0x + 40 位十六进制，不是十进制数")
+                .matches("0x[0-9a-fA-F]{40}");
+    }
 }

@@ -84,23 +84,30 @@ public class JsonRpcClient {
                 .build();
 
         Raw raw = exchange(request, method);
-        if (raw.status() / 100 != 2) {
-            throw new JsonRpcException(null, "HTTP " + raw.status() + " · " + method);
+
+        // 限流不是「我们的请求有问题」，是「现在别问」：瞬时失败，code 为空，下次再来。
+        // Alchemy 的 429 也带一个 JSON error 对象（code 429），放在下面那段之前拦住，
+        // 否则会被当成带 code 的业务错误去对半分，减到一块还 429 就停机——对节流的反应恰恰相反
+        if (raw.status() == 429) {
+            throw new JsonRpcException(null, "HTTP 429 限流，稍后再来 · " + method);
         }
 
-        JsonNode root;
-        try {
-            root = json.readTree(raw.body());
-        } catch (RuntimeException e) {
-            throw new JsonRpcException("响应不是 JSON · " + method, e);
-        }
-
-        // ★ 先看 error，再看 result ★ —— HTTP 200 不代表成功
-        JsonNode error = root.get("error");
+        // ★ 先看正文里的 error 对象，再看 HTTP 状态码 ★
+        // 规范说 JSON-RPC 的失败是 HTTP 200 + error 对象；但 Alchemy 这类提供商会把 error 对象
+        // 配上 HTTP 400 一起发。先看状态码的话，code 就丢了——撞上限的对半分永远不会触发，
+        // 只会每 12 秒「瞬时失败、下次再来」（2026-09-03 本地起应用时实测）。
+        JsonNode root = parseOrNull(raw.body());
+        JsonNode error = root == null ? null : root.get("error");
         if (error != null && !error.isNull()) {
             Integer code = error.has("code") ? error.get("code").asInt() : null;
             String message = error.has("message") ? error.get("message").asString() : error.toString();
             throw new JsonRpcException(code, method + " 失败：" + message);
+        }
+        if (raw.status() / 100 != 2) {
+            throw new JsonRpcException(null, "HTTP " + raw.status() + " · " + method);
+        }
+        if (root == null) {
+            throw new JsonRpcException(null, "响应不是 JSON · " + method);
         }
 
         JsonNode echoedId = root.get("id");
@@ -146,6 +153,15 @@ public class JsonRpcClient {
             future.cancel(true);
             closeQuietly(open.get());
             throw new JsonRpcException("请求被中断：" + method, e);
+        }
+    }
+
+    /** 能解析就返回树，不能就返回 null——非 JSON 的正文（网关的 HTML 错误页）交给状态码去解释。 */
+    private JsonNode parseOrNull(byte[] body) {
+        try {
+            return json.readTree(body);
+        } catch (RuntimeException notJson) {
+            return null;
         }
     }
 

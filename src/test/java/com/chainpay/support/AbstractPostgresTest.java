@@ -85,6 +85,18 @@ public abstract class AbstractPostgresTest {
         r.add("spring.flyway.url", POSTGRES::getJdbcUrl);
         r.add("spring.flyway.user", POSTGRES::getUsername);
         r.add("spring.flyway.password", POSTGRES::getPassword);
+
+        // ★ 测试不能受开发机 shell 的影响 ★
+        // 开发者 source 过 env/local.env 之后跑 mvn test，OS 环境变量（CHAINPAY_ADMIN_TOKEN、
+        // CHAINPAY_CHAIN_RPC_URL……）在 Spring 里的优先级高于 application-test.yml：
+        // 管理员令牌变成真的（AdminCredentialTest 7 条 401）、索引器被装配起来去打真节点。
+        // 2026-09-03 实测。DynamicPropertySource 的优先级又高于环境变量，在这里把它们钉死。
+        r.add("chainpay.admin-token", () -> "chainpay-test-admin-token-not-for-prod");
+        r.add("chainpay.secret-key", () -> "Y2hhaW5wYXktdGVzdC1rZXktbm90LWZvci1wcm9kISE=");
+        // @ConditionalOnProperty 把 "false" 当作未开启：测试里永远不装配真节点的索引器
+        r.add("chainpay.chain.rpc-url", () -> "false");
+        r.add("chainpay.chain.audit-rpc-url", () -> "");
+        r.add("chainpay.chain.start-block", () -> "");
     }
 
     /**

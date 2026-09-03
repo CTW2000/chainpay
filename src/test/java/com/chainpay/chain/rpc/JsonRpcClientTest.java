@@ -141,6 +141,35 @@ class JsonRpcClientTest {
     }
 
     @Test
+    @DisplayName("★ HTTP 400 + JSON-RPC error 对象（Alchemy 免费档就这么报上限）—— 必须带着 code 抛出，不能当成传输失败")
+    void surfacesTheErrorCodeEvenWhenHttpStatusIsNot2xx() {
+        // 2026-09-03 实测：Alchemy 免费档 eth_getLogs 超过 10 块，HTTP 400 + error.code=-32600。
+        // 先看状态码的客户端会把 code 丢掉，对半分永远不会触发，只会每 12 秒「瞬时失败」。
+        cannedStatus = 400;
+        cannedResponse = "{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-32600,\"message\":\"Under the Free tier plan, you can make eth_getLogs requests with up to a 10 block range\"}}";
+
+        assertThatThrownBy(() -> client().call("eth_getLogs"))
+                .isInstanceOf(JsonRpcException.class)
+                .satisfies(e -> {
+                    var rpc = (JsonRpcException) e;
+                    assertThat(rpc.code()).isEqualTo(-32600);
+                    assertThat(rpc.getMessage()).contains("10 block");
+                });
+    }
+
+    @Test
+    @DisplayName("★ HTTP 429 限流（Alchemy 也带 JSON error 对象）—— 是瞬时失败，code 必须为空，不能触发对半分")
+    void treatsRateLimitingAsTransientEvenWithAnErrorBody() {
+        cannedStatus = 429;
+        cannedResponse = "{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":429,\"message\":\"Your app has exceeded its compute units per second capacity\"}}";
+
+        assertThatThrownBy(() -> client().call("eth_getLogs"))
+                .isInstanceOf(JsonRpcException.class)
+                .satisfies(e -> assertThat(((JsonRpcException) e).code()).isNull())
+                .hasMessageContaining("429");
+    }
+
+    @Test
     @DisplayName("★ 响应的 id 和请求对不上 —— 必须抛出，不能把别人的答案当自己的")
     void rejectsMismatchedId() {
         cannedResponse = "{\"jsonrpc\":\"2.0\",\"id\":999,\"result\":\"0x1\"}";
