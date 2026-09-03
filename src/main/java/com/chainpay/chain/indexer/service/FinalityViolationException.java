@@ -1,4 +1,4 @@
-package com.chainpay.chain.indexer;
+package com.chainpay.chain.indexer.service;
 
 /**
  * finalized 头倒退了，或者同一个号换了哈希。

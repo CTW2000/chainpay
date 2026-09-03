@@ -1,4 +1,4 @@
-package com.chainpay.chain.indexer;
+package com.chainpay.chain.indexer.domain;
 
 /**
  * 一次重组恢复的结果。
@@ -11,7 +11,7 @@ public record ReorgResult(boolean applied, long cursorBlock, long ancestorBlock,
         return cursorBlock - ancestorBlock;
     }
 
-    static ReorgResult skipped(long cursorBlock) {
+    public static ReorgResult skipped(long cursorBlock) {
         return new ReorgResult(false, cursorBlock, cursorBlock, 0);
     }
 }

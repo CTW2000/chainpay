@@ -1,10 +1,17 @@
-package com.chainpay.chain.indexer;
+package com.chainpay.chain.indexer.service;
 
-import static com.chainpay.chain.indexer.BatchOutcome.INDEXED;
+import static com.chainpay.chain.indexer.domain.BatchOutcome.INDEXED;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.entry;
 
+import com.chainpay.chain.indexer.domain.BatchResult;
+import com.chainpay.chain.indexer.domain.IndexerCursor;
+import com.chainpay.chain.indexer.domain.ReorgResult;
+import com.chainpay.chain.indexer.repository.ChainHeadRepository;
+import com.chainpay.chain.indexer.repository.IndexerCursorRepository;
+import com.chainpay.chain.indexer.repository.ReorgRepository;
+import com.chainpay.chain.indexer.repository.TransferLogRepository;
 import com.chainpay.chain.rpc.JsonRpcException;
 import com.chainpay.chain.support.FakeChain;
 import com.chainpay.support.AbstractPostgresTest;

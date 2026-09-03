@@ -1,5 +1,6 @@
-package com.chainpay.chain.indexer;
+package com.chainpay.chain.indexer.repository;
 
+import com.chainpay.chain.indexer.domain.HeadRef;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 

@@ -1,6 +1,7 @@
-package com.chainpay.chain.indexer;
+package com.chainpay.chain.indexer.repository;
 
 import com.chainpay.chain.erc20.Erc20Transfer;
+import com.chainpay.chain.indexer.domain.HeadRef;
 import java.math.BigDecimal;
 import java.util.List;
 import org.springframework.jdbc.core.simple.JdbcClient;

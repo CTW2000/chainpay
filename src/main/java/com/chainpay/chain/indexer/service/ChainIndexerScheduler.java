@@ -1,5 +1,10 @@
-package com.chainpay.chain.indexer;
+package com.chainpay.chain.indexer.service;
 
+import com.chainpay.chain.indexer.domain.BatchOutcome;
+import com.chainpay.chain.indexer.domain.BatchResult;
+import com.chainpay.chain.indexer.domain.ReorgResult;
+import com.chainpay.chain.indexer.domain.TickOutcome;
+import com.chainpay.chain.indexer.domain.TickResult;
 import com.chainpay.chain.rpc.JsonRpcException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;

@@ -1,4 +1,6 @@
-package com.chainpay.chain.indexer;
+package com.chainpay.chain.indexer.domain;
+
+import com.chainpay.chain.indexer.service.BlockIndexer;
 
 /** 一次 {@link BlockIndexer#indexNextBatch()} 的三种结局。 */
 public enum BatchOutcome {

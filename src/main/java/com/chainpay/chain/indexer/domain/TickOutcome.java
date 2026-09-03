@@ -1,4 +1,4 @@
-package com.chainpay.chain.indexer;
+package com.chainpay.chain.indexer.domain;
 
 /** 一次轮询的三种结局。 */
 public enum TickOutcome {

@@ -1,4 +1,4 @@
-package com.chainpay.chain.indexer;
+package com.chainpay.chain.indexer.config;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 

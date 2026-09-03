@@ -1,5 +1,13 @@
-package com.chainpay.chain.indexer;
+package com.chainpay.chain.indexer.config;
 
+import com.chainpay.chain.indexer.repository.ChainHeadRepository;
+import com.chainpay.chain.indexer.repository.IndexerCursorRepository;
+import com.chainpay.chain.indexer.repository.ReorgRepository;
+import com.chainpay.chain.indexer.repository.TransferLogRepository;
+import com.chainpay.chain.indexer.service.BlockIndexer;
+import com.chainpay.chain.indexer.service.ChainHeadTracker;
+import com.chainpay.chain.indexer.service.ChainIndexerScheduler;
+import com.chainpay.chain.indexer.service.ReorgRecovery;
 import com.chainpay.chain.rpc.ChainReader;
 import com.chainpay.chain.rpc.EthRpc;
 import com.chainpay.chain.rpc.JsonRpcClient;

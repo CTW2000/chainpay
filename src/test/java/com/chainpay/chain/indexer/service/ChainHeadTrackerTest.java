@@ -1,8 +1,11 @@
-package com.chainpay.chain.indexer;
+package com.chainpay.chain.indexer.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.chainpay.chain.indexer.domain.ChainHead;
+import com.chainpay.chain.indexer.domain.HeadRef;
+import com.chainpay.chain.indexer.repository.ChainHeadRepository;
 import com.chainpay.chain.support.FakeChain;
 import com.chainpay.support.AbstractPostgresTest;
 import org.junit.jupiter.api.BeforeEach;

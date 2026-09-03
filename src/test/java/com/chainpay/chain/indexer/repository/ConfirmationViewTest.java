@@ -1,7 +1,9 @@
-package com.chainpay.chain.indexer;
+package com.chainpay.chain.indexer.repository;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.chainpay.chain.indexer.service.BlockIndexer;
+import com.chainpay.chain.indexer.service.ChainHeadTracker;
 import com.chainpay.chain.support.FakeChain;
 import com.chainpay.support.AbstractPostgresTest;
 import java.math.BigInteger;

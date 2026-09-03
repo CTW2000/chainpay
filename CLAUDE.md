@@ -49,10 +49,18 @@ com.chainpay
 ├── merchant/            控制面：开户、发凭证、吊销、停用
 │   ├── controller/
 │   └── service/
-└── security/            认证、授权、限流、重放、加密
-    ├── filter/          进业务代码之前跑的东西
-    ├── service/         验签、归属校验、租户降权、限流、重放登记
-    └── crypto/          AES-GCM
+├── security/            认证、授权、限流、重放、加密
+│   ├── filter/          进业务代码之前跑的东西
+│   ├── service/         验签、归属校验、租户降权、限流、重放登记
+│   └── crypto/          AES-GCM
+└── chain/               只读上链（M2）
+    ├── rpc/             JSON-RPC 客户端、ChainReader、十六进制、区块头与日志原文
+    ├── erc20/           Transfer 事件解码
+    └── indexer/         索引器（2026-09-02 拆分：20 个文件按类型分四组）
+        ├── service/     BlockIndexer、ChainHeadTracker、ReorgRecovery、ChainIndexerScheduler 及它们抛的异常
+        ├── repository/  四张表的 SQL：书签、事件、链头、重组审计
+        ├── domain/      record 与 enum：书签、链头、批结果、轮询结果
+        └── config/      装配（配了节点地址才生效）与配置
 ```
 
 **为什么不是纯按类型分**（`controller/` `service/` 各一个大包）：

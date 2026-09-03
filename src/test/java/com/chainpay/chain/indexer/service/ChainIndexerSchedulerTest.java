@@ -1,11 +1,16 @@
-package com.chainpay.chain.indexer;
+package com.chainpay.chain.indexer.service;
 
-import static com.chainpay.chain.indexer.TickOutcome.HALTED;
-import static com.chainpay.chain.indexer.TickOutcome.POLLED;
-import static com.chainpay.chain.indexer.TickOutcome.REORGED;
-import static com.chainpay.chain.indexer.TickOutcome.RETRY_LATER;
+import static com.chainpay.chain.indexer.domain.TickOutcome.HALTED;
+import static com.chainpay.chain.indexer.domain.TickOutcome.POLLED;
+import static com.chainpay.chain.indexer.domain.TickOutcome.REORGED;
+import static com.chainpay.chain.indexer.domain.TickOutcome.RETRY_LATER;
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.chainpay.chain.indexer.domain.TickResult;
+import com.chainpay.chain.indexer.repository.ChainHeadRepository;
+import com.chainpay.chain.indexer.repository.IndexerCursorRepository;
+import com.chainpay.chain.indexer.repository.ReorgRepository;
+import com.chainpay.chain.indexer.repository.TransferLogRepository;
 import com.chainpay.chain.rpc.JsonRpcException;
 import com.chainpay.chain.support.FakeChain;
 import com.chainpay.support.AbstractPostgresTest;

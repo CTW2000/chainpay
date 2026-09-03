@@ -1,5 +1,12 @@
-package com.chainpay.chain.indexer;
+package com.chainpay.chain.indexer.service;
 
+import com.chainpay.chain.indexer.domain.HeadRef;
+import com.chainpay.chain.indexer.domain.IndexerCursor;
+import com.chainpay.chain.indexer.domain.ReorgResult;
+import com.chainpay.chain.indexer.repository.ChainHeadRepository;
+import com.chainpay.chain.indexer.repository.IndexerCursorRepository;
+import com.chainpay.chain.indexer.repository.ReorgRepository;
+import com.chainpay.chain.indexer.repository.TransferLogRepository;
 import com.chainpay.chain.rpc.BlockHeader;
 import com.chainpay.chain.rpc.ChainReader;
 import com.chainpay.chain.rpc.JsonRpcException;

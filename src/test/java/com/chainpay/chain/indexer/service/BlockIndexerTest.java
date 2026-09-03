@@ -1,13 +1,17 @@
-package com.chainpay.chain.indexer;
+package com.chainpay.chain.indexer.service;
 
-import static com.chainpay.chain.indexer.BatchOutcome.INDEXED;
-import static com.chainpay.chain.indexer.BatchOutcome.SKIPPED_CURSOR_MOVED;
-import static com.chainpay.chain.indexer.BatchOutcome.UP_TO_DATE;
+import static com.chainpay.chain.indexer.domain.BatchOutcome.INDEXED;
+import static com.chainpay.chain.indexer.domain.BatchOutcome.SKIPPED_CURSOR_MOVED;
+import static com.chainpay.chain.indexer.domain.BatchOutcome.UP_TO_DATE;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.chainpay.chain.erc20.TransferLogDecoder;
+import com.chainpay.chain.indexer.domain.BatchResult;
+import com.chainpay.chain.indexer.domain.IndexerCursor;
+import com.chainpay.chain.indexer.repository.IndexerCursorRepository;
+import com.chainpay.chain.indexer.repository.TransferLogRepository;
 import com.chainpay.chain.rpc.RawLog;
 import com.chainpay.chain.support.FakeChain;
 import com.chainpay.support.AbstractPostgresTest;

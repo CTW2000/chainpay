@@ -1,4 +1,4 @@
-package com.chainpay.chain.indexer;
+package com.chainpay.chain.indexer.service;
 
 /**
  * 下一批第一个区块的 parentHash 和书签上的哈希对不上：链在书签处（或更深）被重组了。

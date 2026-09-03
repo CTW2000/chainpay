@@ -1,5 +1,8 @@
-package com.chainpay.chain.indexer;
+package com.chainpay.chain.indexer.service;
 
+import com.chainpay.chain.indexer.domain.ChainHead;
+import com.chainpay.chain.indexer.domain.HeadRef;
+import com.chainpay.chain.indexer.repository.ChainHeadRepository;
 import com.chainpay.chain.rpc.BlockHeader;
 import com.chainpay.chain.rpc.ChainReader;
 import java.util.Optional;

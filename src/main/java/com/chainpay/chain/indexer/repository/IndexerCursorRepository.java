@@ -1,5 +1,8 @@
-package com.chainpay.chain.indexer;
+package com.chainpay.chain.indexer.repository;
 
+import com.chainpay.chain.indexer.domain.IndexerCursor;
+import com.chainpay.chain.indexer.service.BlockIndexer;
+import com.chainpay.chain.indexer.service.ReorgRecovery;
 import java.util.Optional;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.core.simple.JdbcClient;
