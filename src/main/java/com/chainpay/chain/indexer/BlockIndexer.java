@@ -20,7 +20,7 @@ import org.springframework.transaction.support.TransactionTemplate;
  *   ⑤ 解码                                  ← 解不了就停，整批不写
  *   ⑥ BEGIN
  *        锁书签行、重读：必须仍是 100，否则这批作废
- *        INSERT 事件 ON CONFLICT DO NOTHING
+ *        INSERT 事件 ON CONFLICT：CANONICAL 不动，ORPHANED 复活（M2-④）
  *        UPDATE 书签 WHERE last_block_number = 100
  *      COMMIT
  * </pre>
@@ -124,7 +124,7 @@ public final class BlockIndexer {
             // 别的实例在我们取数据期间推走了书签。我们手里这批是按旧书签算的，作废
             return BatchResult.skipped(from, to, transfers.size());
         }
-        int inserted = transferLogs.insertIgnoringDuplicates(transfers);
+        int inserted = transferLogs.recordCanonical(transfers);
         if (!cursors.advance(cursorName, expected.lastBlockNumber(), to, last.hash())) {
             throw new IllegalStateException("书签在锁内被改动，不应发生：" + cursorName);
         }

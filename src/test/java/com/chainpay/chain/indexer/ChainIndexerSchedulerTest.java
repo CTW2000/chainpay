@@ -2,6 +2,7 @@ package com.chainpay.chain.indexer;
 
 import static com.chainpay.chain.indexer.TickOutcome.HALTED;
 import static com.chainpay.chain.indexer.TickOutcome.POLLED;
+import static com.chainpay.chain.indexer.TickOutcome.REORGED;
 import static com.chainpay.chain.indexer.TickOutcome.RETRY_LATER;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -10,7 +11,9 @@ import com.chainpay.chain.support.FakeChain;
 import com.chainpay.support.AbstractPostgresTest;
 import java.math.BigInteger;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.stream.Collectors;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -22,8 +25,8 @@ import org.springframework.transaction.support.TransactionTemplate;
 /**
  * 一次轮询的形状：放书签（若没有且配了起点）→ 刷新链头 → 连续推批直到追平。
  *
- * <p>失败分两种：瞬时的（节点不可达）下次再来；结构性的（重组、finalized 倒退、没书签没起点）停下，
- * 之后每次轮询都直接返回，不再碰节点。停下来的索引器是一个报警，往前走的是定时炸弹。
+ * <p>失败分三种：瞬时的（节点不可达）下次再来；重组（M2-④ 起）这一次回滚、下一次重放；
+ * 结构性的（finalized 倒退、没书签没起点）停下，之后每次轮询都直接返回，不再碰节点。
  */
 @SpringBootTest
 @DisplayName("M2-③ · 轮询")
@@ -45,13 +48,16 @@ class ChainIndexerSchedulerTest extends AbstractPostgresTest {
     private ChainHeadRepository heads;
 
     @Autowired
+    private ReorgRepository reorgs;
+
+    @Autowired
     private PlatformTransactionManager txManager;
 
     private FakeChain chain;
 
     @BeforeEach
     void resetChainTables() {
-        jdbc.sql("TRUNCATE chain_transfer_log, indexer_cursor, chain_head").update();
+        jdbc.sql("TRUNCATE chain_transfer_log, indexer_cursor, chain_head, chain_reorg").update();
         chain = new FakeChain();
     }
 
@@ -79,20 +85,19 @@ class ChainIndexerSchedulerTest extends AbstractPostgresTest {
     }
 
     @Test
-    @DisplayName("★ 重组：停下，书签不动；之后的轮询直接返回，不再碰节点")
-    void haltsOnReorgAndStaysHalted() {
+    @DisplayName("★ finalized 倒退：停下，书签不动；之后的轮询直接返回，不再碰节点")
+    void haltsOnFinalityViolationAndStaysHalted() {
         chain.withBlocks(10);
         chain.reportSafe(5);
         chain.reportFinalized(2);
         ChainIndexerScheduler scheduler = scheduler(0L, 5);
-        scheduler.tick();                                            // 书签到 10
+        scheduler.tick();                                            // 书签到 10，链头 finalized 2
 
-        chain.withBlocks(20);
-        chain.tamperParentHash(11, FakeChain.hashOf(999));
+        chain.reportFinalized(1);
         TickResult halted = scheduler.tick();
 
         assertThat(halted.outcome()).isEqualTo(HALTED);
-        assertThat(halted.detail()).contains("11");
+        assertThat(halted.detail()).contains("倒退");
         assertThat(scheduler.isHalted()).isTrue();
         assertThat(cursorBlock()).isEqualTo(10);
 
@@ -101,6 +106,39 @@ class ChainIndexerSchedulerTest extends AbstractPostgresTest {
         assertThat(scheduler.tick().outcome()).isEqualTo(HALTED);
         assertThat(touchedTheNode).isFalse();
         assertThat(cursorBlock()).isEqualTo(10);
+    }
+
+    @Test
+    @DisplayName("★ 重组：这一次轮询回滚（REORGED），下一次从祖先之后重放；旧行 ORPHANED、新行 CANONICAL")
+    void recoversFromAReorgAndReplaysOnTheNextTick() {
+        chain.withBlocks(10);
+        chain.reportSafe(8);
+        chain.reportFinalized(5);
+        chain.addTransfer(LINK, 10, ALICE, BOB, TEN_LINK);
+        ChainIndexerScheduler scheduler = scheduler(0L, 100);
+        assertThat(scheduler.tick().outcome()).isEqualTo(POLLED);  // 书签 10
+        String reincludedTx = FakeChain.txHashOf(10, 0);
+        chain.reorgFrom(10, "A");
+        chain.addTransfer(LINK, 10, ALICE, BOB, TEN_LINK, reincludedTx);
+        chain.withBlocks(11);
+
+        TickResult reorged = scheduler.tick();
+
+        assertThat(reorged.outcome()).isEqualTo(REORGED);
+        assertThat(reorged.detail()).contains("深度 5");
+        assertThat(scheduler.isHalted()).isFalse();
+        assertThat(cursorBlock()).as("6..9 无从证明，退到 finalized 头").isEqualTo(5);
+
+        TickResult replayed = scheduler.tick();
+
+        assertThat(replayed.outcome()).isEqualTo(POLLED);
+        assertThat(cursorBlock()).isEqualTo(11);
+        assertThat(statusByHash()).containsExactlyInAnyOrderEntriesOf(Map.of(
+                FakeChain.hashOf(10), "ORPHANED",
+                FakeChain.hashOf(10, "A"), "CANONICAL"));
+        assertThat(jdbc.sql("SELECT block_number FROM chain_transfer_confirmation").query(Long.class).list())
+                .containsExactly(10L);
+        assertThat(jdbc.sql("SELECT COUNT(*) FROM chain_reorg").query(Long.class).single()).isEqualTo(1);
     }
 
     @Test
@@ -168,7 +206,8 @@ class ChainIndexerSchedulerTest extends AbstractPostgresTest {
         TransactionTemplate tx = new TransactionTemplate(txManager);
         BlockIndexer indexer = new BlockIndexer(chain, cursors, transferLogs, tx, CURSOR, LINK, batchBlocks);
         ChainHeadTracker tracker = new ChainHeadTracker(chain, heads, tx, "test");
-        return new ChainIndexerScheduler(tracker, indexer, startBlock);
+        ReorgRecovery recovery = new ReorgRecovery(chain, cursors, transferLogs, heads, reorgs, tx, CURSOR);
+        return new ChainIndexerScheduler(tracker, indexer, recovery, startBlock);
     }
 
     private long cursorBlock() {
@@ -178,6 +217,13 @@ class ChainIndexerSchedulerTest extends AbstractPostgresTest {
 
     private long rowCount() {
         return jdbc.sql("SELECT COUNT(*) FROM chain_transfer_log").query(Long.class).single();
+    }
+
+    private Map<String, String> statusByHash() {
+        return jdbc.sql("SELECT block_hash, status FROM chain_transfer_log")
+                .query((rs, i) -> Map.entry(rs.getString(1), rs.getString(2)))
+                .list().stream()
+                .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
     }
 
     private List<Long> headNumbers() {

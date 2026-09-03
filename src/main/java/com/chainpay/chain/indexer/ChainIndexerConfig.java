@@ -51,9 +51,22 @@ class ChainIndexerConfig {
     }
 
     @Bean
+    ReorgRecovery reorgRecovery(ChainReader chain,
+                                IndexerCursorRepository cursors,
+                                TransferLogRepository transferLogs,
+                                ChainHeadRepository heads,
+                                ReorgRepository reorgs,
+                                PlatformTransactionManager txManager,
+                                ChainIndexerProperties properties) {
+        return new ReorgRecovery(chain, cursors, transferLogs, heads, reorgs,
+                new TransactionTemplate(txManager), properties.cursorName());
+    }
+
+    @Bean
     ChainIndexerScheduler chainIndexerScheduler(ChainHeadTracker tracker,
                                                 BlockIndexer indexer,
+                                                ReorgRecovery recovery,
                                                 ChainIndexerProperties properties) {
-        return new ChainIndexerScheduler(tracker, indexer, properties.startBlock());
+        return new ChainIndexerScheduler(tracker, indexer, recovery, properties.startBlock());
     }
 }

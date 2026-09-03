@@ -6,10 +6,10 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 
 /**
- * 书签的四个操作。SQL 在这里，事务边界在 {@link BlockIndexer}。
+ * 书签的几个操作。SQL 在这里，事务边界在 {@link BlockIndexer} 和 {@link ReorgRecovery}。
  *
- * <p>「书签只进不退」由两道保险共同守着，都在这个类里能看见：
- * {@link #lock} 之后的重读（第一道），和 {@link #advance} 的 WHERE 里带着期望值（第二道）。
+ * <p>「书签只从期望值出发改」由两道保险共同守着，都在这个类里能看见：
+ * {@link #lock} 之后的重读（第一道），和 {@link #advance} / {@link #rewind} 的 WHERE 里带着期望值（第二道）。
  */
 @Repository
 public class IndexerCursorRepository {
@@ -60,11 +60,21 @@ public class IndexerCursorRepository {
                 .orElseThrow(() -> new IllegalStateException("书签不存在：" + name));
     }
 
+    /** 往前推。只能从 {@code expectedLast} 出发改，见 {@link #move}。 */
+    public boolean advance(String name, long expectedLast, long newLast, String newHash) {
+        return move(name, expectedLast, newLast, newHash);
+    }
+
+    /** 退回祖先（重组恢复）。同一条 SQL、同一个守卫。 */
+    public boolean rewind(String name, long expectedLast, long newLast, String newHash) {
+        return move(name, expectedLast, newLast, newHash);
+    }
+
     /**
-     * 只能从 {@code expectedLast} 往前推：WHERE 里带上期望值，值已不是它就一行都不改，返回 false。
+     * WHERE 里带上期望值：值已不是它就一行都不改，返回 false。
      * 就算调用方算错了范围，也不可能把书签改成别的起点。
      */
-    public boolean advance(String name, long expectedLast, long newLast, String newHash) {
+    private boolean move(String name, long expectedLast, long newLast, String newHash) {
         return jdbc.sql("""
                         UPDATE indexer_cursor
                         SET last_block_number = :newLast, last_block_hash = :newHash, updated_at = now()
