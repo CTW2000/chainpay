@@ -5,6 +5,9 @@ import com.chainpay.chain.indexer.domain.HeadRef;
 import com.chainpay.chain.indexer.repository.ChainHeadRepository;
 import com.chainpay.chain.rpc.BlockHeader;
 import com.chainpay.chain.rpc.ChainReader;
+import com.chainpay.chain.rpc.JsonRpcException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import java.util.Optional;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -22,13 +25,23 @@ import org.springframework.transaction.support.TransactionTemplate;
  */
 public final class ChainHeadTracker {
 
+    private static final Logger log = LoggerFactory.getLogger(ChainHeadTracker.class);
+
     private final ChainReader chain;
+    private final ChainReader audit;
     private final ChainHeadRepository heads;
     private final TransactionTemplate tx;
     private final String chainName;
 
     public ChainHeadTracker(ChainReader chain, ChainHeadRepository heads, TransactionTemplate tx, String chainName) {
+        this(chain, null, heads, tx, chainName);
+    }
+
+    /** @param audit 第二个节点，可为 null。只用来核对 finalized 那一块：头部的分歧是常态，finalized 的分歧不允许 */
+    public ChainHeadTracker(ChainReader chain, ChainReader audit, ChainHeadRepository heads,
+                            TransactionTemplate tx, String chainName) {
         this.chain = chain;
+        this.audit = audit;
         this.heads = heads;
         this.tx = tx;
         this.chainName = chainName;
@@ -39,6 +52,9 @@ public final class ChainHeadTracker {
         ChainHead observed = new ChainHead(
                 ref(chain.block("latest")), ref(chain.block("safe")), ref(chain.block("finalized")));
         requireOrdered(observed);
+        if (audit != null) {
+            requireAuditAgreesOnFinalized(observed.finalized());
+        }
 
         return tx.execute(status -> {
             Optional<ChainHead> current = heads.lock();
@@ -50,6 +66,25 @@ public final class ChainHeadTracker {
             heads.update(merged);
             return merged;
         });
+    }
+
+    /**
+     * 头部的分歧是常态（两个节点看到的 latest 差几块、处在重组两边），不查；
+     * finalized 的分歧不允许：两个节点至少有一个坏了，不知道信谁，停下叫人。
+     * 审计节点还没到那个高度、或者连不上，跳过这次比对——它是审计，不该拖停索引。
+     */
+    private void requireAuditAgreesOnFinalized(HeadRef finalized) {
+        BlockHeader theirs;
+        try {
+            theirs = audit.block(finalized.number());
+        } catch (JsonRpcException behindOrUnreachable) {
+            log.warn("审计节点答不出 finalized 块 {}，跳过这次比对：{}", finalized.number(), behindOrUnreachable.getMessage());
+            return;
+        }
+        if (!theirs.hash().equalsIgnoreCase(finalized.hash())) {
+            throw new FinalityViolationException("两个节点对 finalized 块 " + finalized.number() + " 意见不同：主节点 "
+                    + finalized.hash() + "，审计节点 " + theirs.hash() + "。不知道信谁，停下叫人");
+        }
     }
 
     /** 协议保证 finalized ≤ safe ≤ latest。节点给出别的顺序，是节点坏了，不合并。 */

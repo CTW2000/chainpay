@@ -2,10 +2,12 @@ package com.chainpay.chain.indexer.service;
 
 import com.chainpay.chain.indexer.domain.BatchOutcome;
 import com.chainpay.chain.indexer.domain.BatchResult;
+import com.chainpay.chain.indexer.domain.ReconcileResult;
 import com.chainpay.chain.indexer.domain.ReorgResult;
 import com.chainpay.chain.indexer.domain.TickOutcome;
 import com.chainpay.chain.indexer.domain.TickResult;
 import com.chainpay.chain.rpc.JsonRpcException;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -37,15 +39,18 @@ public final class ChainIndexerScheduler {
     private final ChainHeadTracker heads;
     private final BlockIndexer indexer;
     private final ReorgRecovery recovery;
+    private final LogReconciler reconciler;
     private final Long startBlock;
     private final AtomicBoolean halted = new AtomicBoolean(false);
     private volatile String haltReason;
 
     /** @param startBlock 没有书签时从哪开始（该块视为已处理）；null = 没书签就停下，不猜 */
-    public ChainIndexerScheduler(ChainHeadTracker heads, BlockIndexer indexer, ReorgRecovery recovery, Long startBlock) {
+    public ChainIndexerScheduler(ChainHeadTracker heads, BlockIndexer indexer, ReorgRecovery recovery,
+                                 LogReconciler reconciler, Long startBlock) {
         this.heads = heads;
         this.indexer = indexer;
         this.recovery = recovery;
+        this.reconciler = reconciler;
         this.startBlock = startBlock;
     }
 
@@ -84,7 +89,9 @@ public final class ChainIndexerScheduler {
                     inserted += result.logsInserted();
                 }
             } while (result.outcome() == BatchOutcome.INDEXED && batches < MAX_BATCHES_PER_TICK);
-            return new TickResult(TickOutcome.POLLED, batches, inserted, null);
+            ReconcileResult reconciled = reconcileSafely();
+            return new TickResult(TickOutcome.POLLED, batches, inserted,
+                    reconciled.sampledBlocks().size(), reconciled.mismatches(), null);
         } catch (ReorgDetectedException e) {
             // 恢复器自己的异常（finalized 之下、节点前后不一致）从这里穿出去，由 tick 分类
             ReorgResult r = recovery.recover(e.blockNumber() - 1, e.expectedParentHash());
@@ -94,6 +101,19 @@ public final class ChainIndexerScheduler {
                     : "重组：别的实例已经恢复过，这次什么都没做";
             log.warn(detail);
             return new TickResult(TickOutcome.REORGED, batches, inserted, detail);
+        }
+    }
+
+    /**
+     * 对账是审计：它自己的瞬时失败（审计节点不可达、库暂时拿不到锁）不改变这次轮询的结局。
+     * finalized 上的分歧是 FinalityViolationException，从这里穿出去，由 tick 停机。
+     */
+    private ReconcileResult reconcileSafely() {
+        try {
+            return reconciler.reconcile();
+        } catch (JsonRpcException | TransientDataAccessException e) {
+            log.warn("对账这次跳过：{}", e.getMessage());
+            return new ReconcileResult(List.of(), 0);
         }
     }
 

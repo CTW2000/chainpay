@@ -53,6 +53,19 @@ java.lang.UnsupportedOperationException: M0：transfer 由你来实现
 
 **这是正确状态。** 如果你看到别的错误，说明环境有问题，先解决环境。
 
+### 3. 配环境变量、把应用跑起来（可选）
+
+应用读的每个环境变量都列在 `env/local.env.example` 里，带说明和生成命令：
+
+```bash
+cp env/local.env.example env/local.env      # 填真实值；这个文件被 .gitignore 挡住
+set -a; source env/local.env; set +a
+JAVA_HOME=~/.local/jdk-25/Contents/Home mvn spring-boot:run
+```
+
+三个变量故意没有默认值（数据库密码、AES 密钥、管理员令牌），不设就起不来——配错了就起不来，好过带着默认密钥上生产。
+链节点地址不设时索引器整个不装配，应用照常启动。
+
 ### 3. 想手工连数据库看看（可选）
 
 ```bash

@@ -47,7 +47,12 @@ SQD 记录的 Polygon 区块 74 614 768：`eth_getLogs` 返回 848 条，`eth_ge
 | `https://ethereum-sepolia-rpc.publicnode.com` | **可用，无需 key** |
 | `https://rpc.sepolia.org` | 404，已下线 |
 | `https://sepolia.drpc.org` | `chain is not available on free plan` |
-Chain ID `11155111`。Alchemy/Infura 免费档需要 API key（放 env，不给默认值，同 M1 的密钥纪律）。
+| `https://sepolia.gateway.tenderly.co` | **可用，无需 key，支持 `eth_getBlockReceipts`**，对同一块的哈希与 publicnode 一致（2026-09-03 实测）|
+| `https://1rpc.io/sepolia` | 可用，但 `eth_getBlockReceipts` 报 `Method not allowed`（2026-09-03）|
+| `eth-sepolia.public.blastapi.io` / `blockpi` / `rpc2.sepolia.org` | 403 / 521 / 超时（2026-09-03）|
+Chain ID `11155111`。
+★ 2026-09-03 实测两条：publicnode 支持 `eth_getBlockReceipts`（一个块 146 张回执、296 条日志），但**连续几十次请求会被 403 限流**，对账要慢慢抽。同一个块（11625117）不带地址过滤的 `eth_getLogs`：publicnode 第一次返回 0 条、第二次连接在正文读到 73 KB 时被掐断（`IncompleteRead`），而它自己的回执有 260 条、tenderly 的 getLogs 也是 260 条——「回执是事实源、getLogs 是索引」和「正文要整段计时」都在真节点上撞见了
+Alchemy/Infura 免费档需要 API key（放 env，不给默认值，同 M1 的密钥纪律）。
 
 ---
 

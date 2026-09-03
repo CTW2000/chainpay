@@ -90,6 +90,9 @@ chainpay:
     poll-interval: 12s
     # 没有书签时从哪开始（该块视为已处理）。不配 = 没书签就停下，不猜。
     # start-block: 11623000
+    # 每次轮询抽几个已 finalized、已索引的块用回执对账（M2-⑤）
+    reconcile-samples: 3
+    # 审计节点同样只从环境变量来：CHAINPAY_CHAIN_AUDIT_RPC_URL，可不设
 
 logging:
   level:

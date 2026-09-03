@@ -503,7 +503,7 @@ OK-ACCESS-SIGN = Base64(HMAC-SHA256(prehash, secretKey))
 - ✅ **M2-②**（2026-09-02）落库 + 书签：V9（`chain_transfer_log` / `indexer_cursor`）、`BlockIndexer`（事件与书签同事务、锁后重读、网络在事务外、重组与解码失败即停）、11 条契约测试对着验收标准写；两面墙（去掉事务 → 崩溃测试红；去掉重读 + 带期望值的 UPDATE → 慢实例把书签推回去）；Sepolia 落库探针对账：链上 3 条 = 库里 3 条
 - ✅ **M2-③**（2026-09-02）三态确认：V10（单行 `chain_head` + 视图 `chain_transfer_confirmation`，等级算出来不存，ORPHANED 不出现，confirmations 夹到 0）、`ChainHeadTracker`（finalized 倒退或换哈希即停；safe / latest 倒退保留旧值；乱序拒绝）、`ChainIndexerScheduler`（放书签 → 刷新头 → 推批到追平；瞬时失败 RETRY_LATER，结构性失败 HALTED 且不再碰节点；配了 `start-block` 才自动放书签）；15 条测试先红后绿；两面墙（去掉 finalized 倒退检查 → 红；视图不过滤 ORPHANED → 红）；Sepolia 落库探针打印三个头与等级分布
 - ✅ **M2-④**（2026-09-02）重组回滚：V11 审计表 `chain_reorg`（depth 生成列，只增）、`ReorgRecovery`（候选 = 书签之下有日志的块 + finalized 头，降序问链找祖先；标废、退书签、记审计同一事务；锁内核对号和哈希；地板 finalized）、写入改成复活型 upsert、轮询 REORGED；FakeChain 学会真正的分支切换（日志跟着分支走）；9 条测试先红后绿；两面墙（标废挪到事务外 → 同生同死测试红；upsert 改回 DO NOTHING → 翻回来测试红）
-- ⬜ M2-⑤ RPC 不信任（自适应减半、跨节点、回执核对）
+- ✅ **M2-⑤**（2026-09-03）RPC 不信任：JsonRpcClient 整段超时 + 正文封顶（假节点滴流 / 无限正文两条测试）；BlockIndexer 窗口对半分、翻倍回、单块仍败即停；V12 审计表 `chain_reconcile` + 书签 `start_block`；`LogReconciler` 抽样对账（回执为事实源，两个节点都点头才补录 / 标废，否则 disputed）；`ChainHeadTracker` 用审计节点核对 finalized；21 条测试先红后绿；三面墙（补录不要主节点点头 → 红；抽样不以 finalized 为界 → 红；正文不封顶 → 红）；Sepolia 探针：主节点 publicnode、审计节点 tenderly 真实对账
 - ⬜ M2-⑥ 代币谎言（decimals、白名单、事件 value ≠ 到账）
 
 ---

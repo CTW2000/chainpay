@@ -7,11 +7,14 @@ import com.chainpay.chain.indexer.domain.BatchOutcome;
 import com.chainpay.chain.indexer.domain.BatchResult;
 import com.chainpay.chain.indexer.domain.ChainHead;
 import com.chainpay.chain.indexer.domain.IndexerCursor;
+import com.chainpay.chain.indexer.domain.ReconcileResult;
 import com.chainpay.chain.indexer.repository.ChainHeadRepository;
 import com.chainpay.chain.indexer.repository.IndexerCursorRepository;
+import com.chainpay.chain.indexer.repository.ReconcileRepository;
 import com.chainpay.chain.indexer.repository.TransferLogRepository;
 import com.chainpay.chain.indexer.service.BlockIndexer;
 import com.chainpay.chain.indexer.service.ChainHeadTracker;
+import com.chainpay.chain.indexer.service.LogReconciler;
 import com.chainpay.chain.rpc.EthRpc;
 import com.chainpay.chain.rpc.JsonRpcClient;
 import com.chainpay.support.AbstractPostgresTest;
@@ -53,12 +56,15 @@ class SepoliaIndexProbeTest extends AbstractPostgresTest {
     private ChainHeadRepository heads;
 
     @Autowired
+    private ReconcileRepository reconciles;
+
+    @Autowired
     private PlatformTransactionManager txManager;
 
     @Test
     @DisplayName("最近 300 块的 LINK 转账落库后，库内条数等于链上条数，书签哈希等于链上哈希")
     void indexesRecentBlocksAndReconcilesAgainstTheChain() {
-        jdbc.sql("TRUNCATE chain_transfer_log, indexer_cursor, chain_head").update();
+        jdbc.sql("TRUNCATE chain_transfer_log, indexer_cursor, chain_head, chain_reconcile").update();
         var chain = new EthRpc(new JsonRpcClient(URI.create(System.getenv("CHAINPAY_SEPOLIA_RPC"))));
         long startBlock = chain.blockNumber() - BLOCKS_BACK;
         var indexer = new BlockIndexer(chain, cursors, transferLogs, new TransactionTemplate(txManager),
@@ -91,6 +97,19 @@ class SepoliaIndexProbeTest extends AbstractPostgresTest {
         jdbc.sql("SELECT level, COUNT(*) FROM chain_transfer_confirmation GROUP BY level ORDER BY level")
                 .query((rs, i) -> rs.getString(1) + " = " + rs.getLong(2)).list()
                 .forEach(line -> System.out.println(">>> 等级 " + line));
+
+        String auditUrl = System.getenv("CHAINPAY_SEPOLIA_AUDIT_RPC");
+        var audit = auditUrl == null || auditUrl.isBlank() ? chain : new EthRpc(new JsonRpcClient(URI.create(auditUrl)));
+        var reconciler = new LogReconciler(chain, audit, cursors, transferLogs, heads, reconciles,
+                new TransactionTemplate(txManager), CURSOR, LINK_SEPOLIA, 3, new java.util.Random());
+        ReconcileResult reconciled = reconciler.reconcile();
+        System.out.printf(">>> 对账（审计节点 %s）：抽了 %s，差异 %d 块%n",
+                auditUrl == null || auditUrl.isBlank() ? "= 主节点" : auditUrl, reconciled.sampledBlocks(), reconciled.mismatches());
+        jdbc.sql("SELECT block_number, expected, found, repaired, orphaned, disputed FROM chain_reconcile ORDER BY id")
+                .query((rs, i) -> rs.getLong(1) + " expected=" + rs.getInt(2) + " found=" + rs.getInt(3)
+                        + " repaired=" + rs.getInt(4) + " orphaned=" + rs.getInt(5) + " disputed=" + rs.getInt(6))
+                .list().forEach(line -> System.out.println(">>> 差异 " + line));
+        assertThat(reconciled.sampledBlocks()).hasSize(3);
 
         assertThat(inDb).isEqualTo(onChain);
         assertThat(cursor.lastBlockHash()).isEqualTo(chain.block(cursor.lastBlockNumber()).hash());

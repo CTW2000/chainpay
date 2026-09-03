@@ -12,7 +12,7 @@ services:
     environment:
       POSTGRES_DB: chainpay
       POSTGRES_USER: chainpay
-      # 本地开发密码，不是密钥。真实密钥永远走环境注入，见 env/README.md
+      # 本地开发密码，不是密钥。真实密钥永远走环境注入，见 env/local.env.example
       POSTGRES_PASSWORD: chainpay_local_dev
     ports:
       - "127.0.0.1:5433:5432"   # 用 5433 避开你本机可能已有的 5432

@@ -12,6 +12,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -22,13 +23,15 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * <p>区块哈希是 {@code sha256("block-N")}，parentHash 是上一块的哈希——
  * 于是它天然是一条「链」，而测试可以在任何一点把它弄断：
  * {@link #reorgFrom} 换一条分支（真正的重组，日志跟着分支走），
- * {@link #tamperParentHash} / {@link #tamperHash} 单独改一块（造节点前后不一致、finalized 换哈希），
+ * {@link #tamperParentHash} / {@link #tamperHash} 单独改一块，
  * {@link #reportHead} 模拟节点落后，{@link #beforeLogs} 在取日志时插一个钩子。
  *
- * <p>日志记着它所在区块的哈希；{@link #logs} 只返回哈希和当前区块一致的日志——
- * 被丢弃分支上的日志就像从未存在过，和真节点的 eth_getLogs 一样。
+ * <p>M2-⑤ 的三种「不可信」：{@link #limitLogsRange} 让 getLogs 像提供商一样对范围设限并报错（大声的错），
+ * {@link #dropFromGetLogs} 让一条日志从 getLogs 消失但仍在回执里（安静的错），
+ * 第二个 FakeChain 实例当审计节点（自相矛盾的错——两个实例的哈希是确定性的，默认一致，可各自篡改）。
  *
- * <p>所有状态都是并发安全的：两个实例的测试会从两个线程同时读它。
+ * <p>日志记着它所在区块的哈希；{@link #logs} 只返回哈希和当前区块一致的日志。
+ * 所有状态都是并发安全的。
  */
 public final class FakeChain implements ChainReader {
 
@@ -37,9 +40,11 @@ public final class FakeChain implements ChainReader {
 
     private final ConcurrentMap<Long, BlockHeader> blocks = new ConcurrentHashMap<>();
     private final List<RawLog> logs = new CopyOnWriteArrayList<>();
+    private final Set<RawLog> hiddenFromGetLogs = ConcurrentHashMap.newKeySet();
     private volatile long head = -1;
     private volatile long safe = 0;
     private volatile long finalized = 0;
+    private volatile int logsRangeLimit = Integer.MAX_VALUE;
     private volatile Runnable beforeLogs = () -> { };
 
     /** 原始分支上第 N 块的哈希。 */
@@ -119,6 +124,16 @@ public final class FakeChain implements ChainReader {
         blocks.compute(number, (k, b) -> new BlockHeader(b.number(), b.hash(), parentHash, b.timestamp()));
     }
 
+    /** 像提供商一样：getLogs 的范围超过 {@code maxBlocks} 块就报带 code 的错。0 = 一块都不给。 */
+    public void limitLogsRange(int maxBlocks) {
+        logsRangeLimit = maxBlocks;
+    }
+
+    /** 安静的错：这条日志从 getLogs 里消失，但回执里还在。 */
+    public void dropFromGetLogs(RawLog log) {
+        hiddenFromGetLogs.add(log);
+    }
+
     /** 造一条标准的 Transfer 日志，挂在该块<b>当前</b>的分支上；logIndex 是该分支该块内的序号。 */
     public RawLog addTransfer(String token, long block, String from, String to, BigInteger value) {
         return addTransfer(token, block, from, to, value, txHashOf(block, logsInBlock(block)));
@@ -192,7 +207,12 @@ public final class FakeChain implements ChainReader {
     @Override
     public List<RawLog> logs(long fromBlock, long toBlock, String address, String topic0) {
         beforeLogs.run();
+        if (toBlock - fromBlock + 1 > logsRangeLimit) {
+            throw new JsonRpcException(-32005, "query returned more than 10000 results（假节点：范围 "
+                    + fromBlock + ".." + toBlock + " 超过 " + logsRangeLimit + " 块）");
+        }
         return logs.stream()
+                .filter(l -> !hiddenFromGetLogs.contains(l))
                 .filter(l -> {
                     long n = Hex.toLong(l.blockNumber());
                     BlockHeader current = blocks.get(n);
@@ -202,6 +222,15 @@ public final class FakeChain implements ChainReader {
                             && !l.topics().isEmpty()
                             && l.topics().get(0).equalsIgnoreCase(topic0);
                 })
+                .toList();
+    }
+
+    /** 事实源：该块当前分支上的全部日志，不筛地址、不管有没有被 getLogs 藏起来。 */
+    @Override
+    public List<RawLog> blockReceipts(long number) {
+        String current = block(number).hash();
+        return logs.stream()
+                .filter(l -> Hex.toLong(l.blockNumber()) == number && l.blockHash().equalsIgnoreCase(current))
                 .toList();
     }
 }

@@ -9,6 +9,8 @@ import com.chainpay.chain.indexer.repository.IndexerCursorRepository;
 import com.chainpay.chain.indexer.repository.TransferLogRepository;
 import com.chainpay.chain.rpc.BlockHeader;
 import com.chainpay.chain.rpc.ChainReader;
+import com.chainpay.chain.rpc.JsonRpcException;
+import com.chainpay.chain.rpc.RawLog;
 import java.util.List;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -53,6 +55,8 @@ public final class BlockIndexer {
     private final String cursorName;
     private final String token;
     private final int batchBlocks;
+    /** 当前 eth_getLogs 的窗口：撞上限减半，成功翻倍回到 batchBlocks。 */
+    private final java.util.concurrent.atomic.AtomicInteger window;
 
     public BlockIndexer(ChainReader chain,
                         IndexerCursorRepository cursors,
@@ -71,6 +75,7 @@ public final class BlockIndexer {
         this.cursorName = cursorName;
         this.token = token.toLowerCase();
         this.batchBlocks = batchBlocks;
+        this.window = new java.util.concurrent.atomic.AtomicInteger(batchBlocks);
     }
 
     /**
@@ -81,6 +86,10 @@ public final class BlockIndexer {
         BlockHeader header = chain.block(fromBlock);
         cursors.insertIfAbsent(cursorName, header.number(), header.hash());
         return cursors.find(cursorName).orElseThrow();
+    }
+
+    public int currentWindow() {
+        return window.get();
     }
 
     /** 书签在不在。轮询用它决定要不要先放书签。 */
@@ -100,7 +109,6 @@ public final class BlockIndexer {
             return BatchResult.upToDate(cursor.lastBlockNumber());
         }
         long from = cursor.lastBlockNumber() + 1;
-        long to = Math.min(cursor.lastBlockNumber() + batchBlocks, head);
 
         // ③ 网络，事务外
         BlockHeader first = chain.block(from);
@@ -108,18 +116,38 @@ public final class BlockIndexer {
         if (!first.parentHash().equalsIgnoreCase(cursor.lastBlockHash())) {
             throw new ReorgDetectedException(from, cursor.lastBlockHash(), first.parentHash());
         }
+        // ⑤ 取日志。撞上提供商的上限（带 code 的错）就对半分重试，成功后翻倍回到 batchBlocks；
+        //    减到一块还失败就停下——那不是范围问题。传输失败（code 为空）是瞬时的，不缩窗口、原样抛出
+        long to;
+        List<RawLog> raw;
+        while (true) {
+            to = Math.min(cursor.lastBlockNumber() + window.get(), head);
+            try {
+                raw = chain.logs(from, to, token, TransferLogDecoder.TRANSFER_TOPIC0);
+                break;
+            } catch (JsonRpcException e) {
+                if (e.code() == null) {
+                    throw e;
+                }
+                int current = window.get();
+                if (current <= 1 || to == from) {
+                    throw new IllegalStateException("单块 " + from + " 的日志也取不到（节点说：" + e.getMessage()
+                            + "）：不是范围问题，换提供商或检查它的归档范围");
+                }
+                window.set(Math.max(1, current / 2));
+            }
+        }
+        window.set(Math.min(batchBlocks, window.get() * 2));
         BlockHeader last = to == from ? first : chain.block(to);
         if (last.number() != to) {
             throw new IllegalStateException("节点返回了错误的区块：要 " + to + "，给了 " + last.number());
         }
-        // ⑤ 解码。任何一条解不了，整批不写
-        List<Erc20Transfer> transfers = chain.logs(from, to, token, TransferLogDecoder.TRANSFER_TOPIC0)
-                .stream()
-                .map(TransferLogDecoder::decode)
-                .toList();
+        // ⑥ 解码。任何一条解不了，整批不写
+        List<Erc20Transfer> transfers = raw.stream().map(TransferLogDecoder::decode).toList();
 
-        // ⑥ 事务：锁、重读、写、推
-        return tx.execute(status -> persist(cursor, transfers, last, from, to));
+        // ⑦ 事务：锁、重读、写、推
+        long batchEnd = to;                                          // 循环里改过的变量进不了 lambda
+        return tx.execute(status -> persist(cursor, transfers, last, from, batchEnd));
     }
 
     private BatchResult persist(IndexerCursor expected, List<Erc20Transfer> transfers,

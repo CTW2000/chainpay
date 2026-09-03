@@ -2,6 +2,7 @@ package com.chainpay.chain.indexer.repository;
 
 import com.chainpay.chain.erc20.Erc20Transfer;
 import com.chainpay.chain.indexer.domain.HeadRef;
+import com.chainpay.chain.indexer.domain.LogCoordinate;
 import java.math.BigDecimal;
 import java.util.List;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -80,6 +81,29 @@ public class TransferLogRepository {
                         WHERE status = 'CANONICAL' AND block_number > :ancestor
                         """)
                 .param("ancestor", ancestorBlock)
+                .update();
+    }
+
+    /** 该块里 CANONICAL 的行的坐标：对账时和回执比。 */
+    public List<LogCoordinate> canonicalLogsInBlock(long blockNumber) {
+        return jdbc.sql("""
+                        SELECT block_hash, log_index, tx_hash FROM chain_transfer_log
+                        WHERE status = 'CANONICAL' AND block_number = :n
+                        ORDER BY log_index
+                        """)
+                .param("n", blockNumber)
+                .query((rs, i) -> new LogCoordinate(rs.getString("block_hash"), rs.getInt("log_index"), rs.getString("tx_hash")))
+                .list();
+    }
+
+    /** 标废一条幻影（两个节点都说它不存在）。返回 1 = 标了，0 = 那行已不是 CANONICAL。 */
+    public int orphanOne(String blockHash, int logIndex) {
+        return jdbc.sql("""
+                        UPDATE chain_transfer_log SET status = 'ORPHANED'
+                        WHERE status = 'CANONICAL' AND block_hash = :h AND log_index = :i
+                        """)
+                .param("h", blockHash)
+                .param("i", logIndex)
                 .update();
     }
 }

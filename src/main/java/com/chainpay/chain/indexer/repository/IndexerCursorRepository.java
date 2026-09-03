@@ -34,11 +34,19 @@ public class IndexerCursorRepository {
                 .optional();
     }
 
+    /** 书签放下时的起点。抽样对账不抽它之前的块。 */
+    public Optional<Long> startBlock(String name) {
+        return jdbc.sql("SELECT start_block FROM indexer_cursor WHERE name = :name")
+                .param("name", name)
+                .query(Long.class)
+                .optional();
+    }
+
     /** 建书签；已存在就不动它（幂等）。返回这次是否真的插入了。 */
     public boolean insertIfAbsent(String name, long blockNumber, String blockHash) {
         return jdbc.sql("""
-                        INSERT INTO indexer_cursor (name, last_block_number, last_block_hash)
-                        VALUES (:name, :number, :hash)
+                        INSERT INTO indexer_cursor (name, last_block_number, last_block_hash, start_block)
+                        VALUES (:name, :number, :hash, :number)
                         ON CONFLICT (name) DO NOTHING
                         """)
                 .param("name", name)

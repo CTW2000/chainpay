@@ -9,7 +9,7 @@ import tools.jackson.databind.JsonNode;
  * 以太坊的几个 {@code eth_*} 方法，把十六进制翻译成 Java 类型。
  *
  * <p>只做「翻译」，不做「判断」：这里不知道什么是 ERC-20、不知道什么是确认数。
- * 那些知识分别在 {@code chain.erc20} 和后续的索引器里。
+ * 那些知识分别在 {@code chain.erc20} 和索引器里。
  */
 public class EthRpc implements ChainReader {
 
@@ -29,7 +29,7 @@ public class EthRpc implements ChainReader {
      * 按区块号（十六进制字符串）或标签取区块头。
      *
      * <p>标签除了 {@code latest} 还有合并后才有的 {@code safe} 与 {@code finalized}——
-     * 链自己告诉你哪一段是不可逆的，不必自己数确认数。Sepolia 实测二者分别落后约 35 / 66 块。
+     * 链自己告诉你哪一段是不可逆的，不必自己数确认数。
      */
     @Override
     public BlockHeader block(String numberOrTag) {
@@ -64,19 +64,39 @@ public class EthRpc implements ChainReader {
                 "topics", List.of(topic0)));
         List<RawLog> logs = new ArrayList<>();
         for (JsonNode l : result) {
-            List<String> topics = new ArrayList<>();
-            l.get("topics").forEach(t -> topics.add(t.asString()));
-            logs.add(new RawLog(
-                    l.get("address").asString(),
-                    List.copyOf(topics),
-                    l.get("data").asString(),
-                    l.get("blockNumber").asString(),
-                    l.get("blockHash").asString(),
-                    l.get("transactionHash").asString(),
-                    l.get("transactionIndex").asString(),
-                    l.get("logIndex").asString(),
-                    l.has("removed") && l.get("removed").asBoolean()));
+            logs.add(toRawLog(l));
         }
         return logs;
+    }
+
+    /** {@code eth_getBlockReceipts}：一个块里所有回执的所有日志。geth 1.13 起、多数提供商支持。 */
+    @Override
+    public List<RawLog> blockReceipts(long number) {
+        JsonNode receipts = rpc.call("eth_getBlockReceipts", Hex.fromLong(number));
+        if (receipts == null || receipts.isNull()) {
+            throw new JsonRpcException(null, "区块不存在（回执）：" + number);
+        }
+        List<RawLog> logs = new ArrayList<>();
+        for (JsonNode receipt : receipts) {
+            for (JsonNode l : receipt.get("logs")) {
+                logs.add(toRawLog(l));
+            }
+        }
+        return logs;
+    }
+
+    private static RawLog toRawLog(JsonNode l) {
+        List<String> topics = new ArrayList<>();
+        l.get("topics").forEach(t -> topics.add(t.asString()));
+        return new RawLog(
+                l.get("address").asString(),
+                List.copyOf(topics),
+                l.get("data").asString(),
+                l.get("blockNumber").asString(),
+                l.get("blockHash").asString(),
+                l.get("transactionHash").asString(),
+                l.get("transactionIndex").asString(),
+                l.get("logIndex").asString(),
+                l.has("removed") && l.get("removed").asBoolean());
     }
 }
