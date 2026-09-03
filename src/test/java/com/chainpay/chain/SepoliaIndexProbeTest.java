@@ -6,6 +6,9 @@ import com.chainpay.chain.erc20.TransferLogDecoder;
 import com.chainpay.chain.indexer.BatchOutcome;
 import com.chainpay.chain.indexer.BatchResult;
 import com.chainpay.chain.indexer.BlockIndexer;
+import com.chainpay.chain.indexer.ChainHead;
+import com.chainpay.chain.indexer.ChainHeadRepository;
+import com.chainpay.chain.indexer.ChainHeadTracker;
 import com.chainpay.chain.indexer.IndexerCursor;
 import com.chainpay.chain.indexer.IndexerCursorRepository;
 import com.chainpay.chain.indexer.TransferLogRepository;
@@ -47,12 +50,15 @@ class SepoliaIndexProbeTest extends AbstractPostgresTest {
     private TransferLogRepository transferLogs;
 
     @Autowired
+    private ChainHeadRepository heads;
+
+    @Autowired
     private PlatformTransactionManager txManager;
 
     @Test
     @DisplayName("最近 300 块的 LINK 转账落库后，库内条数等于链上条数，书签哈希等于链上哈希")
     void indexesRecentBlocksAndReconcilesAgainstTheChain() {
-        jdbc.sql("TRUNCATE chain_transfer_log, indexer_cursor").update();
+        jdbc.sql("TRUNCATE chain_transfer_log, indexer_cursor, chain_head").update();
         var chain = new EthRpc(new JsonRpcClient(URI.create(System.getenv("CHAINPAY_SEPOLIA_RPC"))));
         long startBlock = chain.blockNumber() - BLOCKS_BACK;
         var indexer = new BlockIndexer(chain, cursors, transferLogs, new TransactionTemplate(txManager),
@@ -77,6 +83,14 @@ class SepoliaIndexProbeTest extends AbstractPostgresTest {
         System.out.printf(">>> 书签 %d %s；范围 %d..%d 链上 %d 条，库里 %d 条%n",
                 cursor.lastBlockNumber(), cursor.lastBlockHash(), startBlock + 1, cursor.lastBlockNumber(),
                 onChain, inDb);
+
+        ChainHead head = new ChainHeadTracker(chain, heads, new TransactionTemplate(txManager), "sepolia").refresh();
+        System.out.printf(">>> 链头 latest=%d safe=%d (-%d) finalized=%d (-%d)%n",
+                head.latest().number(), head.safe().number(), head.latest().number() - head.safe().number(),
+                head.finalized().number(), head.latest().number() - head.finalized().number());
+        jdbc.sql("SELECT level, COUNT(*) FROM chain_transfer_confirmation GROUP BY level ORDER BY level")
+                .query((rs, i) -> rs.getString(1) + " = " + rs.getLong(2)).list()
+                .forEach(line -> System.out.println(">>> 等级 " + line));
 
         assertThat(inDb).isEqualTo(onChain);
         assertThat(cursor.lastBlockHash()).isEqualTo(chain.block(cursor.lastBlockNumber()).hash());

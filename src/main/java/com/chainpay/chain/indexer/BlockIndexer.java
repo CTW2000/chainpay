@@ -78,6 +78,11 @@ public final class BlockIndexer {
         return cursors.find(cursorName).orElseThrow();
     }
 
+    /** 书签在不在。轮询用它决定要不要先放书签。 */
+    public boolean hasCursor() {
+        return cursors.find(cursorName).isPresent();
+    }
+
     /** 处理下一批。见类注释里的 ①～⑥。 */
     public BatchResult indexNextBatch() {
         // ① 读书签，不加锁

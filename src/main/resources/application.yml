@@ -82,9 +82,14 @@ chainpay:
   # 现在用 publicnode 的免 key 节点：https://ethereum-sepolia-rpc.publicnode.com
   # 需要 key 的时候（撞限流、要归档数据）再去 Alchemy / Infura 申请。
   chain:
+    chain-name: sepolia
     token-address: 0x779877A7B0D9E8603169DdbD7836e478b4624789   # Sepolia 上的 LINK
     cursor-name: sepolia:link:transfer
     batch-blocks: 100
+    # 轮询间隔。Sepolia 12 秒一块，比这快没有意义
+    poll-interval: 12s
+    # 没有书签时从哪开始（该块视为已处理）。不配 = 没书签就停下，不猜。
+    # start-block: 11623000
 
 logging:
   level:

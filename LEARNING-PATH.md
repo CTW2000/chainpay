@@ -501,7 +501,7 @@ OK-ACCESS-SIGN = Base64(HMAC-SHA256(prehash, secretKey))
 
 - ✅ **M2-①**（2026-09-02）裸奔版：`JsonRpcClient` + `EthRpc` + `TransferLogDecoder`，Sepolia 实测解码正确；离线测试 + 环境变量门控的探针
 - ✅ **M2-②**（2026-09-02）落库 + 书签：V9（`chain_transfer_log` / `indexer_cursor`）、`BlockIndexer`（事件与书签同事务、锁后重读、网络在事务外、重组与解码失败即停）、11 条契约测试对着验收标准写；两面墙（去掉事务 → 崩溃测试红；去掉重读 + 带期望值的 UPDATE → 慢实例把书签推回去）；Sepolia 落库探针对账：链上 3 条 = 库里 3 条
-- ⬜ M2-③ 三态确认（SEEN / SAFE / FINAL，用 safe / finalized 标签）
+- ✅ **M2-③**（2026-09-02）三态确认：V10（单行 `chain_head` + 视图 `chain_transfer_confirmation`，等级算出来不存，ORPHANED 不出现，confirmations 夹到 0）、`ChainHeadTracker`（finalized 倒退或换哈希即停；safe / latest 倒退保留旧值；乱序拒绝）、`ChainIndexerScheduler`（放书签 → 刷新头 → 推批到追平；瞬时失败 RETRY_LATER，结构性失败 HALTED 且不再碰节点；配了 `start-block` 才自动放书签）；15 条测试先红后绿；两面墙（去掉 finalized 倒退检查 → 红；视图不过滤 ORPHANED → 红）；Sepolia 落库探针打印三个头与等级分布
 - ⬜ M2-④ 重组回滚（parentHash 链、共同祖先、ORPHANED）
 - ⬜ M2-⑤ RPC 不信任（自适应减半、跨节点、回执核对）
 - ⬜ M2-⑥ 代币谎言（decimals、白名单、事件 value ≠ 到账）

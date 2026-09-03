@@ -34,6 +34,8 @@ public final class FakeChain implements ChainReader {
     private final ConcurrentMap<Long, BlockHeader> blocks = new ConcurrentHashMap<>();
     private final List<RawLog> logs = new CopyOnWriteArrayList<>();
     private volatile long head = -1;
+    private volatile long safe = 0;
+    private volatile long finalized = 0;
     private volatile Runnable beforeLogs = () -> { };
 
     public static String hashOf(long number) {
@@ -68,6 +70,21 @@ public final class FakeChain implements ChainReader {
     /** 节点落后：报一个比实际链更旧的头。区块本身还在。 */
     public void reportHead(long number) {
         head = number;
+    }
+
+    /** 共识层的 safe 头（已 justified）。 */
+    public void reportSafe(long number) {
+        safe = number;
+    }
+
+    /** 共识层的 finalized 头。测试里让它倒退，索引器必须停下。 */
+    public void reportFinalized(long number) {
+        finalized = number;
+    }
+
+    /** 把某块的哈希换掉（下一块的 parentHash 不跟着变）——模拟「同一个号换了哈希」。 */
+    public void tamperHash(long number, String hash) {
+        blocks.compute(number, (k, b) -> new BlockHeader(b.number(), hash, b.parentHash(), b.timestamp()));
     }
 
     /** 模拟重组：把某块的 parentHash 改掉，让它不再接在前一块上。 */
@@ -124,7 +141,12 @@ public final class FakeChain implements ChainReader {
 
     @Override
     public BlockHeader block(String numberOrTag) {
-        return "latest".equals(numberOrTag) ? block(head) : block(Hex.toLong(numberOrTag));
+        return switch (numberOrTag) {
+            case "latest" -> block(head);
+            case "safe" -> block(safe);
+            case "finalized" -> block(finalized);
+            default -> block(Hex.toLong(numberOrTag));
+        };
     }
 
     @Override
