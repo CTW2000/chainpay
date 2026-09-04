@@ -26,17 +26,19 @@ public class ChainTokenRepository {
                 .optional();
     }
 
-    public void insert(ChainToken token, String note) {
-        jdbc.sql("""
+    /** 插入白名单行；已有同地址的行就什么都不做，返回 false。唯一性由主键裁决，不靠先查再插。 */
+    public boolean insertIfAbsent(ChainToken token, String note) {
+        return jdbc.sql("""
                         INSERT INTO chain_token (address, symbol, decimals, status, note)
                         VALUES (:address, :symbol, :decimals, :status, :note)
+                        ON CONFLICT (address) DO NOTHING
                         """)
                 .param("address", token.address())
                 .param("symbol", token.symbol())
                 .param("decimals", token.decimals())
                 .param("status", token.status())
                 .param("note", note)
-                .update();
+                .update() == 1;
     }
 
     public void markVerified(String address) {

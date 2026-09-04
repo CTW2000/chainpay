@@ -46,22 +46,31 @@ public final class Abi {
         return new BigInteger(body, 16);
     }
 
-    /** 动态 string：偏移量一个字、长度一个字、内容按 32 字节补齐。 */
+    /**
+     * 动态 string：偏移量一个字、长度一个字、内容按 32 字节补齐。
+     *
+     * <p>这两个字是<b>对方给的</b>。一个 32 字节的字能表示的数远大于 int / long，先收窄再检查等于没检查：
+     * 2^31 让 intValueExact 抛 ArithmeticException，2^30 让 length * 2 溢出成负数、绕过边界检查后在 substring 里炸。
+     * 两者都不是 IllegalArgumentException，调用方接不住（2026-09-03 两位评审各自抓到）。
+     * 所以先在 BigInteger 上和实际给的字节数比，比得过再收窄——收窄之后的数必然装得下。
+     */
     public static String decodeString(String hex) {
         String body = body(hex);
         if (body.length() < 2 * WORD_HEX || body.length() % WORD_HEX != 0) {
             throw new IllegalArgumentException("不是 ABI 动态 string（至少两个字，且按 32 字节对齐）：" + preview(hex));
         }
-        long offset = new BigInteger(body.substring(0, WORD_HEX), 16).longValueExact();
-        if (offset != 32) {
+        BigInteger offset = new BigInteger(body.substring(0, WORD_HEX), 16);
+        if (!offset.equals(BigInteger.valueOf(32))) {
             throw new IllegalArgumentException("动态 string 的偏移量应为 32，收到 " + offset + "：" + preview(hex));
         }
-        int length = new BigInteger(body.substring(WORD_HEX, 2 * WORD_HEX), 16).intValueExact();
-        int contentEnd = 2 * WORD_HEX + length * 2;
-        if (contentEnd > body.length()) {
-            throw new IllegalArgumentException("动态 string 声称 " + length + " 字节，返回值不够长：" + preview(hex));
+        BigInteger declared = new BigInteger(body.substring(WORD_HEX, 2 * WORD_HEX), 16);
+        int available = (body.length() - 2 * WORD_HEX) / 2;
+        if (declared.compareTo(BigInteger.valueOf(available)) > 0) {
+            throw new IllegalArgumentException("动态 string 声称 " + declared + " 字节，返回值只给了 " + available
+                    + " 字节，不够长：" + preview(hex));
         }
-        byte[] bytes = HexFormat.of().parseHex(body.substring(2 * WORD_HEX, contentEnd));
+        int length = declared.intValue();                                        // ≤ available，装得下
+        byte[] bytes = HexFormat.of().parseHex(body.substring(2 * WORD_HEX, 2 * WORD_HEX + length * 2));
         return new String(bytes, StandardCharsets.UTF_8);
     }
 

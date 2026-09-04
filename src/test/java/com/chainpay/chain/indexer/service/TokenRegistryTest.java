@@ -14,6 +14,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.dao.DataIntegrityViolationException;
 
 /**
  * 代币白名单：登记时问链，使用前核对。
@@ -117,6 +118,7 @@ class TokenRegistryTest extends AbstractPostgresTest {
         registry().verifyAgainstChain(ODD);
 
         assertThat(tokens.find(ODD)).isPresent();
+        assertThat(verifiedAt(ODD)).as("链上答不出，无从核对，不能假装核对过").isNull();
     }
 
     @Test
@@ -149,10 +151,59 @@ class TokenRegistryTest extends AbstractPostgresTest {
         assertThat(jdbc.sql("SELECT COUNT(*) FROM chain_token").query(Long.class).single()).isEqualTo(1);
     }
 
+    @Test
+    @DisplayName("★ 两个实例同时登记同一个代币：先查再插之间被人插了队，输的一方得到「已登记」，不是裸的唯一约束错")
+    void concurrentRegistrationLosesCleanly() {
+        chain.defineToken(USDC_LIKE, "USDC", 6);
+        chain.beforeCall(() -> {                                     // 查过「没有」之后、插入之前，另一个实例抢先写入
+            if (tokens.find(USDC_LIKE).isEmpty()) {
+                tokens.insertIfAbsent(new ChainToken(USDC_LIKE, "USDC", 6, "ACTIVE"), "另一个实例先登记的");
+            }
+        });
+
+        assertThatThrownBy(() -> registry().register(USDC_LIKE))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("已登记");
+        assertThat(noteOf(USDC_LIKE)).as("赢的那个实例写的行原样保留").isEqualTo("另一个实例先登记的");
+    }
+
+    @Test
+    @DisplayName("★ symbol / note 有长度上限：链上 symbol 长得离谱就退回「?」，手工登记超长直接拒绝")
+    void boundsSymbolAndNoteLength() {
+        chain.defineToken(USDC_LIKE, "A".repeat(65), 6);
+
+        assertThat(registry().register(USDC_LIKE).symbol()).isEqualTo("?");
+
+        assertThatThrownBy(() -> registry().registerManually(ODD, "A".repeat(65), 8, "来源"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("symbol");
+        assertThatThrownBy(() -> registry().registerManually(ODD, " ", 8, "来源"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("symbol");
+        assertThatThrownBy(() -> registry().registerManually(ODD, "ODD", 8, "x".repeat(501)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("note");
+        assertThat(tokens.find(ODD)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("★ 库自己也守着长度：symbol 超 64、note 超 500 直接插也插不进（V14）")
+    void databaseEnforcesTheLengthBounds() {
+        assertThatThrownBy(() -> tokens.insertIfAbsent(new ChainToken(ODD, "A".repeat(65), 8, "ACTIVE"), "x"))
+                .isInstanceOf(DataIntegrityViolationException.class);
+        assertThatThrownBy(() -> tokens.insertIfAbsent(new ChainToken(ODD, "ODD", 8, "ACTIVE"), "x".repeat(501)))
+                .isInstanceOf(DataIntegrityViolationException.class);
+        assertThat(tokens.find(ODD)).isEmpty();
+    }
+
     // ------------------------------------------------------------------ 脚手架
 
     private TokenRegistry registry() {
         return new TokenRegistry(new Erc20Calls(chain), tokens);
+    }
+
+    private String noteOf(String address) {
+        return jdbc.sql("SELECT note FROM chain_token WHERE address = :a").param("a", address).query(String.class).single();
     }
 
     private Object verifiedAt(String address) {

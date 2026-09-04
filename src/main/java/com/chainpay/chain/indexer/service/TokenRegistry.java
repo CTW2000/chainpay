@@ -14,6 +14,9 @@ import java.util.OptionalInt;
  */
 public final class TokenRegistry {
 
+    /** 来源说明的上限；V14 的 CHECK 用同一个数。 */
+    public static final int MAX_NOTE_LENGTH = 500;
+
     private final Erc20Calls calls;
     private final ChainTokenRepository tokens;
 
@@ -25,8 +28,8 @@ public final class TokenRegistry {
     /** 问链上的 decimals 与 symbol，问得到、且 decimals ≤ 18 才登记。 */
     public ChainToken register(String address) {
         String token = BlockIndexer.requireAddress(address);
-        if (tokens.find(token).isPresent()) {
-            throw new IllegalStateException("代币已登记：" + token);
+        if (tokens.find(token).isPresent()) {                  // 早退只是省两次上链；唯一性由下面的插入裁决
+            throw alreadyRegistered(token);
         }
         OptionalInt decimals = calls.decimals(token);
         if (decimals.isEmpty()) {
@@ -39,25 +42,34 @@ public final class TokenRegistry {
         }
         String symbol = calls.symbol(token).orElse("?");
         ChainToken registered = new ChainToken(token, symbol, decimals.getAsInt(), "ACTIVE");
-        tokens.insert(registered, "登记时从链上读取：decimals=" + decimals.getAsInt() + "，symbol=" + symbol);
+        if (!tokens.insertIfAbsent(registered, "登记时从链上读取：decimals=" + decimals.getAsInt() + "，symbol=" + symbol)) {
+            throw alreadyRegistered(token);                    // 查过「没有」之后有人插了队：check-then-act 第 8 次，让主键说话
+        }
         return registered;
     }
 
     /** 运营手工登记（链上问不到 decimals 的代币），必须注明来源。 */
     public ChainToken registerManually(String address, String symbol, int decimals, String note) {
         String token = BlockIndexer.requireAddress(address);
-        if (tokens.find(token).isPresent()) {
-            throw new IllegalStateException("代币已登记：" + token);
-        }
         if (decimals < 0 || decimals > TokenAmounts.LEDGER_SCALE) {
             throw new IllegalArgumentException("decimals 必须在 0 到 " + TokenAmounts.LEDGER_SCALE + " 之间：" + decimals);
         }
-        if (note == null || note.isBlank()) {
-            throw new IllegalArgumentException("手工登记必须注明 decimals 的来源");
+        if (symbol == null || symbol.isBlank() || symbol.length() > Erc20Calls.MAX_SYMBOL_LENGTH) {
+            throw new IllegalArgumentException("symbol 必须是 1 到 " + Erc20Calls.MAX_SYMBOL_LENGTH + " 个字符的代号，收到 "
+                    + (symbol == null ? "null" : symbol.length() + " 个字符"));
+        }
+        if (note == null || note.isBlank() || note.length() > MAX_NOTE_LENGTH) {
+            throw new IllegalArgumentException("手工登记必须用 note 注明 decimals 的来源，1 到 " + MAX_NOTE_LENGTH + " 个字符");
         }
         ChainToken registered = new ChainToken(token, symbol, decimals, "ACTIVE");
-        tokens.insert(registered, note);
+        if (!tokens.insertIfAbsent(registered, note)) {
+            throw alreadyRegistered(token);
+        }
         return registered;
+    }
+
+    private static IllegalStateException alreadyRegistered(String token) {
+        return new IllegalStateException("代币已登记：" + token);
     }
 
     /** 必须已登记且 ACTIVE。 */

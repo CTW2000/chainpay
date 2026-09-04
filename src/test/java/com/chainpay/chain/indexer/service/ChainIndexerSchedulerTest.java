@@ -238,6 +238,35 @@ class ChainIndexerSchedulerTest extends AbstractPostgresTest {
     }
 
     @Test
+    @DisplayName("★ 核对代币时节点瞬时失败：RETRY_LATER 不停下、不算核对过；下一次成功才核对、才推批")
+    void transientFailureDuringTokenVerificationIsRetried() {
+        chain.withBlocks(10);
+        chain.reportSafe(5);
+        chain.reportFinalized(2);
+        chain.addTransfer(LINK, 3, ALICE, BOB, TEN_LINK);
+        AtomicBoolean failOnce = new AtomicBoolean(true);
+        chain.beforeCall(() -> {
+            if (failOnce.getAndSet(false)) {
+                throw new JsonRpcException(null, "超时（20000 ms，含正文）· eth_call");
+            }
+        });
+        ChainIndexerScheduler scheduler = scheduler(chain, LINK, 0L, 100);
+
+        TickResult first = scheduler.tick();
+        assertThat(first.outcome()).isEqualTo(RETRY_LATER);
+        assertThat(first.detail()).contains("eth_call");
+        assertThat(scheduler.isHalted()).isFalse();
+        assertThat(verified(LINK)).as("没问到不等于核对过").isFalse();
+        assertThat(jdbc.sql("SELECT COUNT(*) FROM indexer_cursor").query(Long.class).single()).isZero();
+
+        TickResult second = scheduler.tick();
+        assertThat(second.outcome()).isEqualTo(POLLED);
+        assertThat(verified(LINK)).isTrue();
+        assertThat(cursorBlock()).isEqualTo(10);
+        assertThat(rowCount()).isEqualTo(1);
+    }
+
+    @Test
     @DisplayName("没有书签也没配起点：停下，说清原因")
     void haltsWhenThereIsNoCursorAndNoStartBlock() {
         chain.withBlocks(10);
@@ -279,6 +308,11 @@ class ChainIndexerSchedulerTest extends AbstractPostgresTest {
                 CURSOR, token, 2, new Random(1));
         TokenRegistry registry = new TokenRegistry(new Erc20Calls(chain), tokens);
         return new ChainIndexerScheduler(tracker, indexer, recovery, reconciler, registry, token, startBlock);
+    }
+
+    private boolean verified(String token) {
+        return jdbc.sql("SELECT verified_at IS NOT NULL FROM chain_token WHERE address = :a")
+                .param("a", token).query(Boolean.class).single();
     }
 
     private long cursorBlock() {

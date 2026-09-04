@@ -25,7 +25,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * 于是它天然是一条「链」，而测试可以在任何一点把它弄断：
  * {@link #reorgFrom} 换一条分支（真正的重组，日志跟着分支走），
  * {@link #tamperParentHash} / {@link #tamperHash} 单独改一块，
- * {@link #reportHead} 模拟节点落后，{@link #beforeLogs} 在取日志时插一个钩子。
+ * {@link #reportHead} 模拟节点落后，{@link #beforeLogs} / {@link #beforeCall} 在取日志 / 问合约时插一个钩子。
  *
  * <p>M2-⑤ 的三种「不可信」：{@link #limitLogsRange} 让 getLogs 像提供商一样对范围设限并报错（大声的错），
  * {@link #dropFromGetLogs} 让一条日志从 getLogs 消失但仍在回执里（安静的错），
@@ -49,6 +49,7 @@ public final class FakeChain implements ChainReader {
     private volatile long finalized = 0;
     private volatile int logsRangeLimit = Integer.MAX_VALUE;
     private volatile Runnable beforeLogs = () -> { };
+    private volatile Runnable beforeCall = () -> { };
 
     /** 原始分支上第 N 块的哈希。 */
     public static String hashOf(long number) {
@@ -185,6 +186,11 @@ public final class FakeChain implements ChainReader {
         this.beforeLogs = hook;
     }
 
+    /** 每次 eth_call 前先跑一下：在里面抛异常就是模拟「问合约」时节点失败，写库就是模拟另一个实例插队。 */
+    public void beforeCall(Runnable hook) {
+        this.beforeCall = hook;
+    }
+
     /** 当前分支上该块已有几条日志。 */
     private int logsInBlock(long block) {
         String current = block(block).hash();
@@ -246,6 +252,7 @@ public final class FakeChain implements ChainReader {
 
     @Override
     public String call(String to, String data, String blockTag) {
+        beforeCall.run();
         String answer = callAnswers.get(to.toLowerCase() + ":" + data.toLowerCase());
         if (answer == null) {
             throw new JsonRpcException(3, "execution reverted（假节点：" + to + " 没有定义对 "
