@@ -60,7 +60,8 @@ com.chainpay
         ├── service/     BlockIndexer、ChainHeadTracker、ReorgRecovery、ChainIndexerScheduler 及它们抛的异常
         ├── repository/  四张表的 SQL：书签、事件、链头、重组审计
         ├── domain/      record 与 enum：书签、链头、批结果、轮询结果
-        └── config/      装配（配了节点地址才生效）与配置
+        ├── config/      装配（配了节点地址才生效）与配置
+        └── controller/  只读的状态接口 GET /admin/v1/indexer
 ```
 
 **为什么不是纯按类型分**（`controller/` `service/` 各一个大包）：
@@ -165,6 +166,10 @@ M2 的形态已在 2026-09-02 出现：不是「先查再改」，是「两个�
 - 客户端对「发出到正文读完」整段计时，正文 16 MB 封顶。审计节点 `CHAINPAY_CHAIN_AUDIT_RPC_URL` 要独立于主节点才有价值（同一家两台机器会被同一个 bug 骗过）；不设时退化为主节点自己的回执路径，能抓索引漏日志，抓不住节点整体撒谎
 - **代币白名单**（M2-⑥）：Transfer 事件是合约「说」的，余额是合约「做」的；事件金额只对行为规范的代币等于到账金额。只索引、只入账 `chain_token` 里 ACTIVE 的代币；登记时用 `eth_call` 问链上的 `decimals()` 与 `symbol()`，问不到要运营手工填并注明来源；轮询第一次推批前核对链上 decimals 与表一致，不一致 = 停下。symbol 是从别人的合约里解出来的：Java 侧空白或超过 64 字符当问不到，V14 的 CHECK 兜底（note ≤ 500）。ABI 解码里偏移字与长度字是对方给的 32 字节的数，**先在 BigInteger 上比过实际字节数再收窄**，否则 2^31 抛 ArithmeticException、2^30 乘 2 溢出成负数绕过边界检查；形状不对只允许抛 `IllegalArgumentException`，调用方只接这一种
 - **金额换算只经 `TokenAmounts.toLedger`**：精确除法、永不四舍五入；整数位超过 20 或 decimals 超过 18 抛 `AmountOverflowException`，M3 把那笔标成「无法入账、等人看」而不是让它卡住循环。铸币（from 为 0x0）按普通入账；不发事件的铸币我们看不见、不入账，留给 M5 用 `balanceOf` 对账发现
+- **停下要能被问到**（M2-⑥ 补丁 3）：状态表 `indexer_state`（RUNNING / DEGRADED / HALTED）。进程启动先读它，HALTED 就不碰节点，**重启不算恢复**，人改回 RUNNING 才算；连续 `degraded-after-failures` 次瞬时失败、或审计节点连续答不出 = DEGRADED，每轮 ERROR；HTTP 401 / 403 是凭证失效，`RpcAuthException` 直接停下不重试；只读接口 `GET /admin/v1/indexer` 一次给全状态、书签、链头、落后块数、争议块数。每种停机原因该做什么见 `docs/runbook/chain-indexer.md`
+- **节点地址按密码对待**：只经 `RpcEndpoint` 解析，失败只报变量名与主机名，永不回显原文（`URI.create` 会把整条含 key 的输入放进异常）；审计节点与主节点同一主机 = 拒绝启动；没配审计节点要在启动日志里写明「单节点」
+- **翻译层是外部 JSON 的唯一入口**：`EthRpc` 缺字段就指名拒绝，不留空指针；`EthRpcTest` 用 2026-09-04 录自 Sepolia 的真实响应做契约测试，`ChainIndexerBootSmokeTest` 让容器真的装配一次索引器（条件注解、属性绑定、`@Scheduled` 三者从此有默认覆盖）
+- controller 包不得引用 `asSystem`：`ControllerBoundaryTest` 扫源码守着（§2 那条 ArchUnit 的承诺以更薄的方式兑现，匹配集合不能为空）
 
 ---
 

@@ -10,11 +10,13 @@ import com.chainpay.chain.erc20.Erc20Calls;
 import com.chainpay.chain.indexer.domain.TickResult;
 import com.chainpay.chain.indexer.repository.ChainHeadRepository;
 import com.chainpay.chain.indexer.repository.ChainTokenRepository;
+import com.chainpay.chain.indexer.repository.IndexerStateRepository;
 import com.chainpay.chain.indexer.repository.IndexerCursorRepository;
 import com.chainpay.chain.indexer.repository.ReconcileRepository;
 import com.chainpay.chain.indexer.repository.ReorgRepository;
 import com.chainpay.chain.indexer.repository.TransferLogRepository;
 import com.chainpay.chain.rpc.JsonRpcException;
+import com.chainpay.chain.rpc.RpcAuthException;
 import com.chainpay.chain.support.FakeChain;
 import com.chainpay.support.AbstractPostgresTest;
 import java.math.BigInteger;
@@ -68,13 +70,16 @@ class ChainIndexerSchedulerTest extends AbstractPostgresTest {
     private ChainTokenRepository tokens;
 
     @Autowired
+    private IndexerStateRepository states;
+
+    @Autowired
     private PlatformTransactionManager txManager;
 
     private FakeChain chain;
 
     @BeforeEach
     void resetChainTables() {
-        jdbc.sql("TRUNCATE chain_transfer_log, indexer_cursor, chain_head, chain_reorg, chain_reconcile").update();
+        jdbc.sql("TRUNCATE chain_transfer_log, indexer_cursor, chain_head, chain_reorg, chain_reconcile, indexer_state").update();
         jdbc.sql("UPDATE chain_token SET status = 'ACTIVE', verified_at = NULL WHERE address = :link").param("link", LINK).update();
         chain = new FakeChain();
         chain.defineToken(LINK, "LINK", 18);                        // 链上答得出，且和 V13 预置的一致
@@ -267,6 +272,131 @@ class ChainIndexerSchedulerTest extends AbstractPostgresTest {
     }
 
     @Test
+    @DisplayName("★ 停机落库：重启后的新进程读到 HALTED 就不碰节点；人工改回 RUNNING 才继续")
+    void haltIsPersistedAcrossRestart() {
+        chain.withBlocks(10);
+        chain.reportSafe(5);
+        chain.reportFinalized(2);
+        ChainIndexerScheduler first = scheduler(chain, LINK, 0L, 5);
+        first.tick();
+        chain.reportFinalized(1);
+        assertThat(first.tick().outcome()).isEqualTo(HALTED);
+        assertThat(stateOf(CURSOR)).isEqualTo("HALTED");
+        assertThat(reasonOf(CURSOR)).contains("倒退");
+
+        ChainIndexerScheduler restarted = scheduler(chain, LINK, 0L, 5);      // 新进程：内存里什么都不记得
+        AtomicBoolean touchedTheNode = new AtomicBoolean(false);
+        chain.beforeBlock(n -> touchedTheNode.set(true));
+        chain.beforeLogs(() -> touchedTheNode.set(true));
+        TickResult afterRestart = restarted.tick();
+
+        assertThat(afterRestart.outcome()).isEqualTo(HALTED);
+        assertThat(afterRestart.detail()).contains("倒退");
+        assertThat(touchedTheNode).as("停机状态在表里，重启不能静默恢复").isFalse();
+
+        chain.reportFinalized(2);                                             // 人把原因处理掉
+        jdbc.sql("UPDATE indexer_state SET status = 'RUNNING', reason = NULL WHERE name = :n").param("n", CURSOR).update();
+        assertThat(scheduler(chain, LINK, 0L, 5).tick().outcome()).isEqualTo(POLLED);
+        assertThat(stateOf(CURSOR)).isEqualTo("RUNNING");
+    }
+
+    @Test
+    @DisplayName("★ 连续瞬时失败到阈值：降级并记下原因；恢复后回到 RUNNING")
+    void degradesAfterConsecutiveTransientFailures() {
+        chain.withBlocks(10);
+        chain.reportSafe(5);
+        chain.reportFinalized(2);
+        chain.addTransfer(LINK, 3, ALICE, BOB, TEN_LINK);
+        AtomicBoolean failing = new AtomicBoolean(true);
+        chain.beforeLogs(() -> {
+            if (failing.get()) {
+                throw new JsonRpcException(null, "节点不可达");
+            }
+        });
+        ChainIndexerScheduler scheduler = scheduler(chain, null, LINK, 0L, 100, 3);
+
+        assertThat(scheduler.tick().outcome()).isEqualTo(RETRY_LATER);
+        assertThat(scheduler.tick().outcome()).isEqualTo(RETRY_LATER);
+        assertThat(stateOf(CURSOR)).as("两次还只是抖动").isEqualTo("RUNNING");
+        assertThat(scheduler.tick().outcome()).isEqualTo(RETRY_LATER);
+        assertThat(stateOf(CURSOR)).as("第三次到阈值").isEqualTo("DEGRADED");
+        assertThat(reasonOf(CURSOR)).contains("连续 3 次");
+        assertThat(scheduler.consecutiveFailures()).isEqualTo(3);
+
+        failing.set(false);
+        assertThat(scheduler.tick().outcome()).isEqualTo(POLLED);
+        assertThat(stateOf(CURSOR)).isEqualTo("RUNNING");
+        assertThat(scheduler.consecutiveFailures()).isZero();
+        assertThat(rowCount()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("★ 节点拒绝凭证（401 / 403）：不是瞬时失败，停下并说明换 key")
+    void authFailureHaltsInsteadOfRetrying() {
+        chain.withBlocks(10);
+        chain.reportSafe(5);
+        chain.reportFinalized(2);
+        chain.beforeLogs(() -> { throw new RpcAuthException(401, "eth_getLogs"); });
+
+        TickResult result = scheduler(chain, LINK, 0L, 100).tick();
+
+        assertThat(result.outcome()).isEqualTo(HALTED);
+        assertThat(result.detail()).contains("凭证");
+        assertThat(stateOf(CURSOR)).isEqualTo("HALTED");
+    }
+
+    @Test
+    @DisplayName("★ 审计节点连续答不出：核对名存实亡，降级而不是永远静默跳过")
+    void degradesWhenTheAuditNodeKeepsFailing() {
+        chain.withBlocks(10);
+        chain.reportSafe(5);
+        chain.reportFinalized(2);
+        FakeChain deadAudit = new FakeChain();                                // 一块都没有：问什么都抛
+        ChainIndexerScheduler scheduler = scheduler(chain, deadAudit, LINK, 0L, 100, 2);
+
+        assertThat(scheduler.tick().outcome()).isEqualTo(POLLED);
+        assertThat(stateOf(CURSOR)).isEqualTo("RUNNING");
+        assertThat(scheduler.tick().outcome()).isEqualTo(POLLED);
+        assertThat(stateOf(CURSOR)).isEqualTo("DEGRADED");
+        assertThat(reasonOf(CURSOR)).contains("审计节点");
+    }
+
+    @Test
+    @DisplayName("★ 对账阶段两个节点对已 finalized 的块意见不同：从审计穿出来，停下——reconcileSafely 只吞瞬时失败")
+    void haltsWhenReconcileFindsAFinalityDisagreement() {
+        chain.withBlocks(250);
+        chain.reportSafe(200);
+        chain.reportFinalized(100);
+        FakeChain audit = new FakeChain().withBlocks(250);
+        for (long n = 1; n <= 100; n++) {
+            audit.tamperHash(n, FakeChain.hashOf(n, "X"));                   // 审计节点的整段 finalized 历史是另一条链
+        }
+
+        TickResult result = scheduler(audit, LINK, 0L, 100).tick();
+
+        assertThat(result.outcome()).isEqualTo(HALTED);
+        assertThat(result.detail()).contains("意见不同");
+        assertThat(stateOf(CURSOR)).isEqualTo("HALTED");
+    }
+
+    @Test
+    @DisplayName("一次轮询最多推十批：追很远的块时也给别的事留出时间，下一次接着追")
+    void capsBatchesPerTick() {
+        chain.withBlocks(1200);
+        chain.reportSafe(1100);
+        chain.reportFinalized(1000);
+        ChainIndexerScheduler scheduler = scheduler(chain, LINK, 0L, 100);
+
+        TickResult first = scheduler.tick();
+
+        assertThat(first.outcome()).isEqualTo(POLLED);
+        assertThat(first.batches()).isEqualTo(ChainIndexerScheduler.MAX_BATCHES_PER_TICK);
+        assertThat(cursorBlock()).isEqualTo(1000);
+        assertThat(scheduler.tick().batches()).isEqualTo(2);
+        assertThat(cursorBlock()).isEqualTo(1200);
+    }
+
+    @Test
     @DisplayName("没有书签也没配起点：停下，说清原因")
     void haltsWhenThereIsNoCursorAndNoStartBlock() {
         chain.withBlocks(10);
@@ -300,14 +430,35 @@ class ChainIndexerSchedulerTest extends AbstractPostgresTest {
     // ------------------------------------------------------------------ 脚手架
 
     private ChainIndexerScheduler scheduler(FakeChain audit, String token, Long startBlock, int batchBlocks) {
+        return scheduler(audit, null, token, startBlock, batchBlocks, 30);
+    }
+
+    /**
+     * @param reconcileAudit 对账用的审计节点
+     * @param headAudit      核对 finalized 用的审计节点，null = 不核对
+     * @param degradedAfter  连续几次瞬时失败 / 审计跳过后降级
+     */
+    private ChainIndexerScheduler scheduler(FakeChain reconcileAudit, FakeChain headAudit, String token,
+                                            Long startBlock, int batchBlocks, int degradedAfter) {
         TransactionTemplate tx = new TransactionTemplate(txManager);
         BlockIndexer indexer = new BlockIndexer(chain, cursors, transferLogs, tx, CURSOR, token, batchBlocks);
-        ChainHeadTracker tracker = new ChainHeadTracker(chain, heads, tx, "test");
+        ChainHeadTracker tracker = new ChainHeadTracker(chain, headAudit, heads, tx, "test");
         ReorgRecovery recovery = new ReorgRecovery(chain, cursors, transferLogs, heads, reorgs, tx, CURSOR);
-        LogReconciler reconciler = new LogReconciler(chain, audit, cursors, transferLogs, heads, reconciles, tx,
+        LogReconciler reconciler = new LogReconciler(chain, reconcileAudit, cursors, transferLogs, heads, reconciles, tx,
                 CURSOR, token, 2, new Random(1));
         TokenRegistry registry = new TokenRegistry(new Erc20Calls(chain), tokens);
-        return new ChainIndexerScheduler(tracker, indexer, recovery, reconciler, registry, token, startBlock);
+        return new ChainIndexerScheduler(tracker, indexer, recovery, reconciler, registry, states,
+                CURSOR, token, startBlock, degradedAfter);
+    }
+
+    private String stateOf(String name) {
+        return jdbc.sql("SELECT status FROM indexer_state WHERE name = :n").param("n", name)
+                .query(String.class).optional().orElse("(无)");
+    }
+
+    private String reasonOf(String name) {
+        return jdbc.sql("SELECT coalesce(reason, '') FROM indexer_state WHERE name = :n").param("n", name)
+                .query(String.class).optional().orElse("");
     }
 
     private boolean verified(String token) {

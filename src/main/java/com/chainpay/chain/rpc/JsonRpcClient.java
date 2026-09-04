@@ -85,6 +85,12 @@ public class JsonRpcClient {
 
         Raw raw = exchange(request, method);
 
+        // 401 / 403 不是「现在别问」，是「你不配问」：key 失效或被撤销，重试永远没用。要在 error 对象之前拦，
+        // 因为 Alchemy 的 401 也带一个 JSON error 对象（code -32000），走下面那段会变成带 code 的业务错误去对半分
+        if (raw.status() == 401 || raw.status() == 403) {
+            throw new RpcAuthException(raw.status(), method);
+        }
+
         // 限流不是「我们的请求有问题」，是「现在别问」：瞬时失败，code 为空，下次再来。
         // Alchemy 的 429 也带一个 JSON error 对象（code 429），放在下面那段之前拦住，
         // 否则会被当成带 code 的业务错误去对半分，减到一块还 429 就停机——对节流的反应恰恰相反

@@ -170,6 +170,24 @@ class JsonRpcClientTest {
     }
 
     @Test
+    @DisplayName("★ HTTP 401 / 403（key 失效或被撤销）—— 不是瞬时失败：抛 RpcAuthException，code 为空")
+    void treatsAuthFailureAsItsOwnKind() {
+        // 被撤销的 key 永远不会自己好；和网络抖动放同一个桶里，索引器会每 12 秒 WARN 一次、永不停机、永不告警
+        cannedStatus = 401;
+        cannedResponse = "{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-32000,\"message\":\"Must be authenticated!\"}}";
+        assertThatThrownBy(() -> client().call("eth_blockNumber"))
+                .isInstanceOf(RpcAuthException.class)
+                .satisfies(e -> assertThat(((JsonRpcException) e).code()).isNull())
+                .hasMessageContaining("401");
+
+        cannedStatus = 403;
+        cannedResponse = "forbidden";
+        assertThatThrownBy(() -> client().call("eth_blockNumber"))
+                .isInstanceOf(RpcAuthException.class)
+                .hasMessageContaining("403");
+    }
+
+    @Test
     @DisplayName("★ 响应的 id 和请求对不上 —— 必须抛出，不能把别人的答案当自己的")
     void rejectsMismatchedId() {
         cannedResponse = "{\"jsonrpc\":\"2.0\",\"id\":999,\"result\":\"0x1\"}";

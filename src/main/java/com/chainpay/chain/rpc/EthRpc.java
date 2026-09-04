@@ -10,6 +10,10 @@ import tools.jackson.databind.JsonNode;
  *
  * <p>只做「翻译」，不做「判断」：这里不知道什么是 ERC-20、不知道什么是确认数。
  * 那些知识分别在 {@code chain.erc20} 和索引器里。
+ *
+ * <p>这是外部不可信 JSON 进入系统的唯一一层。节点少给一个字段，Jackson 的 {@code get} 返回 null，
+ * 接着的 {@code asString()} 是一个不指名字段的空指针——和本模块其它每一处「形状不对就说清收到了什么」的纪律相反
+ * （2026-09-03 质询扫描 10.3）。所以每个字段都经 {@link #text}：缺了就指名道姓地拒绝，交给轮询器停下。
  */
 public class EthRpc implements ChainReader {
 
@@ -22,7 +26,7 @@ public class EthRpc implements ChainReader {
     /** 节点眼中的最新区块号（{@code latest}）。注意：不同节点、同一节点前后两次都可能不一致。 */
     @Override
     public long blockNumber() {
-        return Hex.toLong(rpc.call("eth_blockNumber").asString());
+        return Hex.toLong(text(rpc.call("eth_blockNumber"), "eth_blockNumber 的结果"));
     }
 
     /**
@@ -37,11 +41,12 @@ public class EthRpc implements ChainReader {
         if (b == null || b.isNull()) {
             throw new JsonRpcException(null, "区块不存在：" + numberOrTag);
         }
+        String context = "eth_getBlockByNumber 的区块头";
         return new BlockHeader(
-                Hex.toLong(b.get("number").asString()),
-                b.get("hash").asString(),
-                b.get("parentHash").asString(),
-                Hex.toLong(b.get("timestamp").asString()));
+                Hex.toLong(text(b, "number", context)),
+                text(b, "hash", context),
+                text(b, "parentHash", context),
+                Hex.toLong(text(b, "timestamp", context)));
     }
 
     @Override
@@ -62,9 +67,12 @@ public class EthRpc implements ChainReader {
                 "toBlock", Hex.fromLong(toBlock),
                 "address", address,
                 "topics", List.of(topic0)));
+        if (result == null || !result.isArray()) {
+            throw new IllegalArgumentException("eth_getLogs 的结果不是数组：节点返回的形状不对");
+        }
         List<RawLog> logs = new ArrayList<>();
         for (JsonNode l : result) {
-            logs.add(toRawLog(l));
+            logs.add(toRawLog(l, "eth_getLogs 的日志"));
         }
         return logs;
     }
@@ -76,10 +84,17 @@ public class EthRpc implements ChainReader {
         if (receipts == null || receipts.isNull()) {
             throw new JsonRpcException(null, "区块不存在（回执）：" + number);
         }
+        if (!receipts.isArray()) {
+            throw new IllegalArgumentException("eth_getBlockReceipts 的结果不是数组：节点返回的形状不对");
+        }
         List<RawLog> logs = new ArrayList<>();
         for (JsonNode receipt : receipts) {
-            for (JsonNode l : receipt.get("logs")) {
-                logs.add(toRawLog(l));
+            JsonNode receiptLogs = receipt.get("logs");
+            if (receiptLogs == null || !receiptLogs.isArray()) {
+                throw new IllegalArgumentException("eth_getBlockReceipts 的回执缺少字段 logs：节点返回的形状不对");
+            }
+            for (JsonNode l : receiptLogs) {
+                logs.add(toRawLog(l, "eth_getBlockReceipts 的日志"));
             }
         }
         return logs;
@@ -92,18 +107,38 @@ public class EthRpc implements ChainReader {
         return result == null || result.isNull() ? "0x" : result.asString();
     }
 
-    private static RawLog toRawLog(JsonNode l) {
+    private static RawLog toRawLog(JsonNode l, String context) {
+        JsonNode topicsNode = l.get("topics");
+        if (topicsNode == null || !topicsNode.isArray()) {
+            throw new IllegalArgumentException(context + " 缺少字段 topics：节点返回的形状不对");
+        }
         List<String> topics = new ArrayList<>();
-        l.get("topics").forEach(t -> topics.add(t.asString()));
+        topicsNode.forEach(t -> topics.add(t.asString()));
         return new RawLog(
-                l.get("address").asString(),
+                text(l, "address", context),
                 List.copyOf(topics),
-                l.get("data").asString(),
-                l.get("blockNumber").asString(),
-                l.get("blockHash").asString(),
-                l.get("transactionHash").asString(),
-                l.get("transactionIndex").asString(),
-                l.get("logIndex").asString(),
+                text(l, "data", context),
+                text(l, "blockNumber", context),
+                text(l, "blockHash", context),
+                text(l, "transactionHash", context),
+                text(l, "transactionIndex", context),
+                text(l, "logIndex", context),
                 l.has("removed") && l.get("removed").asBoolean());
+    }
+
+    /** 必需的字符串字段：缺了或为 null 就指名道姓地拒绝。 */
+    private static String text(JsonNode node, String field, String context) {
+        JsonNode value = node == null ? null : node.get(field);
+        if (value == null || value.isNull()) {
+            throw new IllegalArgumentException(context + " 缺少字段 " + field + "：节点返回的形状不对");
+        }
+        return value.asString();
+    }
+
+    private static String text(JsonNode value, String context) {
+        if (value == null || value.isNull()) {
+            throw new IllegalArgumentException(context + " 为空：节点返回的形状不对");
+        }
+        return value.asString();
     }
 }
