@@ -1,5 +1,6 @@
 package com.chainpay.chain.support;
 
+import com.chainpay.chain.erc20.Abi;
 import com.chainpay.chain.erc20.TransferLogDecoder;
 import com.chainpay.chain.rpc.BlockHeader;
 import com.chainpay.chain.rpc.ChainReader;
@@ -41,6 +42,8 @@ public final class FakeChain implements ChainReader {
     private final ConcurrentMap<Long, BlockHeader> blocks = new ConcurrentHashMap<>();
     private final List<RawLog> logs = new CopyOnWriteArrayList<>();
     private final Set<RawLog> hiddenFromGetLogs = ConcurrentHashMap.newKeySet();
+    /** 合约调用的答案：(to, data) → 返回值。没定义的调用一律 revert，和没有那个函数的合约一样。 */
+    private final ConcurrentMap<String, String> callAnswers = new ConcurrentHashMap<>();
     private volatile long head = -1;
     private volatile long safe = 0;
     private volatile long finalized = 0;
@@ -134,6 +137,22 @@ public final class FakeChain implements ChainReader {
         hiddenFromGetLogs.add(log);
     }
 
+    /** 让某个合约地址像一个 ERC-20 一样回答 decimals() 与 symbol()。 */
+    public void defineToken(String address, String symbol, int decimals) {
+        defineCall(address, Abi.DECIMALS, Abi.encodeUint(java.math.BigInteger.valueOf(decimals)));
+        defineCall(address, Abi.SYMBOL, Abi.encodeString(symbol));
+    }
+
+    /** 某个地址的余额（balanceOf），不分块高。 */
+    public void defineBalance(String token, String holder, java.math.BigInteger balance) {
+        defineCall(token, Abi.encodeCall(Abi.BALANCE_OF, holder), Abi.encodeUint(balance));
+    }
+
+    /** 原始形式：某个 (to, data) 的返回值。 */
+    public void defineCall(String to, String data, String result) {
+        callAnswers.put(to.toLowerCase() + ":" + data.toLowerCase(), result);
+    }
+
     /** 造一条标准的 Transfer 日志，挂在该块<b>当前</b>的分支上；logIndex 是该分支该块内的序号。 */
     public RawLog addTransfer(String token, long block, String from, String to, BigInteger value) {
         return addTransfer(token, block, from, to, value, txHashOf(block, logsInBlock(block)));
@@ -223,6 +242,16 @@ public final class FakeChain implements ChainReader {
                             && l.topics().get(0).equalsIgnoreCase(topic0);
                 })
                 .toList();
+    }
+
+    @Override
+    public String call(String to, String data, String blockTag) {
+        String answer = callAnswers.get(to.toLowerCase() + ":" + data.toLowerCase());
+        if (answer == null) {
+            throw new JsonRpcException(3, "execution reverted（假节点：" + to + " 没有定义对 "
+                    + data.substring(0, Math.min(10, data.length())) + " 的回答）");
+        }
+        return answer;
     }
 
     /** 事实源：该块当前分支上的全部日志，不筛地址、不管有没有被 getLogs 藏起来。 */

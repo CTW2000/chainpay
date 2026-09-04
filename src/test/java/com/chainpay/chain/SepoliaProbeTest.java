@@ -1,5 +1,7 @@
 package com.chainpay.chain;
 
+import com.chainpay.chain.erc20.Erc20Calls;
+import com.chainpay.chain.erc20.TokenAmounts;
 import com.chainpay.chain.erc20.TransferLogDecoder;
 import com.chainpay.chain.rpc.EthRpc;
 import com.chainpay.chain.rpc.JsonRpcClient;
@@ -7,6 +9,7 @@ import java.net.URI;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
+import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * M2-①「裸奔版」：对着真实的 Sepolia 打一遍，把数据打印出来看。
@@ -44,5 +47,17 @@ class SepoliaProbeTest {
         logs.stream().limit(5).map(TransferLogDecoder::decode).forEach(t ->
                 System.out.printf("    块 %d #%d  %s → %s  %s raw%n",
                         t.blockNumber(), t.logIndex(), t.from(), t.to(), t.value()));
+
+        // M2-⑥：第一次「调合约」而不是「读日志」——问真实的 LINK 它的 decimals、symbol，再读一个真实地址的余额
+        var calls = new Erc20Calls(rpc);
+        int decimals = calls.decimals(LINK_SEPOLIA).orElseThrow();
+        String symbol = calls.symbol(LINK_SEPOLIA).orElseThrow();
+        System.out.printf(">>> eth_call：decimals()=%d  symbol()=%s%n", decimals, symbol);
+        assertThat(decimals).isEqualTo(18);
+        assertThat(symbol).isEqualTo("LINK");
+        logs.stream().limit(1).map(TransferLogDecoder::decode).forEach(t -> {
+            var raw = calls.balanceOf(LINK_SEPOLIA, t.to(), "latest");
+            System.out.printf(">>> balanceOf(%s) = %s raw = %s LINK%n", t.to(), raw, TokenAmounts.toLedger(raw, decimals).toPlainString());
+        });
     }
 }

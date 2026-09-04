@@ -28,4 +28,14 @@ public interface ChainReader {
      * 回执是执行的结果，getLogs 只是从 bloom 建的索引。对账用它。
      */
     List<RawLog> blockReceipts(long number);
+
+    /**
+     * {@code eth_call}：让节点在某个状态上<b>模拟执行</b>一次合约调用，不上链、不花 gas，返回 ABI 编码的返回值。
+     * 这是第一次「调合约」而不是「读日志」：decimals()、symbol()、balanceOf() 都走它。
+     *
+     * @param data     选择器 + ABI 编码的参数（见 {@code chain.erc20.Abi}）
+     * @param blockTag latest / finalized / 十六进制块号
+     * @return 十六进制返回值；合约没有这个函数、或执行 revert，节点以带 code 的错误报出
+     */
+    String call(String to, String data, String blockTag);
 }

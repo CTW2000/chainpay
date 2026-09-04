@@ -85,6 +85,13 @@ public class EthRpc implements ChainReader {
         return logs;
     }
 
+    /** {@code eth_call}。返回 "0x" 表示合约什么都没返回（比如没有这个函数又有 fallback）。 */
+    @Override
+    public String call(String to, String data, String blockTag) {
+        JsonNode result = rpc.call("eth_call", Map.of("to", to, "data", data), blockTag);
+        return result == null || result.isNull() ? "0x" : result.asString();
+    }
+
     private static RawLog toRawLog(JsonNode l) {
         List<String> topics = new ArrayList<>();
         l.get("topics").forEach(t -> topics.add(t.asString()));

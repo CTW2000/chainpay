@@ -6,8 +6,10 @@ import static com.chainpay.chain.indexer.domain.TickOutcome.REORGED;
 import static com.chainpay.chain.indexer.domain.TickOutcome.RETRY_LATER;
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.chainpay.chain.erc20.Erc20Calls;
 import com.chainpay.chain.indexer.domain.TickResult;
 import com.chainpay.chain.indexer.repository.ChainHeadRepository;
+import com.chainpay.chain.indexer.repository.ChainTokenRepository;
 import com.chainpay.chain.indexer.repository.IndexerCursorRepository;
 import com.chainpay.chain.indexer.repository.ReconcileRepository;
 import com.chainpay.chain.indexer.repository.ReorgRepository;
@@ -30,10 +32,10 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 /**
- * 一次轮询的形状：放书签（若没有且配了起点）→ 刷新链头 → 连续推批直到追平 → 抽样对账。
+ * 一次轮询的形状：核对代币（只在第一次）→ 放书签（若没有且配了起点）→ 刷新链头 → 连续推批直到追平 → 抽样对账。
  *
  * <p>失败分三种：瞬时的（节点不可达）下次再来；重组（M2-④ 起）这一次回滚、下一次重放；
- * 结构性的（finalized 倒退、没书签没起点）停下，之后每次轮询都直接返回，不再碰节点。
+ * 结构性的（finalized 倒退、没书签没起点、代币未登记或 decimals 不一致）停下，之后每次轮询都直接返回。
  * 对账（M2-⑤）是审计，它自己的瞬时失败不改变轮询的结局。
  */
 @SpringBootTest
@@ -41,6 +43,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 class ChainIndexerSchedulerTest extends AbstractPostgresTest {
 
     static final String LINK  = "0x779877a7b0d9e8603169ddbd7836e478b4624789";
+    static final String UNKNOWN_TOKEN = "0xcccccccccccccccccccccccccccccccccccccccc";
     static final String ALICE = "0x4281ecf07378ee595c564a59048801330f3084ee";
     static final String BOB   = "0x5e97b169613aff0c40a1910e597e9736c3a5ebc3";
     static final String CURSOR = "test:link:transfer";
@@ -62,6 +65,9 @@ class ChainIndexerSchedulerTest extends AbstractPostgresTest {
     private ReconcileRepository reconciles;
 
     @Autowired
+    private ChainTokenRepository tokens;
+
+    @Autowired
     private PlatformTransactionManager txManager;
 
     private FakeChain chain;
@@ -69,11 +75,13 @@ class ChainIndexerSchedulerTest extends AbstractPostgresTest {
     @BeforeEach
     void resetChainTables() {
         jdbc.sql("TRUNCATE chain_transfer_log, indexer_cursor, chain_head, chain_reorg, chain_reconcile").update();
+        jdbc.sql("UPDATE chain_token SET status = 'ACTIVE', verified_at = NULL WHERE address = :link").param("link", LINK).update();
         chain = new FakeChain();
+        chain.defineToken(LINK, "LINK", 18);                        // 链上答得出，且和 V13 预置的一致
     }
 
     @Test
-    @DisplayName("一次轮询：刷新链头，连续推批直到追平，两张表都对，最后抽样对账")
+    @DisplayName("一次轮询：核对代币，刷新链头，连续推批直到追平，两张表都对，最后抽样对账")
     void aTickRefreshesHeadsAndCatchesUp() {
         chain.withBlocks(250);
         chain.addTransfer(LINK, 5, ALICE, BOB, TEN_LINK);
@@ -81,7 +89,7 @@ class ChainIndexerSchedulerTest extends AbstractPostgresTest {
         chain.addTransfer(LINK, 240, BOB, ALICE, TEN_LINK);
         chain.reportSafe(200);
         chain.reportFinalized(100);
-        ChainIndexerScheduler scheduler = scheduler(chain, 0L, 100);
+        ChainIndexerScheduler scheduler = scheduler(chain, LINK, 0L, 100);
 
         TickResult result = scheduler.tick();
 
@@ -95,6 +103,38 @@ class ChainIndexerSchedulerTest extends AbstractPostgresTest {
         assertThat(levelOf(5)).isEqualTo("FINAL");
         assertThat(levelOf(150)).isEqualTo("SAFE");
         assertThat(levelOf(240)).isEqualTo("SEEN");
+        assertThat(jdbc.sql("SELECT verified_at IS NOT NULL FROM chain_token WHERE address = :l").param("l", LINK)
+                .query(Boolean.class).single()).as("第一次轮询核对了代币").isTrue();
+    }
+
+    @Test
+    @DisplayName("★ 配置的代币不在白名单里：停下，什么都不做")
+    void haltsWhenTheTokenIsNotRegistered() {
+        chain.withBlocks(10);
+        chain.reportSafe(5);
+        chain.reportFinalized(2);
+        chain.defineToken(UNKNOWN_TOKEN, "UNK", 18);
+
+        TickResult result = scheduler(chain, UNKNOWN_TOKEN, 0L, 100).tick();
+
+        assertThat(result.outcome()).isEqualTo(HALTED);
+        assertThat(result.detail()).contains("未登记");
+        assertThat(jdbc.sql("SELECT COUNT(*) FROM indexer_cursor").query(Long.class).single()).isZero();
+    }
+
+    @Test
+    @DisplayName("★ 链上的 decimals 和白名单不一致：停下——表被改过或合约被升级，不猜")
+    void haltsWhenOnChainDecimalsDisagreeWithTheRegistry() {
+        chain.withBlocks(10);
+        chain.reportSafe(5);
+        chain.reportFinalized(2);
+        chain.defineToken(LINK, "LINK", 6);
+
+        TickResult result = scheduler(chain, LINK, 0L, 100).tick();
+
+        assertThat(result.outcome()).isEqualTo(HALTED);
+        assertThat(result.detail()).contains("不一致");
+        assertThat(jdbc.sql("SELECT COUNT(*) FROM indexer_cursor").query(Long.class).single()).isZero();
     }
 
     @Test
@@ -105,7 +145,7 @@ class ChainIndexerSchedulerTest extends AbstractPostgresTest {
         chain.reportFinalized(100);
         FakeChain unreachableAudit = new FakeChain();               // 一块都没有：问什么都抛
 
-        TickResult result = scheduler(unreachableAudit, 0L, 100).tick();
+        TickResult result = scheduler(unreachableAudit, LINK, 0L, 100).tick();
 
         assertThat(result.outcome()).isEqualTo(POLLED);
         assertThat(result.sampled()).isZero();
@@ -118,7 +158,7 @@ class ChainIndexerSchedulerTest extends AbstractPostgresTest {
         chain.withBlocks(10);
         chain.reportSafe(5);
         chain.reportFinalized(2);
-        ChainIndexerScheduler scheduler = scheduler(chain, 0L, 5);
+        ChainIndexerScheduler scheduler = scheduler(chain, LINK, 0L, 5);
         scheduler.tick();                                            // 书签到 10，链头 finalized 2
 
         chain.reportFinalized(1);
@@ -143,7 +183,7 @@ class ChainIndexerSchedulerTest extends AbstractPostgresTest {
         chain.reportSafe(8);
         chain.reportFinalized(5);
         chain.addTransfer(LINK, 10, ALICE, BOB, TEN_LINK);
-        ChainIndexerScheduler scheduler = scheduler(chain, 0L, 100);
+        ChainIndexerScheduler scheduler = scheduler(chain, LINK, 0L, 100);
         assertThat(scheduler.tick().outcome()).isEqualTo(POLLED);  // 书签 10
         String reincludedTx = FakeChain.txHashOf(10, 0);
         chain.reorgFrom(10, "A");
@@ -182,7 +222,7 @@ class ChainIndexerSchedulerTest extends AbstractPostgresTest {
                 throw new JsonRpcException(null, "节点不可达");
             }
         });
-        ChainIndexerScheduler scheduler = scheduler(chain, 0L, 100);
+        ChainIndexerScheduler scheduler = scheduler(chain, LINK, 0L, 100);
 
         TickResult first = scheduler.tick();
         assertThat(first.outcome()).isEqualTo(RETRY_LATER);
@@ -201,7 +241,7 @@ class ChainIndexerSchedulerTest extends AbstractPostgresTest {
     @DisplayName("没有书签也没配起点：停下，说清原因")
     void haltsWhenThereIsNoCursorAndNoStartBlock() {
         chain.withBlocks(10);
-        ChainIndexerScheduler scheduler = scheduler(chain, null, 100);
+        ChainIndexerScheduler scheduler = scheduler(chain, LINK, null, 100);
 
         TickResult result = scheduler.tick();
 
@@ -219,7 +259,7 @@ class ChainIndexerSchedulerTest extends AbstractPostgresTest {
         chain.reportFinalized(2);
         chain.addTransfer(LINK, 3, ALICE, BOB, TEN_LINK);           // 起点之前
         chain.addTransfer(LINK, 7, ALICE, BOB, TEN_LINK);           // 起点之后
-        ChainIndexerScheduler scheduler = scheduler(chain, 4L, 100);
+        ChainIndexerScheduler scheduler = scheduler(chain, LINK, 4L, 100);
 
         scheduler.tick();
 
@@ -230,14 +270,15 @@ class ChainIndexerSchedulerTest extends AbstractPostgresTest {
 
     // ------------------------------------------------------------------ 脚手架
 
-    private ChainIndexerScheduler scheduler(FakeChain audit, Long startBlock, int batchBlocks) {
+    private ChainIndexerScheduler scheduler(FakeChain audit, String token, Long startBlock, int batchBlocks) {
         TransactionTemplate tx = new TransactionTemplate(txManager);
-        BlockIndexer indexer = new BlockIndexer(chain, cursors, transferLogs, tx, CURSOR, LINK, batchBlocks);
+        BlockIndexer indexer = new BlockIndexer(chain, cursors, transferLogs, tx, CURSOR, token, batchBlocks);
         ChainHeadTracker tracker = new ChainHeadTracker(chain, heads, tx, "test");
         ReorgRecovery recovery = new ReorgRecovery(chain, cursors, transferLogs, heads, reorgs, tx, CURSOR);
         LogReconciler reconciler = new LogReconciler(chain, audit, cursors, transferLogs, heads, reconciles, tx,
-                CURSOR, LINK, 2, new Random(1));
-        return new ChainIndexerScheduler(tracker, indexer, recovery, reconciler, startBlock);
+                CURSOR, token, 2, new Random(1));
+        TokenRegistry registry = new TokenRegistry(new Erc20Calls(chain), tokens);
+        return new ChainIndexerScheduler(tracker, indexer, recovery, reconciler, registry, token, startBlock);
     }
 
     private long cursorBlock() {

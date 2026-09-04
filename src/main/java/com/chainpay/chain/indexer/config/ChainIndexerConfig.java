@@ -1,6 +1,8 @@
 package com.chainpay.chain.indexer.config;
 
+import com.chainpay.chain.erc20.Erc20Calls;
 import com.chainpay.chain.indexer.repository.ChainHeadRepository;
+import com.chainpay.chain.indexer.repository.ChainTokenRepository;
 import com.chainpay.chain.indexer.repository.IndexerCursorRepository;
 import com.chainpay.chain.indexer.repository.ReconcileRepository;
 import com.chainpay.chain.indexer.repository.ReorgRepository;
@@ -10,6 +12,7 @@ import com.chainpay.chain.indexer.service.ChainHeadTracker;
 import com.chainpay.chain.indexer.service.ChainIndexerScheduler;
 import com.chainpay.chain.indexer.service.LogReconciler;
 import com.chainpay.chain.indexer.service.ReorgRecovery;
+import com.chainpay.chain.indexer.service.TokenRegistry;
 import com.chainpay.chain.rpc.ChainReader;
 import com.chainpay.chain.rpc.EthRpc;
 import com.chainpay.chain.rpc.JsonRpcClient;
@@ -92,11 +95,18 @@ class ChainIndexerConfig {
     }
 
     @Bean
+    TokenRegistry tokenRegistry(ChainReaders readers, ChainTokenRepository tokens) {
+        return new TokenRegistry(new Erc20Calls(readers.primary()), tokens);
+    }
+
+    @Bean
     ChainIndexerScheduler chainIndexerScheduler(ChainHeadTracker tracker,
                                                 BlockIndexer indexer,
                                                 ReorgRecovery recovery,
                                                 LogReconciler reconciler,
+                                                TokenRegistry registry,
                                                 ChainIndexerProperties properties) {
-        return new ChainIndexerScheduler(tracker, indexer, recovery, reconciler, properties.startBlock());
+        return new ChainIndexerScheduler(tracker, indexer, recovery, reconciler, registry,
+                properties.tokenAddress(), properties.startBlock());
     }
 }

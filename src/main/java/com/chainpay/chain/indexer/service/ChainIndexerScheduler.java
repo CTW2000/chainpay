@@ -40,17 +40,22 @@ public final class ChainIndexerScheduler {
     private final BlockIndexer indexer;
     private final ReorgRecovery recovery;
     private final LogReconciler reconciler;
+    private final TokenRegistry registry;
+    private final String token;
     private final Long startBlock;
     private final AtomicBoolean halted = new AtomicBoolean(false);
+    private final AtomicBoolean tokenVerified = new AtomicBoolean(false);
     private volatile String haltReason;
 
     /** @param startBlock 没有书签时从哪开始（该块视为已处理）；null = 没书签就停下，不猜 */
     public ChainIndexerScheduler(ChainHeadTracker heads, BlockIndexer indexer, ReorgRecovery recovery,
-                                 LogReconciler reconciler, Long startBlock) {
+                                 LogReconciler reconciler, TokenRegistry registry, String token, Long startBlock) {
         this.heads = heads;
         this.indexer = indexer;
         this.recovery = recovery;
         this.reconciler = reconciler;
+        this.registry = registry;
+        this.token = token;
         this.startBlock = startBlock;
     }
 
@@ -70,6 +75,12 @@ public final class ChainIndexerScheduler {
     }
 
     private TickResult poll() {
+        if (!tokenVerified.get()) {
+            // 第一次轮询先核对代币：未登记、已停用、decimals 与链上不一致都是结构性问题，停下；节点答不出是瞬时的
+            registry.requireUsable(token);
+            registry.verifyAgainstChain(token);
+            tokenVerified.set(true);
+        }
         if (!indexer.hasCursor()) {
             if (startBlock == null) {
                 return halt("没有书签，也没配 chainpay.chain.start-block：不知道从哪开始，不猜");
