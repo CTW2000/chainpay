@@ -142,6 +142,7 @@ SELECT * FROM ledger_invariant WHERE total <> 0;   -- 必须 0 行
 这是本项目最主要的 bug 来源，M0/M2/M4 会以三种不同形态各出现一次。
 M2 的形态已在 2026-09-02 出现：不是「先查再改」，是「两个写入之间有缝」——写事件与推书签，见 V9 注释与 `BlockIndexer`。
 2026-09-03 又在 `TokenRegistry.register` 出现一次最经典的形态（先查再插），是评审代理抓到的，不是自己想到的——改成 `INSERT … ON CONFLICT DO NOTHING`，插不进去 = 已登记，让主键裁决。**自己写的代码最容易犯自己最熟的错。**
+2026-09-03 第三种形态：不是「先查再改」也不是「两个写入之间有缝」，是「**多次读取之间有缝**」——取一批要问节点三次，父哈希只在第一次核对过，一次重组落在三次之间就把旧分支的行留成了 CANONICAL。见 `BlockIndexer` 的 ⑥。
 
 ### 链数据（M2 起，2026-09-02 定）
 
@@ -152,14 +153,15 @@ M2 的形态已在 2026-09-02 出现：不是「先查再改」，是「两个�
 - **网络 IO 在事务外面**：事务要短，握着行锁等 RPC 会拖垮另一个实例和连接池
 - **解码失败 = 停下，不跳过**：一条被跳过的日志就是一笔静默丢失的入账。**重组 = 回滚**（M2-④）：`BlockIndexer` 只检测（parentHash 对不上就抛 `ReorgDetectedException`），`ReorgRecovery` 恢复
 - `value` 存 `NUMERIC(78,0)` 原始单位；进账本前必须显式检查装不装得下 `NUMERIC(38,18)`，不能静默截断
-- 日志的唯一坐标是 `(block_hash, log_index)`，不是 `tx_hash`：重组后同一笔交易会在另一个区块里再出现一次
+- 日志的唯一坐标是 `(block_hash, log_index)`，不是 `tx_hash`：重组后同一笔交易会在另一个区块里再出现一次。**坐标相同不等于内容相同**：重放与对账都比载荷（代币、付款人、收款人、金额），同坐标不同内容 = 重放停下 / 对账 disputed，代码永远不改金额（2026-09-03 补丁）
 - `BlockIndexer` 不是 Spring bean：设了 `CHAINPAY_CHAIN_RPC_URL` 才由 `ChainIndexerConfig` 装配；测试用内存里的 `FakeChain` 换整条链
-- **确认等级不存，算出来**（M2-③）：视图 `chain_transfer_confirmation` 按单行表 `chain_head` 算 SEEN < SAFE < FINAL。给用户加钱绑在 FINAL（M3），于是重组回滚永远只碰链表、不碰账本
+- **确认等级不存，算出来**（M2-③）：视图 `chain_transfer_confirmation` 按单行表 `chain_head` 算 SEEN < SAFE < FINAL。给用户加钱绑在 FINAL（M3），于是重组回滚永远只碰链表、不碰账本。**M3 前置条件**：入账那一步再向两个节点核对该行的块哈希与 finalized 高度，那是动钱的边界，索引器无论怎么错都过不了这道门
 - `chain_head` 只进不退：finalized 倒退或同号换哈希 = `FinalityViolationException`，停下叫人；safe / latest 倒退 = 节点落后，保留旧值
 - 轮询（`ChainIndexerScheduler`）的失败分两种：瞬时的（`JsonRpcException` / `TransientDataAccessException`）下次再来；重组这一次回滚、下一次重放（REORGED）；结构性的（finalized 倒退、解码失败、约束违反、没书签也没配 `start-block`）停下
 - **重组回滚**（M2-④）：祖先 = 能证明和链上一致的最高一块——候选只有书签、有日志的块、finalized 头，其余块的哈希我们没有；祖先可能比分叉点低，**多退不伤，少退要命**。祖先之上标 ORPHANED、书签退回祖先、记 `chain_reorg`，三者同一事务；锁内核对书签的号**和哈希**（别的实例可能已重放到同号的新分支）。地板是 finalized，连它都对不上 = `FinalityViolationException`
-- 重放的写入是 upsert：CANONICAL 不动，ORPHANED **复活**成 CANONICAL（同一行同一 id）——链翻回原分支时，DO NOTHING 会让存款永远消失
-- **RPC 不信任**（M2-⑤）：三种错三种对策。大声的错（带 code 的 error）：getLogs 窗口对半分、成功后翻倍回 `batch-blocks`，减到一块还失败就停下；安静的错（getLogs 静默漏日志，回执才是事实源）：每次轮询抽 `reconcile-samples` 个已 finalized、已索引的块用 `eth_getBlockReceipts` 重数，差异**两个节点都点头才动**（补录 / 标废 / disputed 等人看），只把有差异的检查记进 `chain_reconcile`；自相矛盾的错：只核对 finalized 那一块，两个节点意见不同 = `FinalityViolationException`，头部的分歧不管
+- 重放的写入是 upsert：CANONICAL 不动，ORPHANED **复活**成 CANONICAL（同一行同一 id）——链翻回原分支时，DO NOTHING 会让存款永远消失；复活只在载荷相同时发生
+- **一批的归属**（2026-09-03 补丁）：日志自带的块号与块哈希是节点「说」的，不是承诺给我们的。`BlockIndexer` 落库前三道核对：块号在 [from, to] 内（否则是答非所问，停下）；每条日志的块哈希等于该块的头（为有日志的块再取一次头）；取完日志和 block(to) 之后重读 block(from)，哈希与父哈希未变（否则节点前后不一致，这批作废、下次再来）。不核对的后果实测过：一次重组落在三次读取之间，旧分支的行以 CANONICAL 留下、视图判 FINAL，之后每轮父哈希检查都通过
+- **RPC 不信任**（M2-⑤）：三种错三种对策。大声的错（带 code 的 error）：getLogs 窗口对半分、成功后翻倍回 `batch-blocks`，减到一块还失败就停下；安静的错（getLogs 静默漏日志，回执才是事实源）：每次轮询抽 `reconcile-samples` 个已 finalized、已索引的块用 `eth_getBlockReceipts` 重数，差异**两个节点都点头才动，点的是内容不只是坐标**（补录要求两个节点给的内容一致 / 标废 / 只有一方点头或内容不同 = disputed 等人看），只把有差异的检查记进 `chain_reconcile`；自相矛盾的错：只核对 finalized 那一块，两个节点意见不同 = `FinalityViolationException`，头部的分歧不管
 - 客户端对「发出到正文读完」整段计时，正文 16 MB 封顶。审计节点 `CHAINPAY_CHAIN_AUDIT_RPC_URL` 要独立于主节点才有价值（同一家两台机器会被同一个 bug 骗过）；不设时退化为主节点自己的回执路径，能抓索引漏日志，抓不住节点整体撒谎
 - **代币白名单**（M2-⑥）：Transfer 事件是合约「说」的，余额是合约「做」的；事件金额只对行为规范的代币等于到账金额。只索引、只入账 `chain_token` 里 ACTIVE 的代币；登记时用 `eth_call` 问链上的 `decimals()` 与 `symbol()`，问不到要运营手工填并注明来源；轮询第一次推批前核对链上 decimals 与表一致，不一致 = 停下。symbol 是从别人的合约里解出来的：Java 侧空白或超过 64 字符当问不到，V14 的 CHECK 兜底（note ≤ 500）。ABI 解码里偏移字与长度字是对方给的 32 字节的数，**先在 BigInteger 上比过实际字节数再收窄**，否则 2^31 抛 ArithmeticException、2^30 乘 2 溢出成负数绕过边界检查；形状不对只允许抛 `IllegalArgumentException`，调用方只接这一种
 - **金额换算只经 `TokenAmounts.toLedger`**：精确除法、永不四舍五入；整数位超过 20 或 decimals 超过 18 抛 `AmountOverflowException`，M3 把那笔标成「无法入账、等人看」而不是让它卡住循环。铸币（from 为 0x0）按普通入账；不发事件的铸币我们看不见、不入账，留给 M5 用 `balanceOf` 对账发现

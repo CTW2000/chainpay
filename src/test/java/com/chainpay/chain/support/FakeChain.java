@@ -25,7 +25,8 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * 于是它天然是一条「链」，而测试可以在任何一点把它弄断：
  * {@link #reorgFrom} 换一条分支（真正的重组，日志跟着分支走），
  * {@link #tamperParentHash} / {@link #tamperHash} 单独改一块，
- * {@link #reportHead} 模拟节点落后，{@link #beforeLogs} / {@link #beforeCall} 在取日志 / 问合约时插一个钩子。
+ * {@link #reportHead} 模拟节点落后，{@link #beforeLogs} / {@link #beforeCall} / {@link #beforeBlock} 在取日志 / 问合约 / 取区块头时插一个钩子，
+ * {@link #injectIntoGetLogs} 让 getLogs 像撒谎的节点一样塞进范围外或哈希不对的日志。
  *
  * <p>M2-⑤ 的三种「不可信」：{@link #limitLogsRange} 让 getLogs 像提供商一样对范围设限并报错（大声的错），
  * {@link #dropFromGetLogs} 让一条日志从 getLogs 消失但仍在回执里（安静的错），
@@ -50,6 +51,9 @@ public final class FakeChain implements ChainReader {
     private volatile int logsRangeLimit = Integer.MAX_VALUE;
     private volatile Runnable beforeLogs = () -> { };
     private volatile Runnable beforeCall = () -> { };
+    private volatile java.util.function.LongConsumer beforeBlock = n -> { };
+    /** 撒谎的节点塞进 getLogs 响应里的日志：不看范围、不看分支、不看地址。 */
+    private final List<RawLog> injectedIntoGetLogs = new CopyOnWriteArrayList<>();
 
     /** 原始分支上第 N 块的哈希。 */
     public static String hashOf(long number) {
@@ -164,7 +168,7 @@ public final class FakeChain implements ChainReader {
         int index = logsInBlock(block);
         RawLog log = new RawLog(
                 token,
-                List.of(TransferLogDecoder.TRANSFER_TOPIC0, pad(from), pad(to)),
+                List.of(TransferLogDecoder.TRANSFER_TOPIC0, addressTopic(from), addressTopic(to)),
                 String.format("0x%064x", value),
                 Hex.fromLong(block),
                 block(block).hash(),
@@ -191,6 +195,16 @@ public final class FakeChain implements ChainReader {
         this.beforeCall = hook;
     }
 
+    /** 每次取某个区块头之前先跑它（参数是块号）：在里面重组，就是「取头和取日志之间链换了分支」。 */
+    public void beforeBlock(java.util.function.LongConsumer hook) {
+        this.beforeBlock = hook;
+    }
+
+    /** 撒谎的节点：这条日志会出现在每一次 getLogs 的响应里，不管问的是什么范围。 */
+    public void injectIntoGetLogs(RawLog log) {
+        injectedIntoGetLogs.add(log);
+    }
+
     /** 当前分支上该块已有几条日志。 */
     private int logsInBlock(long block) {
         String current = block(block).hash();
@@ -199,7 +213,8 @@ public final class FakeChain implements ChainReader {
                 .count();
     }
 
-    private static String pad(String address) {
+    /** 地址作为 indexed 参数进 topic 的形状：左补 12 字节的零。 */
+    public static String addressTopic(String address) {
         return ADDRESS_PADDING + address.substring(2).toLowerCase();
     }
 
@@ -222,6 +237,7 @@ public final class FakeChain implements ChainReader {
 
     @Override
     public BlockHeader block(long number) {
+        beforeBlock.accept(number);
         BlockHeader b = blocks.get(number);
         if (b == null) {
             throw new JsonRpcException(null, "区块不存在：" + number);
@@ -236,7 +252,7 @@ public final class FakeChain implements ChainReader {
             throw new JsonRpcException(-32005, "query returned more than 10000 results（假节点：范围 "
                     + fromBlock + ".." + toBlock + " 超过 " + logsRangeLimit + " 块）");
         }
-        return logs.stream()
+        List<RawLog> answer = new java.util.ArrayList<>(logs.stream()
                 .filter(l -> !hiddenFromGetLogs.contains(l))
                 .filter(l -> {
                     long n = Hex.toLong(l.blockNumber());
@@ -247,7 +263,9 @@ public final class FakeChain implements ChainReader {
                             && !l.topics().isEmpty()
                             && l.topics().get(0).equalsIgnoreCase(topic0);
                 })
-                .toList();
+                .toList());
+        answer.addAll(injectedIntoGetLogs);
+        return List.copyOf(answer);
     }
 
     @Override

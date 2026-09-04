@@ -2,15 +2,23 @@ package com.chainpay.chain.indexer.repository;
 
 import com.chainpay.chain.erc20.Erc20Transfer;
 import com.chainpay.chain.indexer.domain.HeadRef;
-import com.chainpay.chain.indexer.domain.LogCoordinate;
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Optional;
+import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 
 /** 事件表的写入与重组相关的两个操作。 */
 @Repository
 public class TransferLogRepository {
+
+    private static final String PAYLOAD_COLUMNS =
+            "token, from_address, to_address, value, block_number, block_hash, tx_hash, log_index";
+    private static final RowMapper<Erc20Transfer> ROW = (rs, i) -> new Erc20Transfer(
+            rs.getString("token"), rs.getString("from_address"), rs.getString("to_address"),
+            rs.getBigDecimal("value").toBigInteger(), rs.getLong("block_number"),
+            rs.getString("block_hash"), rs.getString("tx_hash"), rs.getInt("log_index"));
 
     private final JdbcClient jdbc;
 
@@ -24,13 +32,15 @@ public class TransferLogRepository {
      *   <li>那行是 CANONICAL → 一个字节不动（重放、两个实例、补扫：至少一次 + 幂等 = 效果上恰好一次）</li>
      *   <li>那行是 ORPHANED  → <b>复活</b>成 CANONICAL，同一行、同一个 id。链翻回原分支时被丢弃的块
      *       又是正经的了，它上面的日志再来一次；DO NOTHING 会让它们永远停在 ORPHANED，一笔存款就没了</li>
+     *   <li>那行的<b>内容</b>（代币、付款人、收款人、金额）和这次来的不同 → 抛出，整批回滚。块哈希承诺了内容，
+     *       同一坐标两种内容不可能都对；原来的 upsert 只改 status 列，会让第一次写入的说法永远留下（2026-09-03 补丁）</li>
      * </ul>
      * 返回写入 + 复活的条数。CHECK 违反照常抛出——那不是重复，是坏数据，要让整批回滚。
      */
     public int recordCanonical(List<Erc20Transfer> transfers) {
         int written = 0;
         for (Erc20Transfer t : transfers) {
-            written += jdbc.sql("""
+            int changed = jdbc.sql("""
                             INSERT INTO chain_transfer_log
                                 (token, from_address, to_address, value,
                                  block_number, block_hash, tx_hash, log_index)
@@ -39,6 +49,10 @@ public class TransferLogRepository {
                             ON CONFLICT (block_hash, log_index)
                             DO UPDATE SET status = 'CANONICAL'
                             WHERE chain_transfer_log.status = 'ORPHANED'
+                              AND chain_transfer_log.token = EXCLUDED.token
+                              AND chain_transfer_log.from_address = EXCLUDED.from_address
+                              AND chain_transfer_log.to_address = EXCLUDED.to_address
+                              AND chain_transfer_log.value = EXCLUDED.value
                             """)
                     .param("token", t.token())
                     .param("from", t.from())
@@ -50,8 +64,30 @@ public class TransferLogRepository {
                     .param("txHash", t.transactionHash())
                     .param("logIndex", t.logIndex())
                     .update();
+            if (changed == 0) {
+                requireSamePayload(t);                              // 没动：要么本来就是 CANONICAL，要么同坐标不同内容
+            }
+            written += changed;
         }
         return written;
+    }
+
+    /** 同一坐标已有一行且内容不同：两者不可能都对，抛出让整批回滚，停下叫人。 */
+    private void requireSamePayload(Erc20Transfer t) {
+        Optional<Erc20Transfer> stored = jdbc.sql("SELECT " + PAYLOAD_COLUMNS
+                        + " FROM chain_transfer_log WHERE block_hash = :h AND log_index = :i")
+                .param("h", t.blockHash())
+                .param("i", t.logIndex())
+                .query(ROW)
+                .optional();
+        if (stored.isPresent() && !stored.get().samePayloadAs(t)) {
+            throw new IllegalStateException("同一坐标 (" + t.blockHash() + ", " + t.logIndex() + ") 已有不同内容的记录：库里 "
+                    + describe(stored.get()) + "，链上现在 " + describe(t) + "。块哈希承诺了内容，两者不可能都对，停下叫人");
+        }
+    }
+
+    private static String describe(Erc20Transfer t) {
+        return t.token() + " " + t.from() + " → " + t.to() + " " + t.value();
     }
 
     /**
@@ -84,15 +120,12 @@ public class TransferLogRepository {
                 .update();
     }
 
-    /** 该块里 CANONICAL 的行的坐标：对账时和回执比。 */
-    public List<LogCoordinate> canonicalLogsInBlock(long blockNumber) {
-        return jdbc.sql("""
-                        SELECT block_hash, log_index, tx_hash FROM chain_transfer_log
-                        WHERE status = 'CANONICAL' AND block_number = :n
-                        ORDER BY log_index
-                        """)
+    /** 该块里 CANONICAL 的行，整条载荷：对账时和回执比的是内容，不只是坐标。 */
+    public List<Erc20Transfer> canonicalLogsInBlock(long blockNumber) {
+        return jdbc.sql("SELECT " + PAYLOAD_COLUMNS
+                        + " FROM chain_transfer_log WHERE status = 'CANONICAL' AND block_number = :n ORDER BY log_index")
                 .param("n", blockNumber)
-                .query((rs, i) -> new LogCoordinate(rs.getString("block_hash"), rs.getInt("log_index"), rs.getString("tx_hash")))
+                .query(ROW)
                 .list();
     }
 

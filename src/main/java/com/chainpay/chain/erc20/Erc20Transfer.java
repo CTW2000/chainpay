@@ -18,4 +18,16 @@ public record Erc20Transfer(
         long blockNumber,
         String blockHash,
         String transactionHash,
-        int logIndex) {}
+        int logIndex) {
+
+    /**
+     * 坐标相同不等于内容相同。对账拿两个节点的回执比、重放拿新日志和库里的行比，比的都是这四样：
+     * 代币、付款人、收款人、金额。块哈希承诺了内容，同一坐标出现两种内容，两者不可能都对。
+     */
+    public boolean samePayloadAs(Erc20Transfer other) {
+        return token.equalsIgnoreCase(other.token)
+                && from.equalsIgnoreCase(other.from)
+                && to.equalsIgnoreCase(other.to)
+                && value.equals(other.value);
+    }
+}

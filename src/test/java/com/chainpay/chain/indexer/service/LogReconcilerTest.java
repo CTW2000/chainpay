@@ -14,6 +14,7 @@ import com.chainpay.chain.indexer.repository.TransferLogRepository;
 import com.chainpay.chain.rpc.RawLog;
 import com.chainpay.chain.support.FakeChain;
 import com.chainpay.support.AbstractPostgresTest;
+import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.util.List;
 import java.util.Map;
@@ -196,7 +197,75 @@ class LogReconcilerTest extends AbstractPostgresTest {
         assertThat(reconcileRows()).isEmpty();
     }
 
+    // ------------------------------------------------------------------ 比载荷，不只比坐标（2026-09-03 补丁）
+
+    @Test
+    @DisplayName("★ 同一坐标、不同金额：审计节点说 1，库里存着主节点说的 10，记为 disputed，金额一个字不改")
+    void samePositionDifferentAmountIsDisputedNeverRewritten() {
+        chain.withBlocks(100);
+        chain.reportSafe(90);
+        chain.reportFinalized(80);
+        String tx = FakeChain.txHashOf(20, 0);
+        chain.addTransfer(LINK, 20, ALICE, BOB, TEN_LINK, tx);
+        indexAll();
+        FakeChain audit = new FakeChain().withBlocks(100);
+        audit.addTransfer(LINK, 20, ALICE, BOB, BigInteger.ONE, tx);          // 同一个坐标，另一个金额
+
+        BlockReconciliation r = reconciler(audit).reconcileBlock(20);
+
+        assertThat(r.isClean()).isFalse();
+        assertThat(r).isEqualTo(new BlockReconciliation(20, FakeChain.hashOf(20), 1, 1, 0, 0, 1));
+        assertThat(valueAt(20)).as("钱的对错由人拍板，代码不改").isEqualTo(TEN_LINK);
+        assertThat(reconcileRows()).containsExactly(List.of(20L, 1L, 1L, 0L, 0L, 1L));
+    }
+
+    @Test
+    @DisplayName("★ 两个节点都说 1、库里是 10：也不自动改，仍然 disputed 等人看")
+    void evenWhenBothNodesAgreeTheStoredAmountIsNotRewritten() {
+        chain.withBlocks(100);
+        chain.reportSafe(90);
+        chain.reportFinalized(80);
+        chain.addTransfer(LINK, 20, ALICE, BOB, BigInteger.ONE);              // 主节点与审计节点都说 1
+        tracker().refresh();
+        indexer(1000).start(0);
+        jdbc.sql("""
+                        INSERT INTO chain_transfer_log
+                            (token, from_address, to_address, value, block_number, block_hash, tx_hash, log_index)
+                        VALUES (:token, :from, :to, 10000000000000000000, 20, :bh, :th, 0)
+                        """)
+                .param("token", LINK).param("from", ALICE).param("to", BOB)
+                .param("bh", FakeChain.hashOf(20)).param("th", FakeChain.txHashOf(20, 0)).update();
+
+        BlockReconciliation r = reconciler(chain).reconcileBlock(20);
+
+        assertThat(r).isEqualTo(new BlockReconciliation(20, FakeChain.hashOf(20), 1, 1, 0, 0, 1));
+        assertThat(valueAt(20)).isEqualTo(TEN_LINK);
+    }
+
+    @Test
+    @DisplayName("★ 同一坐标、收款人不同：地址也是载荷的一部分，同样 disputed")
+    void samePositionDifferentRecipientIsDisputed() {
+        chain.withBlocks(100);
+        chain.reportSafe(90);
+        chain.reportFinalized(80);
+        String tx = FakeChain.txHashOf(20, 0);
+        chain.addTransfer(LINK, 20, ALICE, BOB, TEN_LINK, tx);
+        indexAll();
+        FakeChain audit = new FakeChain().withBlocks(100);
+        audit.addTransfer(LINK, 20, ALICE, ALICE, TEN_LINK, tx);
+
+        BlockReconciliation r = reconciler(audit).reconcileBlock(20);
+
+        assertThat(r.disputed()).isEqualTo(1);
+        assertThat(r.isClean()).isFalse();
+    }
+
     // ------------------------------------------------------------------ 脚手架
+
+    private BigInteger valueAt(long block) {
+        return jdbc.sql("SELECT value FROM chain_transfer_log WHERE block_number = :b")
+                .param("b", block).query(BigDecimal.class).single().toBigInteger();
+    }
 
     /** 刷新链头，从 0 放书签，一批索引到头。 */
     private void indexAll() {

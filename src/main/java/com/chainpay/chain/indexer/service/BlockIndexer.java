@@ -11,7 +11,9 @@ import com.chainpay.chain.rpc.BlockHeader;
 import com.chainpay.chain.rpc.ChainReader;
 import com.chainpay.chain.rpc.JsonRpcException;
 import com.chainpay.chain.rpc.RawLog;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import org.springframework.transaction.support.TransactionTemplate;
 
 /**
@@ -25,7 +27,11 @@ import org.springframework.transaction.support.TransactionTemplate;
  *   ④ 校验 block(from).parentHash == cursor.hash
  *                                           ← 不等就停：重组。M2-② 只检测，回滚是 M2-④
  *   ⑤ 解码                                  ← 解不了就停，整批不写
- *   ⑥ BEGIN
+ *   ⑥ 核对这一批的归属（2026-09-03 补丁）
+ *        每条日志的块号在 [from, to] 里         ← 不在 = 节点答非所问，停下
+ *        每条日志声称的块哈希 == 该块的头        ← 为有日志的块再取一次头
+ *        再读一次 block(from)，哈希与父哈希没变   ← 三次读取之间链换了分支 = 节点前后不一致，作废重试
+ *   ⑦ BEGIN
  *        锁书签行、重读：必须仍是 100，否则这批作废
  *        INSERT 事件 ON CONFLICT：CANONICAL 不动，ORPHANED 复活（M2-④）
  *        UPDATE 书签 WHERE last_block_number = 100
@@ -42,6 +48,12 @@ import org.springframework.transaction.support.TransactionTemplate;
  *
  * <p><b>为什么停下而不是跳过：</b>④ 和 ⑤ 的失败都让整批不写、书签不动、抛出。
  * 一条被跳过的日志就是一笔静默丢失的入账；停下来的索引器是一个报警，往前走的是定时炸弹。
+ *
+ * <p><b>为什么要核对归属（⑥）：</b>③ 是三次独立的网络读取，中间链可以换分支。父哈希只在取 block(from) 那一刻
+ * 核对过一次；一次重组落在它和 getLogs / block(to) 之间，旧分支的行会以 CANONICAL 留下、书签却记下新分支的哈希，
+ * 之后每一轮的父哈希检查都通过，永远检测不到（2026-09-03 用假链复现：旧分支的行在视图里是 FINAL）。
+ * 日志自带的块号与块哈希是节点「说」的，不是承诺给我们的：不核对，撒谎的节点可以塞进任意坐标的转账。
+ * 所以落库前把这一批当成一个快照来验：范围、每条日志的头、from 块没变。代价是为有日志的块多取一次头。
  *
  * <p>它不是 Spring bean：装配在 {@code ChainIndexerConfig}（配了 RPC 地址才装），
  * 测试里直接 new，把 {@link ChainReader} 换成内存里的链。
@@ -158,9 +170,50 @@ public final class BlockIndexer {
         // ⑥ 解码。任何一条解不了，整批不写
         List<Erc20Transfer> transfers = raw.stream().map(TransferLogDecoder::decode).toList();
 
-        // ⑦ 事务：锁、重读、写、推
+        // ⑦ 核对这一批的归属：日志的坐标是节点说的；③④⑤ 之间链可以换分支
+        requireWithinRange(transfers, from, to);
+        requireLogsMatchHeaders(transfers, first, last);
+        requireStillOnTheSameBranch(first);
+
+        // ⑧ 事务：锁、重读、写、推
         long batchEnd = to;                                          // 循环里改过的变量进不了 lambda
         return tx.execute(status -> persist(cursor, transfers, last, from, batchEnd));
+    }
+
+    /** 我们问的是 [from, to]，节点给了别的块的日志：不是范围问题，是答非所问，停下。 */
+    private static void requireWithinRange(List<Erc20Transfer> transfers, long from, long to) {
+        for (Erc20Transfer t : transfers) {
+            if (t.blockNumber() < from || t.blockNumber() > to) {
+                throw new IllegalStateException("节点返回了请求范围外的日志：要 " + from + ".." + to + "，给了块 "
+                        + t.blockNumber() + "（" + t.blockHash() + "）：节点答非所问，停下");
+            }
+        }
+    }
+
+    /** 每条日志声称的块哈希必须等于该块的头。from / to 的头已在手里，其余有日志的块再取一次。 */
+    private void requireLogsMatchHeaders(List<Erc20Transfer> transfers, BlockHeader first, BlockHeader last) {
+        Map<Long, BlockHeader> headers = new HashMap<>();
+        headers.put(first.number(), first);
+        headers.put(last.number(), last);
+        for (Erc20Transfer t : transfers) {
+            BlockHeader header = headers.computeIfAbsent(t.blockNumber(), n -> chain.block(n));
+            if (!t.blockHash().equalsIgnoreCase(header.hash())) {
+                throw new JsonRpcException(null, "块 " + t.blockNumber() + " 的日志声称块哈希 " + t.blockHash()
+                        + "，节点现在说该块是 " + header.hash()
+                        + "：节点前后不一致（重组正在发生或换了节点），这批作废，稍后再试");
+            }
+        }
+    }
+
+    /** 取完日志和 block(to) 之后再读一次 block(from)：哈希、父哈希都没变，这几次读取才是同一条链的快照。 */
+    private void requireStillOnTheSameBranch(BlockHeader first) {
+        BlockHeader again = chain.block(first.number());
+        boolean unchanged = again.hash().equalsIgnoreCase(first.hash())
+                && again.parentHash().equalsIgnoreCase(first.parentHash());
+        if (!unchanged) {
+            throw new JsonRpcException(null, "块 " + first.number() + " 在取批期间换了哈希（" + first.hash() + " → "
+                    + again.hash() + "）：节点前后不一致，这批作废，稍后再试");
+        }
     }
 
     private BatchResult persist(IndexerCursor expected, List<Erc20Transfer> transfers,

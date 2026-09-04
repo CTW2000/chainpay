@@ -12,6 +12,8 @@ import com.chainpay.chain.indexer.domain.BatchResult;
 import com.chainpay.chain.indexer.domain.IndexerCursor;
 import com.chainpay.chain.indexer.repository.IndexerCursorRepository;
 import com.chainpay.chain.indexer.repository.TransferLogRepository;
+import com.chainpay.chain.rpc.Hex;
+import com.chainpay.chain.rpc.JsonRpcException;
 import com.chainpay.chain.rpc.RawLog;
 import com.chainpay.chain.support.FakeChain;
 import com.chainpay.support.AbstractPostgresTest;
@@ -20,6 +22,7 @@ import java.math.BigInteger;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -297,7 +300,116 @@ class BlockIndexerTest extends AbstractPostgresTest {
                 .hasMessageContaining("0x");
     }
 
+    // ------------------------------------------------------------------ 一批的归属（2026-09-03 补丁）
+
+    @Test
+    @DisplayName("★ 撕裂的快照：取日志之前链换了分支，这批作废（瞬时），什么都不写；下一批按重组处理")
+    void aReorgBetweenTheHeaderAndTheLogsInvalidatesTheBatch() {
+        chain.withBlocks(10);
+        chain.addTransfer(LINK, 5, ALICE, BOB, TEN_LINK);
+        BlockIndexer indexer = indexer(5);
+        indexer.start(0);
+        indexer.indexNextBatch();                                   // 书签 5；块 5 的行 CANONICAL，记的是旧分支哈希
+        chain.beforeLogs(() -> {                                     // block(6) 已取、父哈希已核对；取日志前链从块 4 起换到 A
+            chain.reorgFrom(4, "A");
+            chain.addTransfer(LINK, 7, ALICE, BOB, TEN_LINK);
+        });
+
+        assertThatThrownBy(indexer::indexNextBatch)
+                .isInstanceOf(JsonRpcException.class)
+                .hasMessageContaining("前后不一致");
+        assertThat(rowCount()).as("A 分支的块 7 没有被写进去").isEqualTo(1);
+        assertThat(cursor()).isEqualTo(new IndexerCursor(CURSOR, 5, FakeChain.hashOf(5)));
+
+        chain.beforeLogs(() -> { });
+        assertThatThrownBy(indexer::indexNextBatch)                  // 链稳定在 A 上：正常的重组检测接手
+                .isInstanceOf(ReorgDetectedException.class);
+    }
+
+    @Test
+    @DisplayName("★ 撕裂的快照（另一侧）：取完日志、取 block(to) 之前链换了分支，同样作废")
+    void aReorgBetweenTheLogsAndTheLastHeaderInvalidatesTheBatch() {
+        chain.withBlocks(10);
+        chain.addTransfer(LINK, 8, ALICE, BOB, TEN_LINK);
+        BlockIndexer indexer = indexer(5);
+        indexer.start(0);
+        indexer.indexNextBatch();                                   // 书签 5
+        AtomicBoolean once = new AtomicBoolean(true);
+        chain.beforeBlock(n -> {
+            if (n == 10 && once.getAndSet(false)) {
+                chain.reorgFrom(4, "A");                             // 日志来自旧分支，block(10) 却来自 A
+            }
+        });
+
+        assertThatThrownBy(indexer::indexNextBatch).isInstanceOf(JsonRpcException.class);
+        assertThat(rowCount()).isZero();
+        assertThat(cursor()).isEqualTo(new IndexerCursor(CURSOR, 5, FakeChain.hashOf(5)));
+    }
+
+    @Test
+    @DisplayName("★ 节点塞进一条不在请求范围里的日志：不是范围问题，是答非所问，停下，什么都不写")
+    void haltsWhenTheNodeReturnsALogOutsideTheRequestedRange() {
+        chain.withBlocks(10);
+        chain.addTransfer(LINK, 3, ALICE, BOB, TEN_LINK);
+        chain.injectIntoGetLogs(transferLog(50, FakeChain.hashOf(50), TEN_LINK));   // 我们问的是 1..10
+        BlockIndexer indexer = indexer(100);
+        indexer.start(0);
+
+        assertThatThrownBy(indexer::indexNextBatch)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("范围");
+        assertThat(rowCount()).isZero();
+        assertThat(cursor()).isEqualTo(new IndexerCursor(CURSOR, 0, FakeChain.hashOf(0)));
+    }
+
+    @Test
+    @DisplayName("★ 日志声称的块哈希和该块的头对不上：节点前后不一致，这批作废，不写")
+    void rejectsALogWhoseBlockHashDoesNotMatchTheHeader() {
+        chain.withBlocks(10);
+        chain.addTransfer(LINK, 3, ALICE, BOB, TEN_LINK);
+        chain.injectIntoGetLogs(transferLog(4, FakeChain.hashOf(4, "X"), TEN_LINK));  // 块 4 的头是原始分支
+        BlockIndexer indexer = indexer(100);
+        indexer.start(0);
+
+        assertThatThrownBy(indexer::indexNextBatch).isInstanceOf(JsonRpcException.class);
+        assertThat(rowCount()).isZero();
+        assertThat(cursor()).isEqualTo(new IndexerCursor(CURSOR, 0, FakeChain.hashOf(0)));
+    }
+
+    @Test
+    @DisplayName("★ 重放带来同一坐标、不同金额的日志：块哈希承诺了内容，两者不可能都对，停下，原行一个字不动")
+    void replayWithADifferentPayloadAtTheSameCoordinateHalts() {
+        chain.withBlocks(5);
+        RawLog original = chain.addTransfer(LINK, 3, ALICE, BOB, TEN_LINK);
+        BlockIndexer indexer = indexer(100);
+        indexer.start(0);
+        indexer.indexNextBatch();                                   // 块 3 的行：10 LINK
+        jdbc.sql("UPDATE indexer_cursor SET last_block_number = 0, last_block_hash = :h WHERE name = :n")
+                .param("h", FakeChain.hashOf(0)).param("n", CURSOR).update();
+        chain.dropFromGetLogs(original);
+        chain.injectIntoGetLogs(transferLog(3, FakeChain.hashOf(3), BigInteger.ONE));   // 同坐标，金额变了
+
+        assertThatThrownBy(indexer::indexNextBatch)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("同一坐标");
+        assertThat(valueAt(3)).isEqualTo(TEN_LINK);
+        assertThat(cursor()).isEqualTo(new IndexerCursor(CURSOR, 0, FakeChain.hashOf(0)));
+    }
+
     // ------------------------------------------------------------------ 脚手架
+
+    /** 一条形状合法的 Transfer 日志，块号、块哈希、金额由调用方指定——造「节点撒谎」。 */
+    private static RawLog transferLog(long block, String blockHash, BigInteger value) {
+        return new RawLog(LINK,
+                List.of(TransferLogDecoder.TRANSFER_TOPIC0, FakeChain.addressTopic(ALICE), FakeChain.addressTopic(BOB)),
+                String.format("0x%064x", value), Hex.fromLong(block), blockHash,
+                FakeChain.txHashOf(block, 0), "0x0", "0x0", false);
+    }
+
+    private BigInteger valueAt(long block) {
+        return jdbc.sql("SELECT value FROM chain_transfer_log WHERE block_number = :b")
+                .param("b", block).query(BigDecimal.class).single().toBigInteger();
+    }
 
     private long rowCount() {
         return jdbc.sql("SELECT COUNT(*) FROM chain_transfer_log").query(Long.class).single();
