@@ -76,6 +76,15 @@ chainpay:
   # 而回环检查在「nginx 与应用同机」的部署下会静默失效。
   admin-token: ${CHAINPAY_ADMIN_TOKEN}
 
+  # M3 · 系统连接：入账、结算这类无人值守、跨所有商户动钱的操作，以独立角色 chainpay_system 连库。
+  # 它带 BYPASSRLS：系统权限是连接身份，不再是 Java 里一个谁都能调的开关（TenantScope.asSystem 只剩测试注资在用，M4 删）。
+  # 密码同样故意不给默认值。角色由 db/init/01-roles.sql 创建；已有的开发库卷要手工补，见 README「把应用跑起来」。
+  system-db:
+    username: ${CHAINPAY_SYSTEM_DB_USER:chainpay_system}
+    password: ${CHAINPAY_SYSTEM_DB_PASSWORD}
+    # 只有定时任务用它，两条连接足够；开小是为了让并发问题暴露（同 spring.datasource.hikari）
+    maximum-pool-size: 2
+
   # M2 · 区块索引器（Sepolia）。
   # rpc-url 故意不在这里给：设了环境变量 CHAINPAY_CHAIN_RPC_URL 才装配索引器
   #（ChainIndexerConfig 上的 @ConditionalOnProperty），不设时应用照常启动。

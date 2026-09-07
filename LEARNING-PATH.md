@@ -541,6 +541,18 @@ OK-ACCESS-SIGN = Base64(HMAC-SHA256(prehash, secretKey))
 ✅ 转入 0 或极小金额 → 按策略处理，不能产生负手续费
 ```
 
+#### 规划与前置知识（2026-09-04 / 09-06）
+
+`docs/knowledge/m3-payin.md`：M2 铺好的路、代码里已下的判决、地址派生（xpub 只看不花）、归属模式、
+FINAL 门槛、镜像账户 `chain:custody:<TOKEN>`、金额换算、`balanceOf` 第二意见、分步 ⓪–⑥。
+「这一步会怎么坏」30 问在 `docs/retro/M3-before.md`，只问不答。
+六个取舍（2026-09-06 由用户拍板，按建议）：系统角色现在升；一户一币一址；BouncyCastle 自写派生；
+离线小工具产 xpub；币种名用 symbol 并对 ACTIVE 代币唯一；`balanceOf` 核对要求相等。
+
+#### 进度
+
+- ✅ **M3-⓪**（2026-09-06）地基：系统权限从「会话变量开关」变成「连接身份」。`db/init/01-roles.sql` 加第二个登录角色 `chainpay_system`（BYPASSRLS、非超级用户、非属主）；V17 只授权（账本三表可读写不可删，merchant 与链表只读，序列可用）并在角色缺失时用一句中文说清怎么办；`ledger/system/SystemLedger`：独立 Hikari 池 + 自己的事务模板 + 绑在系统连接上的一份账本，对外只有 `inTransaction(...)`，建池即自检身份。故意不做成第二个 `DataSource` / `JdbcClient` bean（Boot 自动配置会整体退让）。测试 6 条先红后绿（身份、免会话变量看全表、跨租户记 DEPOSIT、回调抛异常整体回滚、系统身份也删不了账本、配错身份拒绝启动）+ `ControllerBoundaryTest` 加禁 `SystemLedger`。两面墙：去掉 BYPASSRLS → 六条在装配阶段全被拒；拆掉事务模板 → 回滚那条红。全套 237 跑 0 败 0 错 2 跳。**一处操作失误记下来**：恢复墙一时用了 `git checkout`，把同一轮还没提交的角色定义一起抹掉，墙二第一次全错是因为角色不存在——未提交的改动只能用反向编辑恢复，`git checkout` 只回到已提交版本
+
 ---
 
 ### M4 · 付款 Pay-Out

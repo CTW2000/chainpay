@@ -101,6 +101,22 @@ public abstract class AbstractPostgresTest {
         r.add("chainpay.chain.rpc-url", () -> System.getProperty(TEST_RPC_URL_PROPERTY, "false"));
         r.add("chainpay.chain.audit-rpc-url", () -> "");
         r.add("chainpay.chain.start-block", () -> "");
+        // M3-⓪：系统连接以 chainpay_system 连同一个库（同 db/init/01-roles.sql）
+        r.add("chainpay.system-db.username", () -> "chainpay_system");
+        r.add("chainpay.system-db.password", () -> "chainpay_system_dev");
+    }
+
+    /** 容器的 JDBC 地址与属主凭证，给「换一个身份连库」的测试用。 */
+    protected static String jdbcUrl() {
+        return POSTGRES.getJdbcUrl();
+    }
+
+    protected static String ownerUsername() {
+        return POSTGRES.getUsername();
+    }
+
+    protected static String ownerPassword() {
+        return POSTGRES.getPassword();
     }
 
     /**

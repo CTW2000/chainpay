@@ -173,21 +173,21 @@ M1 花了三步才把「这个账户是你的吗」做对（认证 ≠ 授权、
 | 产出 | 说明 |
 |---|---|
 | ~~ArchUnit 测试~~ **已还** | `controller` 包不得引用 `asSystem` —— 2026-09-04 由 `ControllerBoundaryTest` 扫源码兑现（不引 ArchUnit 依赖），M3-⓪ 不必再做 |
-| 系统角色 + 独立连接池 **或** 显式推迟并记录理由 | CLAUDE.md 说 M3 落地时升级。升级 = 新角色 `chainpay_system`（`db/init/01-roles.sql`）+ 只给它放行的 RLS 策略 + 第二个 `DataSource`/`JdbcClient`。要评估：现在只有一个索引器和一个入账任务，值不值得先做？不做的话「一个 public 方法谁都能调」的风险怎么守？ |
-| 选型记录 | 派生地址用哪个库（见 ①） |
+| ~~系统角色 + 独立连接池~~ **已做（2026-09-06）** | CLAUDE.md 说 M3 落地时升级。升级 = 新角色 `chainpay_system`（`db/init/01-roles.sql`）+ 只给它放行的 RLS 策略 + 第二个 `DataSource`/`JdbcClient`。要评估：现在只有一个索引器和一个入账任务，值不值得先做？不做的话「一个 public 方法谁都能调」的风险怎么守？ |
+| 选型记录 | **已定**：BouncyCastle `bcprov-jdk18on`（本机 m2 已缓存），曲线运算用库的、BIP-32 公钥派生与 Keccak 地址自己写；不引 web3j |
 
 ### M3-① 地址派生（零私钥）
 
 - **选型**：仓库里没有 Keccak 和 secp256k1。两条路——`org.web3j:crypto`（成熟、但要联网核实它拖进哪些传递依赖，本机 `~/.m2` 没缓存过它）或直接用 BouncyCastle（`bcprov-jdk18on` 本机已有 ★，`Keccak.Digest256` + `ECPoint` 乘法 + `HMAC-SHA512`，BIP-32 公钥派生约 60 行）。判据同 M2 选裸 JSON-RPC：越是承重的地方抽象越薄，但密码学**不要手写曲线运算**，用库的曲线、自己写派生逻辑。
 - **输入**：账户层 xpub 从环境变量注入（`CHAINPAY_DEPOSIT_XPUB`），无默认值，不设 = 不装配收款模块（同索引器的 `@ConditionalOnProperty`）
-- **表**：`V17 deposit_address(address PK 小写, merchant_id, token, account_id, derivation_index UNIQUE, status ACTIVE/DISABLED, created_at)` + RLS + 派生序号用 `SEQUENCE`
+- **表**：`V18 deposit_address(address PK 小写, merchant_id, token, account_id, derivation_index UNIQUE, status ACTIVE/DISABLED, created_at)` + RLS + 派生序号用 `SEQUENCE`
 - **服务**：`DepositAddressService.allocate(merchantId, token)` —— 确保账户存在 → 取序号 → 派生 → 落库；一户一币一址时重复调用返回同一地址
 - **已知答案测试（KAT）**：BIP-32/BIP-44 的公开测试向量 + **一条自己的**：用一个测试专用助记词导入 MetaMask，它显示的前三个账户地址必须等于我们派生的 `0/0, 0/1, 0/2`（大小写按 EIP-55）。派生错一位，钱就打进没人有私钥的地址——这条 KAT 是 M3 最值钱的测试
 - **墙**：改坏 EIP-55 → KAT 红；把 `MAX+1` 换回来 → 并发分配测试红
 
 ### M3-② 入账队列与记账
 
-- **表**：`V18 deposit(id, transfer_log_id UNIQUE → chain_transfer_log, address, merchant_id, token, amount_ledger NUMERIC(38,18), status, transfer_id → transfer, hold_reason, created_at, credited_at)`；状态词表见 ③
+- **表**：`V19 deposit(id, transfer_log_id UNIQUE → chain_transfer_log, address, merchant_id, token, amount_ledger NUMERIC(38,18), status, transfer_id → transfer, hold_reason, created_at, credited_at)`；状态词表见 ③
 - **任务**：`DepositPoster`（定时，独立于索引器）：
   1. 从 `chain_transfer_confirmation` 取 `level = 'FINAL'`、`to_address ∈ deposit_address(ACTIVE)`、尚无 `deposit` 行的记录
   2. **核对**：向主节点和审计节点各取一次该块头，哈希必须等于行里的 `block_hash`，且块号 ≤ 两个节点的 finalized；不一致 = 不记，HELD
@@ -233,42 +233,9 @@ LEARNING-PATH 的架构图里有它，但它是**外部副作用**——M2 知�
 
 ---
 
-## 四、「这一步会怎么坏」——只提问（答案写进 `docs/retro/M3-before.md`）
+## 四、「这一步会怎么坏」
 
-### 关于地址与归属
-1. 派生出来的地址如果算错了一位，钱去了哪里？谁会先发现——你、商户、还是永远没人？**哪条测试能在上线前抓住它**？
-2. xpub 存在哪？谁能读到它？它泄露的后果是什么、和私钥泄露差在哪？
-3. 派生序号是怎么取的？两个请求同时到达会不会拿到同一个序号？（这是 check-then-act 第 9 次的候选位置。）
-4. 商户把「创建地址」重试了三次，会得到几个地址？三个地址都能收钱吗？
-5. 一个已经 DISABLED 的地址又收到钱了，记还是不记？不记的话钱在哪？
-6. 两个白名单代币的 `symbol` 都叫 USDT（一真一假），账本的 `currency` 列填什么？`chain_token.symbol` 现在有唯一约束吗？
-
-### 关于什么时候记
-7. 入账绑 FINAL，那么 SEEN / SAFE 的钱在 API 里长什么样？商户能不能拿「在路上」的钱去做任何事？
-8. 一条日志 FINAL 了、也记了账，之后它被标成 ORPHANED（理论上不可能，但 `FinalityViolationException` 那条路存在）。账本上那笔怎么办——复式记账里「撤销一笔入账」长什么样？
-9. 索引器停了（HALTED）三个小时，这三小时里到的钱什么时候记？入账任务需要知道索引器的状态吗？
-10. 入账任务本身跑在两个实例上：同一条 FINAL 日志会不会被两个实例同时记？靠什么互斥——行锁、唯一约束、还是「事务里先 INSERT deposit 再转账」的顺序？
-
-### 关于幂等与崩溃
-11. 幂等键为什么是 `(block_hash, log_index)` 而不是 `tx_hash`？重组后同一笔交易换了块，两条日志会不会记两次？
-12. 崩溃在「写 deposit 行」和「写 transfer」之间，重启后会怎样？两者的顺序颠倒过来又会怎样？
-13. 账本的 `transfer()` 是幂等的（同键同体返回原 id）。那 `deposit` 行呢？它和 `transfer` 的一对一关系由谁保证？
-
-### 关于金额
-14. 一笔 `value = 0` 的 Transfer 到了 FINAL，记账层会怎样？`transfer_amount_ck` 会拦，拦下来之后这条日志算处理完了吗？
-15. 一笔 10^33 原始单位的转账（装不下 20 位整数），入账任务会停下来还是跳过？跳过的话谁知道？
-16. 最小入账额定在哪里、谁定、改了之后此前被拒的灰尘要不要补记？
-
-### 关于代币的谎言
-17. 一个转账扣费的代币进了白名单，事件说 100、链上到 98。入账记 100 会怎样？M5 对账能发现吗？在 M3 就能发现吗？
-18. `balanceOf` 核对时用哪个块？`latest` 和 `finalized` 会给出不同的答案吗？地址上同时有一笔 SAFE 的转入，核对会不会误判？
-
-### 关于安全
-19. 商户能不能通过接口枚举出别人的收款地址？「不存在」和「不是你的」两条路径返回的是不是同一句话？
-20. 入账任务用 `asSystem()` 跑，它读的是所有商户的地址表。哪一行代码保证它把钱记到**正确的**商户账户上，而不是记错人？记错了三个判官会响吗？
-
-### 关于测试
-21. 这些坏法里，哪些能用 FakeChain + Testcontainers 构造？哪些只能在 Sepolia 上演练？哪些两者都做不到——那它们靠什么被守？
+题目在 `docs/retro/M3-before.md`（§3 第 ① 步的正式位置，2026-09-06 从这里移过去并补了 22–30 问）。按规矩 AI 只提问不给答案，答案由你写在那份文件里，答不上的写「不知道」。
 
 ---
 

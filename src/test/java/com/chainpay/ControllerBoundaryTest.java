@@ -13,16 +13,17 @@ import org.junit.jupiter.api.Test;
 /**
  * CLAUDE.md 的承诺：{@code TenantScope.asSystem} 是用会话变量模拟的权宜之计，靠「控制器不得调它」这条纪律守着，
  * 「接口多起来了，先用 ArchUnit 断言 controller 包不得引用 asSystem」。接口已经多起来了（三个 controller 包）。
+ * M3-⓪ 之后同一条规则也管 {@code SystemLedger}：系统权限变成了连接身份，控制器拿到它等于拿到全库。
  *
  * <p>不引 ArchUnit：为一条规则背一个依赖，且它对 Java 25 的类文件支持还要碰运气。
  * 扫源码就够——这条规则的形状是「某个包里不出现某个字符串」。守卫的匹配集合不能为空（质询模板 5.10）：
  * 先断言真的找到了控制器，再断言它们干净。
  */
-@DisplayName("架构边界 · controller 包不得引用 asSystem")
+@DisplayName("架构边界 · controller 包不得引用 asSystem 与 SystemLedger")
 class ControllerBoundaryTest {
 
     @Test
-    @DisplayName("★ 每个 controller 包里的源码都不含 asSystem(；且扫描到的控制器不少于三个")
+    @DisplayName("★ 每个 controller 包里的源码都不含 asSystem( 与 SystemLedger；且扫描到的控制器不少于三个")
     void controllersNeverEscalateToSystemScope() throws IOException {
         List<Path> controllers;
         try (Stream<Path> files = Files.walk(Path.of("src/main/java"))) {
@@ -33,7 +34,10 @@ class ControllerBoundaryTest {
 
         assertThat(controllers).as("守卫的匹配集合不能是空的").hasSizeGreaterThanOrEqualTo(3);
         for (Path controller : controllers) {
-            assertThat(Files.readString(controller)).as(controller.toString()).doesNotContain("asSystem(");
+            String source = Files.readString(controller);
+            assertThat(source).as(controller.toString()).doesNotContain("asSystem(");
+            // M3-⓪ 起系统权限是连接身份：拿到 SystemLedger 就拿到了全库，HTTP 层永远不该持有它
+            assertThat(source).as(controller.toString()).doesNotContain("SystemLedger");
         }
     }
 }

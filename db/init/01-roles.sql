@@ -17,3 +17,10 @@
 -- 这里的密码只用于开发和测试。生产环境由 DBA 另设，并通过 CHAINPAY_DB_PASSWORD 注入。
 -- ============================================================================
 CREATE ROLE chainpay_app LOGIN PASSWORD 'chainpay_app_dev';
+
+-- ★ 系统角色（M3-⓪，2026-09-06）★
+-- 入账、结算这类无人值守、跨所有商户动钱的操作，以它连库。BYPASSRLS 让行级安全对它不生效——
+-- 系统权限从此是「连接身份」而不是 Java 里一个谁都能调的开关（TenantScope.asSystem 的会话变量）。
+-- 它仍然不是超级用户、不是表的所有者：能读写账本，不能建表、不能改策略；GRANT 里没有 DELETE，
+-- 账本对系统身份同样只追加。应用启动时会核对这两点，不满足就拒绝启动（SystemLedger）。
+CREATE ROLE chainpay_system LOGIN PASSWORD 'chainpay_system_dev' BYPASSRLS;

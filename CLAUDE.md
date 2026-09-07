@@ -45,7 +45,8 @@ com.chainpay
 ├── common/web/          横切的对外契约：信封、错误码、异常处理、错误写出
 ├── ledger/              账本领域
 │   ├── controller/      对外的转账 / 余额接口
-│   └── service/         ★ 账本核心，禁止 ORM（见下）
+│   ├── service/         ★ 账本核心，禁止 ORM（见下）
+│   └── system/          系统身份的账本入口 SystemLedger（独立角色 + 独立连接池，M3-⓪）
 ├── merchant/            控制面：开户、发凭证、吊销、停用
 │   ├── controller/
 │   └── service/
@@ -109,18 +110,28 @@ SELECT * FROM ledger_invariant WHERE total <> 0;   -- 必须 0 行
 应用以**普通角色** `chainpay_app` 连库（不是超级用户、不是表的所有者），RLS 对它无条件生效。
 角色由 `db/init/01-roles.sql` 建；Flyway 以属主跑迁移。**不要为迁就任何特权角色写代码。**
 
-两种作用域，默认哪个都不设 = 一行都看不到（fail-closed）：
+三种作用域，默认哪个都不设 = 一行都看不到（fail-closed）：
 
-| | 谁用 | 看到什么 |
-|---|---|---|
-| `TenantScope.asMerchant(id, …)` | HTTP 控制器 | 只有该商户的行 |
-| `TenantScope.asSystem(…)` | 注资、结算、M3 入账、M4 出账 | 全部行 |
+| | 谁用 | 看到什么 | 权限来自 |
+|---|---|---|---|
+| `TenantScope.asMerchant(id, …)` | HTTP 控制器 | 只有该商户的行 | 会话变量（同一条应用连接） |
+| `SystemLedger.inTransaction(…)` | M3 入账、结算、M4 出账 | 全部行 | **连接身份**：独立角色 `chainpay_system`（BYPASSRLS，非超级用户，非属主）+ 独立连接池 |
+| `TenantScope.asSystem(…)` | 只剩测试注资（`SystemScopedLedger`） | 全部行 | 会话变量——权宜之计，M4 删 |
 
-**已知权宜之计**：`asSystem()` 是用会话变量模拟的 `BYPASSRLS`，
-靠「控制器不得调它」这条纪律守着——一个 public 方法，任何代码都能调。
-**M3 落地第一个真实的系统操作（入账）时，升级为独立的 system 角色 + 独立连接池**，
-让系统权限变成连接身份而不是一个开关。在那之前接口多起来了，
-**已用 `ControllerBoundaryTest` 扫源码断言 `controller` 包不得引用 `asSystem`**（2026-09-04；不引 ArchUnit 依赖，规则的形状就是「某个包里不出现某个字符串」）。
+**M3-⓪（2026-09-06）兑现了那句承诺**：系统权限是连接身份，不是一个开关。`SystemLedger` 建池即自检
+（不是 BYPASSRLS、或者是超级用户 = 拒绝启动），事务边界由它自己的模板给（手工 `new` 的 `LedgerServiceImpl`
+上的 `@Transactional` 没有代理，形同虚设），账本只在回调里可见。V17 的 GRANT 里没有 DELETE：账本对系统身份同样只追加。
+故意不做成第二个 `DataSource` / `JdbcClient` bean：Boot 的自动配置见到同类型的第二个 bean 就整体退让，主连接反而会坏。
+`ControllerBoundaryTest` 扫源码断言 `controller` 包既不引用 `asSystem` 也不引用 `SystemLedger`（不引 ArchUnit 依赖，规则的形状就是「某个包里不出现某个字符串」）。
+
+**薄实现 vs Boot 官方双数据源（2026-09-07 定：先不换）**：`SystemLedger` 靠**类型**守事务边界与越权出口（拿不到 `Session` 就拿不到账本），
+官方做法靠**限定名字符串**（`@Transactional("systemTx")`、`@Qualifier("system")`，忘了写就静默错）。按「能靠结构保证的，不要靠纪律保证」，前者不是权宜之计。
+**回来换的条件**（任一命中即评估；前两条同时命中即换）：
+① 系统侧超过三个服务类，且 `Session` 开始被当参数一层层往下传；
+② 系统侧需要传播语义：`REQUIRES_NEW`、提交后再发事件、嵌套回滚；
+③ 上线（M6）需要两个池的健康检查与指标进监控——只命中这一条时手工给 Hikari 绑 Micrometer，不换。
+换法：两个 `DataSource` / 事务管理器 / `JdbcClient` 按官方方式声明，应用侧全部 `@Primary`，现有代码不动；`SystemLedger` 保留外形只换内脏，仍是边界测试守的那个类型；
+加一条源码扫描测试「系统包里的 `@Transactional` 必须带限定名」；今天「回调抛异常整体回滚」那条测试换完必须仍绿。
 
 ### 控制面的防护深度（2026-09-02 定：暂不加）
 
