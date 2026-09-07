@@ -57,6 +57,7 @@ com.chainpay
 └── chain/               只读上链（M2）
     ├── rpc/             JSON-RPC 客户端、ChainReader、十六进制、区块头与日志原文
     ├── erc20/           Transfer 事件解码、ABI 编解码与 eth_call 问合约、金额换算
+    ├── wallet/          收款地址派生（M3-①）：Keccak/EIP-55、Base58Check、BIP-32 公钥派生；私钥数学只给 XpubTool 与测试
     └── indexer/         索引器（2026-09-02 拆分：20 个文件按类型分四组）
         ├── service/     BlockIndexer、ChainHeadTracker、ReorgRecovery、ChainIndexerScheduler 及它们抛的异常
         ├── repository/  四张表的 SQL：书签、事件、链头、重组审计
@@ -256,3 +257,5 @@ M2 的形态已在 2026-09-02 出现：不是「先查再改」，是「两个�
 - 绝不进代码、绝不进镜像层、绝不进日志
 - 镜像的层不可变：`COPY` 进去再 `RUN rm` 删掉，密钥仍在前一层里
 - 测试网私钥也按真密钥对待——习惯是练出来的
+- **服务端没有私钥**（M3-①，2026-09-07）：收款地址从账户层 xpub（m/44'/60'/0'）做 BIP-32 普通派生，助记词与 xprv 从头到尾不进服务器。主代码里只有 `chain/wallet` 包能碰 `ExtendedPrivateKey` / `Bip39`，`WalletBoundaryTest` 扫源码守着；xpub 用 `tools/xpub.sh` 断网算，工具不回显、不落盘、不记日志。xpub 泄露 = 隐私全丢（能枚举全部收款地址），但转不走钱；**xpub 加任意一个普通派生的子私钥 = 父私钥**，所以 M4 取私钥签名时绝不能把某个子私钥单独交出去
+- **已知答案必须来自原始文本**：BIP-32 向量经概括模型转述时被抄错一个字母，Base58Check 校验和立刻不成立；规范向量用 curl 取原文逐字核对，不经任何转述

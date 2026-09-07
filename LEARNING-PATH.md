@@ -552,6 +552,7 @@ FINAL 门槛、镜像账户 `chain:custody:<TOKEN>`、金额换算、`balanceOf`
 #### 进度
 
 - ✅ **M3-⓪**（2026-09-06）地基：系统权限从「会话变量开关」变成「连接身份」。`db/init/01-roles.sql` 加第二个登录角色 `chainpay_system`（BYPASSRLS、非超级用户、非属主）；V17 只授权（账本三表可读写不可删，merchant 与链表只读，序列可用）并在角色缺失时用一句中文说清怎么办；`ledger/system/SystemLedger`：独立 Hikari 池 + 自己的事务模板 + 绑在系统连接上的一份账本，对外只有 `inTransaction(...)`，建池即自检身份。故意不做成第二个 `DataSource` / `JdbcClient` bean（Boot 自动配置会整体退让）。测试 6 条先红后绿（身份、免会话变量看全表、跨租户记 DEPOSIT、回调抛异常整体回滚、系统身份也删不了账本、配错身份拒绝启动）+ `ControllerBoundaryTest` 加禁 `SystemLedger`。两面墙：去掉 BYPASSRLS → 六条在装配阶段全被拒；拆掉事务模板 → 回滚那条红。全套 237 跑 0 败 0 错 2 跳。**一处操作失误记下来**：恢复墙一时用了 `git checkout`，把同一轮还没提交的角色定义一起抹掉，墙二第一次全错是因为角色不存在——未提交的改动只能用反向编辑恢复，`git checkout` 只回到已提交版本
+- ✅ **M3-①a**（2026-09-07）地址派生核心（零私钥）：`chain/wallet`——`Keccak256`（BouncyCastle 的 Keccak，不是 JDK 的 SHA3-256）、`EthAddress`（公钥 → 地址、EIP-55 校验和）、`Base58Check`、`Secp256k1`、`ExtendedPublicKey`（xpub 解析 / 序列化 / **CKDpub**）、`DepositAddressDeriver`（账户层 xpub → 0/i，深度不是 3 就拒绝）；私钥数学 `ExtendedPrivateKey` / `Bip39` 只给 `XpubTool` 与测试，`WalletBoundaryTest` 扫源码守着；`tools/xpub.sh` 断网算 xpub。已知答案全来自规范原文：BIP-32 向量 1 与 2、EIP-55 八个地址、BIP-39 两条向量（passphrase TREZOR）、Hardhat 公开助记词的前三个地址（m/44'/60'/0'/0/i）。14 条先红后绿；两面墙：EIP-55 阈值 8 改 7 → 校验和与 Hardhat 地址红；CKDpub 去掉 + K_par → 公钥派生向量与 Hardhat 红、纯私钥派生仍绿。全套 251 跑 0 败 0 错 2 跳。**教训**：第一次经 WebFetch 的概括模型取向量，m/0'/1/2' 的 xprv 被抄错一个字母（m → M），Base58Check 一验就露馅；改为 curl 取原文、脚本逐字核对全部 12 个常量。已知答案的来源本身也要可信，转述一次就不算原文。表、RLS、分配服务在 ①b
 
 ---
 

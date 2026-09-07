@@ -75,6 +75,15 @@ docker exec chainpay-postgres psql -U chainpay -d chainpay -c "CREATE ROLE chain
 
 不补的话 V17 会用一句中文告诉你该做这件事，应用不会带着半个 schema 起来。
 
+**M3 收款地址的 xpub 怎么来**（服务端没有私钥，只拿账户层 xpub 派生地址）：断网，用你的测试网助记词跑一次
+
+```bash
+JAVA_HOME=~/.local/jdk-25/Contents/Home mvn -q compile   # 断网前编译好
+tools/xpub.sh                                            # 按提示输入助记词，不回显
+```
+
+它只打印 `CHAINPAY_DEPOSIT_XPUB=…` 和前三个地址；前三个地址必须和 MetaMask 里同一助记词的前三个账户一致，一致才说明配进去的 xpub 是你钱包的那一支。助记词不进参数、不进环境变量、不进任何文件。
+
 ### 3. 想手工连数据库看看（可选）
 
 ```bash

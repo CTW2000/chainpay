@@ -96,6 +96,15 @@
             <scope>runtime</scope>
         </dependency>
 
+        <!-- M3-①：收款地址派生。只用它的曲线运算（secp256k1）、Keccak-256、RIPEMD-160；
+             BIP-32 / BIP-39 / EIP-55 的逻辑自己写、用规范向量钉住。不引 web3j：为三种类型拖二十个依赖不值。
+             1.78.1 是本机 m2 已缓存的版本，离线可装。 -->
+        <dependency>
+            <groupId>org.bouncycastle</groupId>
+            <artifactId>bcprov-jdk18on</artifactId>
+            <version>1.78.1</version>
+        </dependency>
+
         <!-- ===== 测试 ===== -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
