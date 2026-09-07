@@ -9,6 +9,7 @@ import com.chainpay.chain.rpc.JsonRpcException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.springframework.transaction.support.TransactionTemplate;
 
 /**
@@ -32,6 +33,8 @@ public final class ChainHeadTracker {
     private final ChainHeadRepository heads;
     private final TransactionTemplate tx;
     private final String chainName;
+    /** 审计节点连续几次没能核对 finalized。只在跃迁瞬间 WARN 一次的跳过，会让双节点核对静默地名存实亡 */
+    private final AtomicInteger consecutiveAuditSkips = new AtomicInteger(0);
 
     public ChainHeadTracker(ChainReader chain, ChainHeadRepository heads, TransactionTemplate tx, String chainName) {
         this(chain, null, heads, tx, chainName);
@@ -45,6 +48,11 @@ public final class ChainHeadTracker {
         this.heads = heads;
         this.tx = tx;
         this.chainName = chainName;
+    }
+
+    /** 审计节点连续几次没能核对 finalized（答不出 / 连不上）；核对成功归零。 */
+    public int consecutiveAuditSkips() {
+        return consecutiveAuditSkips.get();
     }
 
     /** 问节点、合并、落库；返回落库后的头。 */
@@ -78,9 +86,12 @@ public final class ChainHeadTracker {
         try {
             theirs = audit.block(finalized.number());
         } catch (JsonRpcException behindOrUnreachable) {
-            log.warn("审计节点答不出 finalized 块 {}，跳过这次比对：{}", finalized.number(), behindOrUnreachable.getMessage());
+            int skips = consecutiveAuditSkips.incrementAndGet();
+            log.warn("审计节点答不出 finalized 块 {}，跳过这次比对（连续第 {} 次）：{}", finalized.number(), skips,
+                    behindOrUnreachable.getMessage());
             return;
         }
+        consecutiveAuditSkips.set(0);
         if (!theirs.hash().equalsIgnoreCase(finalized.hash())) {
             throw new FinalityViolationException("两个节点对 finalized 块 " + finalized.number() + " 意见不同：主节点 "
                     + finalized.hash() + "，审计节点 " + theirs.hash() + "。不知道信谁，停下叫人");

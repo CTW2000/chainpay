@@ -90,6 +90,23 @@ class LogReconcilerTest extends AbstractPostgresTest {
     }
 
     @Test
+    @DisplayName("★ 幻影只被审计一方否认、主节点却确认有：不标废，记为 disputed 等人看")
+    void phantomConfirmedByThePrimaryIsDisputed() {
+        chain.withBlocks(100);
+        chain.reportSafe(90);
+        chain.reportFinalized(80);
+        chain.addTransfer(LINK, 30, ALICE, BOB, TEN_LINK);               // 主节点有、库里有
+        indexAll();
+        FakeChain audit = new FakeChain().withBlocks(100);               // 审计节点的块 30 里没有这笔
+
+        BlockReconciliation r = reconciler(audit).reconcileBlock(30);
+
+        assertThat(r).isEqualTo(new BlockReconciliation(30, FakeChain.hashOf(30), 0, 1, 0, 0, 1));
+        assertThat(statusByHash()).containsEntry(FakeChain.hashOf(30), "CANONICAL");
+        assertThat(reconcileRows()).containsExactly(List.of(30L, 0L, 1L, 0L, 0L, 1L));
+    }
+
+    @Test
     @DisplayName("★ 幻影行被清掉：库里有一行链上没有的记录，两个节点都说没有，标 ORPHANED")
     void phantomRowIsOrphaned() {
         chain.withBlocks(100);

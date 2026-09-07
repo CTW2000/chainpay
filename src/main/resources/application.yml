@@ -93,6 +93,8 @@ chainpay:
     # start-block: 11623000
     # 每次轮询抽几个已 finalized、已索引的块用回执对账（M2-⑤）
     reconcile-samples: 3
+    # 连续几次瞬时失败（或审计节点连续几次答不出）后把状态标成 DEGRADED、每轮报错。12 秒一轮，30 次约 6 分钟
+    degraded-after-failures: 30
     # 审计节点同样只从环境变量来：CHAINPAY_CHAIN_AUDIT_RPC_URL，可不设
 
 logging:

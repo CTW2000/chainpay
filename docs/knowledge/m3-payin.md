@@ -172,7 +172,7 @@ M1 花了三步才把「这个账户是你的吗」做对（认证 ≠ 授权、
 
 | 产出 | 说明 |
 |---|---|
-| ArchUnit 测试 | `controller` 包不得引用 `TenantScope.asSystem`（CLAUDE.md 欠的那条） |
+| ~~ArchUnit 测试~~ **已还** | `controller` 包不得引用 `asSystem` —— 2026-09-04 由 `ControllerBoundaryTest` 扫源码兑现（不引 ArchUnit 依赖），M3-⓪ 不必再做 |
 | 系统角色 + 独立连接池 **或** 显式推迟并记录理由 | CLAUDE.md 说 M3 落地时升级。升级 = 新角色 `chainpay_system`（`db/init/01-roles.sql`）+ 只给它放行的 RLS 策略 + 第二个 `DataSource`/`JdbcClient`。要评估：现在只有一个索引器和一个入账任务，值不值得先做？不做的话「一个 public 方法谁都能调」的风险怎么守？ |
 | 选型记录 | 派生地址用哪个库（见 ①） |
 
@@ -180,14 +180,14 @@ M1 花了三步才把「这个账户是你的吗」做对（认证 ≠ 授权、
 
 - **选型**：仓库里没有 Keccak 和 secp256k1。两条路——`org.web3j:crypto`（成熟、但要联网核实它拖进哪些传递依赖，本机 `~/.m2` 没缓存过它）或直接用 BouncyCastle（`bcprov-jdk18on` 本机已有 ★，`Keccak.Digest256` + `ECPoint` 乘法 + `HMAC-SHA512`，BIP-32 公钥派生约 60 行）。判据同 M2 选裸 JSON-RPC：越是承重的地方抽象越薄，但密码学**不要手写曲线运算**，用库的曲线、自己写派生逻辑。
 - **输入**：账户层 xpub 从环境变量注入（`CHAINPAY_DEPOSIT_XPUB`），无默认值，不设 = 不装配收款模块（同索引器的 `@ConditionalOnProperty`）
-- **表**：`V16 deposit_address(address PK 小写, merchant_id, token, account_id, derivation_index UNIQUE, status ACTIVE/DISABLED, created_at)` + RLS + 派生序号用 `SEQUENCE`
+- **表**：`V17 deposit_address(address PK 小写, merchant_id, token, account_id, derivation_index UNIQUE, status ACTIVE/DISABLED, created_at)` + RLS + 派生序号用 `SEQUENCE`
 - **服务**：`DepositAddressService.allocate(merchantId, token)` —— 确保账户存在 → 取序号 → 派生 → 落库；一户一币一址时重复调用返回同一地址
 - **已知答案测试（KAT）**：BIP-32/BIP-44 的公开测试向量 + **一条自己的**：用一个测试专用助记词导入 MetaMask，它显示的前三个账户地址必须等于我们派生的 `0/0, 0/1, 0/2`（大小写按 EIP-55）。派生错一位，钱就打进没人有私钥的地址——这条 KAT 是 M3 最值钱的测试
 - **墙**：改坏 EIP-55 → KAT 红；把 `MAX+1` 换回来 → 并发分配测试红
 
 ### M3-② 入账队列与记账
 
-- **表**：`V17 deposit(id, transfer_log_id UNIQUE → chain_transfer_log, address, merchant_id, token, amount_ledger NUMERIC(38,18), status, transfer_id → transfer, hold_reason, created_at, credited_at)`；状态词表见 ③
+- **表**：`V18 deposit(id, transfer_log_id UNIQUE → chain_transfer_log, address, merchant_id, token, amount_ledger NUMERIC(38,18), status, transfer_id → transfer, hold_reason, created_at, credited_at)`；状态词表见 ③
 - **任务**：`DepositPoster`（定时，独立于索引器）：
   1. 从 `chain_transfer_confirmation` 取 `level = 'FINAL'`、`to_address ∈ deposit_address(ACTIVE)`、尚无 `deposit` 行的记录
   2. **核对**：向主节点和审计节点各取一次该块头，哈希必须等于行里的 `block_hash`，且块号 ≤ 两个节点的 finalized；不一致 = 不记，HELD

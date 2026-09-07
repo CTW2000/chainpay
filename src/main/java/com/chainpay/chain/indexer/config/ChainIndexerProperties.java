@@ -17,6 +17,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * @param batchBlocks      eth_getLogs 窗口的上限。撞上提供商的限制会减半，成功后翻倍回到这个值
  * @param startBlock       没有书签时从哪开始（该块视为已处理）。不配 = 没书签就停下，不猜
  * @param reconcileSamples 每次轮询抽几个已 finalized、已索引的块用回执对账
+ * @param degradedAfterFailures 连续几次瞬时失败（或审计节点连续几次答不出）后把状态标成 DEGRADED
  */
 @ConfigurationProperties(prefix = "chainpay.chain")
 public record ChainIndexerProperties(
@@ -27,4 +28,5 @@ public record ChainIndexerProperties(
         String cursorName,
         int batchBlocks,
         Long startBlock,
-        int reconcileSamples) {}
+        int reconcileSamples,
+        int degradedAfterFailures) {}

@@ -3,6 +3,7 @@ package com.chainpay.chain.indexer.config;
 import com.chainpay.chain.erc20.Erc20Calls;
 import com.chainpay.chain.indexer.repository.ChainHeadRepository;
 import com.chainpay.chain.indexer.repository.ChainTokenRepository;
+import com.chainpay.chain.indexer.repository.IndexerStateRepository;
 import com.chainpay.chain.indexer.repository.IndexerCursorRepository;
 import com.chainpay.chain.indexer.repository.ReconcileRepository;
 import com.chainpay.chain.indexer.repository.ReorgRepository;
@@ -16,7 +17,10 @@ import com.chainpay.chain.indexer.service.TokenRegistry;
 import com.chainpay.chain.rpc.ChainReader;
 import com.chainpay.chain.rpc.EthRpc;
 import com.chainpay.chain.rpc.JsonRpcClient;
-import java.net.URI;
+import com.chainpay.chain.rpc.RpcEndpoint;
+import java.util.Optional;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import java.security.SecureRandom;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -41,13 +45,31 @@ import org.springframework.transaction.support.TransactionTemplate;
 @ConditionalOnProperty(prefix = "chainpay.chain", name = "rpc-url")
 class ChainIndexerConfig {
 
+    private static final Logger log = LoggerFactory.getLogger(ChainIndexerConfig.class);
+
+    /**
+     * 两道装配期的门。地址经 {@link RpcEndpoint} 解析：失败只报变量名，不回显带 key 的原文。
+     * 审计节点必须独立：同一台主机的两把 key 会被同一个 bug 同时骗过，等于自比对——拒绝启动，
+     * 而不是让「双节点核对」在没人察觉的情况下名存实亡。没配审计节点是允许的，但要在启动日志里说清楚。
+     */
     @Bean
     ChainReaders chainReaders(ChainIndexerProperties properties) {
-        ChainReader primary = new EthRpc(new JsonRpcClient(URI.create(properties.rpcUrl())));
-        ChainReader audit = properties.auditRpcUrl() == null || properties.auditRpcUrl().isBlank()
-                ? primary
-                : new EthRpc(new JsonRpcClient(URI.create(properties.auditRpcUrl())));
-        return new ChainReaders(primary, audit);
+        RpcEndpoint primaryEndpoint = RpcEndpoint.parse("CHAINPAY_CHAIN_RPC_URL", properties.rpcUrl());
+        Optional<RpcEndpoint> auditEndpoint = RpcEndpoint.parseOptional("CHAINPAY_CHAIN_AUDIT_RPC_URL", properties.auditRpcUrl());
+        ChainReader primary = new EthRpc(new JsonRpcClient(primaryEndpoint.uri()));
+        if (auditEndpoint.isEmpty()) {
+            String mode = "单节点（未配置 CHAINPAY_CHAIN_AUDIT_RPC_URL）：对账走主节点自己的回执路径，能抓索引漏日志，抓不住节点整体撒谎";
+            log.warn("索引器主节点 {}；{}", primaryEndpoint.host(), mode);
+            return new ChainReaders(primary, primary, mode);
+        }
+        if (auditEndpoint.get().host().equalsIgnoreCase(primaryEndpoint.host())) {
+            throw new IllegalStateException("审计节点与主节点是同一台主机（" + primaryEndpoint.host()
+                    + "）：同一家的两把 key 不算独立，同一个 bug 会同时骗过两条路径，等于自比对。"
+                    + "要么去掉 CHAINPAY_CHAIN_AUDIT_RPC_URL，要么换一家提供商");
+        }
+        String mode = "双节点：审计节点 " + auditEndpoint.get().host();
+        log.info("索引器主节点 {}；{}", primaryEndpoint.host(), mode);
+        return new ChainReaders(primary, new EthRpc(new JsonRpcClient(auditEndpoint.get().uri())), mode);
     }
 
     @Bean
@@ -105,8 +127,10 @@ class ChainIndexerConfig {
                                                 ReorgRecovery recovery,
                                                 LogReconciler reconciler,
                                                 TokenRegistry registry,
+                                                IndexerStateRepository states,
                                                 ChainIndexerProperties properties) {
-        return new ChainIndexerScheduler(tracker, indexer, recovery, reconciler, registry,
-                properties.tokenAddress(), properties.startBlock());
+        return new ChainIndexerScheduler(tracker, indexer, recovery, reconciler, registry, states,
+                properties.cursorName(), properties.tokenAddress(), properties.startBlock(),
+                properties.degradedAfterFailures());
     }
 }

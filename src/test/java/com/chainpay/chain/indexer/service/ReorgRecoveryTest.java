@@ -159,6 +159,35 @@ class ReorgRecoveryTest extends AbstractPostgresTest {
     }
 
     @Test
+    @DisplayName("没有链头记录就没有地板：拒绝恢复，什么都不写")
+    void refusesToRecoverWithoutAChainHead() {
+        indexChain(100, 90, 50, 80);
+        jdbc.sql("TRUNCATE chain_head").update();
+        chain.reorgFrom(90, "A");
+
+        assertThatThrownBy(() -> recovery().recover(100, FakeChain.hashOf(100)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("链头");
+
+        assertThat(cursor()).isEqualTo(new IndexerCursor(CURSOR, 100, FakeChain.hashOf(100)));
+        assertThat(statusByHash()).containsExactly(entry(FakeChain.hashOf(80), "CANONICAL"));
+    }
+
+    @Test
+    @DisplayName("★ 书签不高于 finalized 却和链上对不上：不是重组，停下，什么都不写")
+    void refusesWhenTheCursorIsNotAboveFinalized() {
+        indexChain(100, 100, 100, 80);                                 // finalized 就是书签这一块
+        chain.reorgFrom(100, "A");                                     // 链上的块 100 换了哈希
+
+        assertThatThrownBy(() -> recovery().recover(100, FakeChain.hashOf(100)))
+                .isInstanceOf(FinalityViolationException.class)
+                .hasMessageContaining("不高于 finalized");
+
+        assertThat(cursor()).isEqualTo(new IndexerCursor(CURSOR, 100, FakeChain.hashOf(100)));
+        assertThat(reorgRows()).isEmpty();
+    }
+
+    @Test
     @DisplayName("★ 重组深过 finalized：不是重组，停下，什么都不写")
     void haltsWhenTheReorgReachesBelowFinalized() {
         indexChain(100, 90, 50, 80);

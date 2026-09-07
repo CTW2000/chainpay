@@ -7,4 +7,4 @@ import com.chainpay.chain.rpc.ChainReader;
  *
  * <p>做成一个 bean 而不是两个 {@code ChainReader} bean：两个同类型的 bean 会让按类型注入产生歧义。
  */
-public record ChainReaders(ChainReader primary, ChainReader audit) {}
+public record ChainReaders(ChainReader primary, ChainReader audit, String auditMode) {}

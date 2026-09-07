@@ -77,6 +77,9 @@ public abstract class AbstractPostgresTest {
      * 忘了调 asMerchant 就看到全库，而所有测试照样全绿。
      * 测试环境必须和生产一样，让应用以它真正会用的那个角色跑。
      */
+    /** 启动冒烟测试用：把索引器真的装配起来，指向本地假节点。别的测试永远不装配。 */
+    protected static final String TEST_RPC_URL_PROPERTY = "chainpay.test.rpc-url";
+
     @DynamicPropertySource
     static void connectAsTheRealAppRole(DynamicPropertyRegistry r) {
         r.add("spring.datasource.url", POSTGRES::getJdbcUrl);
@@ -93,8 +96,9 @@ public abstract class AbstractPostgresTest {
         // 2026-09-03 实测。DynamicPropertySource 的优先级又高于环境变量，在这里把它们钉死。
         r.add("chainpay.admin-token", () -> "chainpay-test-admin-token-not-for-prod");
         r.add("chainpay.secret-key", () -> "Y2hhaW5wYXktdGVzdC1rZXktbm90LWZvci1wcm9kISE=");
-        // @ConditionalOnProperty 把 "false" 当作未开启：测试里永远不装配真节点的索引器
-        r.add("chainpay.chain.rpc-url", () -> "false");
+        // @ConditionalOnProperty 把 "false" 当作未开启：测试里永远不装配真节点的索引器。
+        // 唯一的例外是启动冒烟测试：它在类加载时把这个系统属性指向本地假节点，让容器真的装配一次
+        r.add("chainpay.chain.rpc-url", () -> System.getProperty(TEST_RPC_URL_PROPERTY, "false"));
         r.add("chainpay.chain.audit-rpc-url", () -> "");
         r.add("chainpay.chain.start-block", () -> "");
     }
