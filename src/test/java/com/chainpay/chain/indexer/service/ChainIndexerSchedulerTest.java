@@ -267,6 +267,25 @@ class ChainIndexerSchedulerTest extends AbstractPostgresTest {
     }
 
     @Test
+    @DisplayName("★ 运行中停用代币：下一次轮询就停下，书签不动，不等重启")
+    void haltsOnTheNextTickWhenTheTokenIsDisabledWhileRunning() {
+        chain.withBlocks(10);
+        chain.reportSafe(5);
+        chain.reportFinalized(2);
+        ChainIndexerScheduler scheduler = scheduler(chain, LINK, 0L, 100);
+        assertThat(scheduler.tick().outcome()).isEqualTo(POLLED);         // 书签 10
+        jdbc.sql("UPDATE chain_token SET status = 'DISABLED' WHERE address = :l").param("l", LINK).update();
+        chain.withBlocks(12);
+
+        TickResult next = scheduler.tick();
+
+        assertThat(next.outcome()).isEqualTo(HALTED);
+        assertThat(next.detail()).contains("停用");
+        assertThat(scheduler.isHalted()).isTrue();
+        assertThat(cursorBlock()).as("停用之后一块都不再索引").isEqualTo(10);
+    }
+
+    @Test
     @DisplayName("没有书签也没配起点：停下，说清原因")
     void haltsWhenThereIsNoCursorAndNoStartBlock() {
         chain.withBlocks(10);

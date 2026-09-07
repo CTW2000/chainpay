@@ -8,8 +8,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.chainpay.chain.erc20.TransferLogDecoder;
+import com.chainpay.chain.indexer.domain.ChainToken;
 import com.chainpay.chain.indexer.domain.BatchResult;
 import com.chainpay.chain.indexer.domain.IndexerCursor;
+import com.chainpay.chain.indexer.repository.ChainTokenRepository;
 import com.chainpay.chain.indexer.repository.IndexerCursorRepository;
 import com.chainpay.chain.indexer.repository.TransferLogRepository;
 import com.chainpay.chain.rpc.Hex;
@@ -30,6 +32,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.dao.DataAccessException;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -47,6 +50,7 @@ class BlockIndexerTest extends AbstractPostgresTest {
     static final String LINK  = "0x779877a7b0d9e8603169ddbd7836e478b4624789";
     static final String ALICE = "0x4281ecf07378ee595c564a59048801330f3084ee";
     static final String BOB   = "0x5e97b169613aff0c40a1910e597e9736c3a5ebc3";
+    static final String OTHER = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";   // 另一个合约，不在白名单
     static final String CURSOR = "test:link:transfer";
     static final BigInteger TEN_LINK = new BigInteger("10000000000000000000");
 
@@ -57,6 +61,9 @@ class BlockIndexerTest extends AbstractPostgresTest {
     private TransferLogRepository transferLogs;
 
     @Autowired
+    private ChainTokenRepository tokens;
+
+    @Autowired
     private PlatformTransactionManager txManager;
 
     private FakeChain chain;
@@ -65,6 +72,7 @@ class BlockIndexerTest extends AbstractPostgresTest {
     void resetChainTables() {
         // 应用角色没有 DELETE / TRUNCATE，清表只能用属主连接
         jdbc.sql("TRUNCATE chain_transfer_log, indexer_cursor").update();
+        jdbc.sql("DELETE FROM chain_token WHERE address <> :link").param("link", LINK).update();   // 白名单只留 V13 预置的 LINK
         chain = new FakeChain();
     }
 
@@ -393,6 +401,53 @@ class BlockIndexerTest extends AbstractPostgresTest {
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("同一坐标");
         assertThat(valueAt(3)).isEqualTo(TEN_LINK);
+        assertThat(cursor()).isEqualTo(new IndexerCursor(CURSOR, 0, FakeChain.hashOf(0)));
+    }
+
+    // ------------------------------------------------------------------ 白名单由谁守（M2-⑥ 补丁 3）
+
+    @Test
+    @DisplayName("★ 节点返回了别的合约的日志（不按地址过滤）：整批停下，什么都不写")
+    void haltsWhenTheNodeReturnsAnotherContractsLogs() {
+        chain.withBlocks(10);
+        chain.addTransfer(LINK, 2, ALICE, BOB, TEN_LINK);
+        RawLog foreign = chain.addTransfer(OTHER, 3, ALICE, BOB, TEN_LINK);   // 坐标、块哈希都对，只是不是我们的合约
+        chain.injectIntoGetLogs(foreign);
+        BlockIndexer indexer = indexer(5);
+        indexer.start(0);
+
+        assertThatThrownBy(indexer::indexNextBatch)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("别的合约")
+                .hasMessageContaining(OTHER);
+        assertThat(rowCount()).isZero();
+        assertThat(cursor().lastBlockNumber()).isZero();
+    }
+
+    @Test
+    @DisplayName("★ 库自己也守着白名单：一条未登记代币的日志直接插也插不进（V15 外键）")
+    void databaseRejectsALogOfAnUnregisteredToken() {
+        chain.withBlocks(5);
+        RawLog foreign = chain.addTransfer(OTHER, 3, ALICE, BOB, TEN_LINK);
+
+        assertThatThrownBy(() -> transferLogs.recordCanonical(List.of(TransferLogDecoder.decode(foreign))))
+                .isInstanceOf(DataIntegrityViolationException.class);
+        assertThat(rowCount()).isZero();
+    }
+
+    @Test
+    @DisplayName("★ 书签记得自己服务的代币：换了代币沿用书签名，停下并说清，不从旧进度开始")
+    void haltsWhenTheCursorServesAnotherToken() {
+        tokens.insertIfAbsent(new ChainToken(OTHER, "OTH", 18, "ACTIVE"), "测试：第二枚白名单代币");
+        chain.withBlocks(10);
+        indexer(5).start(0);                                                  // LINK 的书签
+        BlockIndexer reconfigured = new BlockIndexer(chain, cursors, transferLogs,
+                new TransactionTemplate(txManager), CURSOR, OTHER, 5);        // 同一个书签名，换了代币
+
+        assertThatThrownBy(reconfigured::indexNextBatch)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(LINK)
+                .hasMessageContaining(OTHER);
         assertThat(cursor()).isEqualTo(new IndexerCursor(CURSOR, 0, FakeChain.hashOf(0)));
     }
 

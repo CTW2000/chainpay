@@ -96,8 +96,22 @@ public final class BlockIndexer {
      */
     public IndexerCursor start(long fromBlock) {
         BlockHeader header = chain.block(fromBlock);
-        cursors.insertIfAbsent(cursorName, header.number(), header.hash());
+        cursors.insertIfAbsent(cursorName, header.number(), header.hash(), token);
+        requireCursorServesOurToken();
         return cursors.find(cursorName).orElseThrow();
+    }
+
+    /**
+     * 书签记得自己服务的代币（V15）。配置换了 token-address 却沿用旧的 cursor-name，
+     * 索引器会从旧进度开始为新代币拉日志，新代币更早的历史静默丢失——所以对不上就停下，不猜。
+     */
+    private void requireCursorServesOurToken() {
+        String owner = cursors.tokenOf(cursorName)
+                .orElseThrow(() -> new IllegalStateException("书签不存在，先调 start()：" + cursorName));
+        if (!owner.equalsIgnoreCase(token)) {
+            throw new IllegalStateException("书签 " + cursorName + " 是给代币 " + owner + " 的，配置的却是 " + token
+                    + "：换了代币要换 cursor-name 并为新代币配起点，不从旧进度开始猜");
+        }
     }
 
     public int currentWindow() {
@@ -127,6 +141,7 @@ public final class BlockIndexer {
         // ① 读书签，不加锁
         IndexerCursor cursor = cursors.find(cursorName)
                 .orElseThrow(() -> new IllegalStateException("书签不存在，先调 start()：" + cursorName));
+        requireCursorServesOurToken();
 
         // ② 链头。比书签旧（节点落后、负载均衡切到旧节点）就什么都不做——书签永远不倒退
         long head = chain.blockNumber();
@@ -170,7 +185,8 @@ public final class BlockIndexer {
         // ⑥ 解码。任何一条解不了，整批不写
         List<Erc20Transfer> transfers = raw.stream().map(TransferLogDecoder::decode).toList();
 
-        // ⑦ 核对这一批的归属：日志的坐标是节点说的；③④⑤ 之间链可以换分支
+        // ⑦ 核对这一批的归属：合约地址、坐标都是节点说的；③④⑤ 之间链可以换分支
+        requireOurContract(transfers);
         requireWithinRange(transfers, from, to);
         requireLogsMatchHeaders(transfers, first, last);
         requireStillOnTheSameBranch(first);
@@ -178,6 +194,19 @@ public final class BlockIndexer {
         // ⑧ 事务：锁、重读、写、推
         long batchEnd = to;                                          // 循环里改过的变量进不了 lambda
         return tx.execute(status -> persist(cursor, transfers, last, from, batchEnd));
+    }
+
+    /**
+     * getLogs 是按合约地址过滤的，但过滤是节点做的。不按地址过滤的节点给的日志一律不要：
+     * 白名单外的合约说的话不能进事件表（V15 的外键是第二道，这里是第一道，报错更清楚）。
+     */
+    private void requireOurContract(List<Erc20Transfer> transfers) {
+        for (Erc20Transfer t : transfers) {
+            if (!t.token().equalsIgnoreCase(token)) {
+                throw new IllegalStateException("节点返回了别的合约的日志：要 " + token + "，给了 " + t.token()
+                        + "（块 " + t.blockNumber() + " 第 " + t.logIndex() + " 条）：节点不按地址过滤，停下");
+            }
+        }
     }
 
     /** 我们问的是 [from, to]，节点给了别的块的日志：不是范围问题，是答非所问，停下。 */

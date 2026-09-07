@@ -75,9 +75,11 @@ public final class ChainIndexerScheduler {
     }
 
     private TickResult poll() {
+        // 每轮都问白名单（一次主键查询）：运营停用代币要在下一轮生效，不等重启。
+        // 上链核对 decimals 每个进程一次：它要问节点，且 decimals 不是运营会改的东西。
+        // 未登记、已停用、decimals 不一致都是结构性问题，停下；节点答不出是瞬时的
+        registry.requireUsable(token);
         if (!tokenVerified.get()) {
-            // 第一次轮询先核对代币：未登记、已停用、decimals 与链上不一致都是结构性问题，停下；节点答不出是瞬时的
-            registry.requireUsable(token);
             registry.verifyAgainstChain(token);
             tokenVerified.set(true);
         }

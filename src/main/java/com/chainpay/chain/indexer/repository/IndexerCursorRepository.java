@@ -42,17 +42,26 @@ public class IndexerCursorRepository {
                 .optional();
     }
 
-    /** 建书签；已存在就不动它（幂等）。返回这次是否真的插入了。 */
-    public boolean insertIfAbsent(String name, long blockNumber, String blockHash) {
+    /** 建书签并记下它服务的代币；已存在就不动它（幂等）。返回这次是否真的插入了。 */
+    public boolean insertIfAbsent(String name, long blockNumber, String blockHash, String token) {
         return jdbc.sql("""
-                        INSERT INTO indexer_cursor (name, last_block_number, last_block_hash, start_block)
-                        VALUES (:name, :number, :hash, :number)
+                        INSERT INTO indexer_cursor (name, last_block_number, last_block_hash, start_block, token)
+                        VALUES (:name, :number, :hash, :number, :token)
                         ON CONFLICT (name) DO NOTHING
                         """)
                 .param("name", name)
                 .param("number", blockNumber)
                 .param("hash", blockHash)
+                .param("token", token)
                 .update() == 1;
+    }
+
+    /** 这枚书签服务的代币（V15）。索引器每批开始前用它核对配置没有换币而沿用了旧书签。 */
+    public Optional<String> tokenOf(String name) {
+        return jdbc.sql("SELECT token FROM indexer_cursor WHERE name = :name")
+                .param("name", name)
+                .query(String.class)
+                .optional();
     }
 
     /**
