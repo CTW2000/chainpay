@@ -178,7 +178,7 @@ M1 花了三步才把「这个账户是你的吗」做对（认证 ≠ 授权、
 
 ### M3-① 地址派生（零私钥）
 
-> ①a 派生核心 **已做（2026-09-07）**：`chain/wallet`、`tools/xpub.sh`、14 条规范向量测试。①b（表、RLS、分配服务）待做。
+> ①a 派生核心 **已做（2026-09-07）**：`chain/wallet`、`tools/xpub.sh`、14 条规范向量测试。①b **已做（2026-09-07）**：V18 `deposit_address` + RLS + 序列取号 + `DepositAddressService.allocate`，8 条测试。
 
 - **选型**：仓库里没有 Keccak 和 secp256k1。两条路——`org.web3j:crypto`（成熟、但要联网核实它拖进哪些传递依赖，本机 `~/.m2` 没缓存过它）或直接用 BouncyCastle（`bcprov-jdk18on` 本机已有 ★，`Keccak.Digest256` + `ECPoint` 乘法 + `HMAC-SHA512`，BIP-32 公钥派生约 60 行）。判据同 M2 选裸 JSON-RPC：越是承重的地方抽象越薄，但密码学**不要手写曲线运算**，用库的曲线、自己写派生逻辑。
 - **输入**：账户层 xpub 从环境变量注入（`CHAINPAY_DEPOSIT_XPUB`），无默认值，不设 = 不装配收款模块（同索引器的 `@ConditionalOnProperty`）

@@ -28,4 +28,13 @@ class EthAddressTest {
             assertThat(EthAddress.checksummed(expected.toUpperCase().replace("0X", "0x"))).as(expected).isEqualTo(expected);
         }
     }
+
+    @Test
+    @DisplayName("lowercase：校验形状并转小写；不成形的拒绝")
+    void lowercaseValidatesAndNormalizes() {
+        assertThat(EthAddress.lowercase("0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed")).isEqualTo("0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed");
+        for (String bad : List.of("5aaeb6053f3e94c9b9a09f33669435e7ef1beaed", "0x5aaeb6053f3e94c9b9a09f33669435e7ef1beae", "0xzz")) {
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> EthAddress.lowercase(bad)).as(bad).isInstanceOf(IllegalArgumentException.class);
+        }
+    }
 }

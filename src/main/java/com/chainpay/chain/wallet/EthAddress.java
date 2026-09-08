@@ -22,6 +22,14 @@ public final class EthAddress {
         return checksummed("0x" + HexFormat.of().formatHex(Arrays.copyOfRange(hash, 12, 32)));
     }
 
+    /** 校验形状并转成小写：存库一律小写（CHECK 约束要求），对外展示才用 {@link #checksummed}。 */
+    public static String lowercase(String address) {
+        if (address == null || !address.matches("0x[0-9a-fA-F]{40}")) {
+            throw new IllegalArgumentException("不是地址：" + address);
+        }
+        return address.toLowerCase(Locale.ROOT);
+    }
+
     /** 给一个地址加上 EIP-55 校验和（输入大小写不限）。 */
     public static String checksummed(String address) {
         if (address == null || !address.matches("0x[0-9a-fA-F]{40}")) {

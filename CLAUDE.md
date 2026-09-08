@@ -58,6 +58,7 @@ com.chainpay
     ├── rpc/             JSON-RPC 客户端、ChainReader、十六进制、区块头与日志原文
     ├── erc20/           Transfer 事件解码、ABI 编解码与 eth_call 问合约、金额换算
     ├── wallet/          收款地址派生（M3-①）：Keccak/EIP-55、Base58Check、BIP-32 公钥派生；私钥数学只给 XpubTool 与测试
+    ├── deposit/         收款（M3）：config 装配（配了 xpub 才生效）、service 分配地址、repository、domain
     └── indexer/         索引器（2026-09-02 拆分：20 个文件按类型分四组）
         ├── service/     BlockIndexer、ChainHeadTracker、ReorgRecovery、ChainIndexerScheduler 及它们抛的异常
         ├── repository/  四张表的 SQL：书签、事件、链头、重组审计
@@ -178,6 +179,7 @@ M2 的形态已在 2026-09-02 出现：不是「先查再改」，是「两个�
 - 客户端对「发出到正文读完」整段计时，正文 16 MB 封顶。审计节点 `CHAINPAY_CHAIN_AUDIT_RPC_URL` 要独立于主节点才有价值（同一家两台机器会被同一个 bug 骗过）；不设时退化为主节点自己的回执路径，能抓索引漏日志，抓不住节点整体撒谎
 - **代币白名单**（M2-⑥）：Transfer 事件是合约「说」的，余额是合约「做」的；事件金额只对行为规范的代币等于到账金额。只索引、只入账 `chain_token` 里 ACTIVE 的代币；登记时用 `eth_call` 问链上的 `decimals()` 与 `symbol()`，问不到要运营手工填并注明来源；轮询第一次推批前核对链上 decimals 与表一致，不一致 = 停下。symbol 是从别人的合约里解出来的：Java 侧空白或超过 64 字符当问不到，V14 的 CHECK 兜底（note ≤ 500）。ABI 解码里偏移字与长度字是对方给的 32 字节的数，**先在 BigInteger 上比过实际字节数再收窄**，否则 2^31 抛 ArithmeticException、2^30 乘 2 溢出成负数绕过边界检查；形状不对只允许抛 `IllegalArgumentException`，调用方只接这一种。**白名单由数据库守**（V15）：事件表与书签表的 token 都是指向 `chain_token` 的外键，任何写路径都绕不开；索引器落库前比对每条日志的合约地址，不信节点的过滤；轮询**每轮**都 `requireUsable`（一次主键查询，停用下一轮生效、不等重启），上链核对 decimals 每进程一次；书签记住自己服务的代币，配置换了币而书签没换 = 停下，不从旧进度开始猜
 - **金额换算只经 `TokenAmounts.toLedger`**：精确除法、永不四舍五入；整数位超过 20 或 decimals 超过 18 抛 `AmountOverflowException`，M3 把那笔标成「无法入账、等人看」而不是让它卡住循环。铸币（from 为 0x0）按普通入账；不发事件的铸币我们看不见、不入账，留给 M5 用 `balanceOf` 对账发现
+- **收款地址是租户边界**（M3-①b，2026-09-07）：`deposit_address` 挂 RLS（同账户表的策略），`token` 是指向白名单的外键，`account_id` 指向商户在该币上的账本账户（`user:<商户 code>:<SYMBOL>`，分配时 `ON CONFLICT (code) DO NOTHING` 顺手建）。一户一币一址由 `UNIQUE (merchant_id, token)` 裁决，并发申请 `INSERT … ON CONFLICT DO NOTHING`、输的一方读回赢家的地址；序号来自序列 `deposit_address_index_seq`，`UNIQUE (derivation_index)` 保证不重用，跳号无害；`address` 主键冲突不是并发是配置错（序号重用或 xpub 配错），报出来不猜。账本币种名用 symbol，`chain_token` 上 ACTIVE 代币的 symbol 部分唯一索引。模块设了 `CHAINPAY_DEPOSIT_XPUB` 才装配，启动日志打出 xpub 指纹与 0/0 地址供对照，xpub 本身不进日志
 - **停下要能被问到**（M2-⑥ 补丁 3）：状态表 `indexer_state`（RUNNING / DEGRADED / HALTED）。进程启动先读它，HALTED 就不碰节点，**重启不算恢复**，人改回 RUNNING 才算；连续 `degraded-after-failures` 次瞬时失败、或审计节点连续答不出 = DEGRADED，每轮 ERROR；HTTP 401 / 403 是凭证失效，`RpcAuthException` 直接停下不重试；只读接口 `GET /admin/v1/indexer` 一次给全状态、书签、链头、落后块数、争议块数。每种停机原因该做什么见 `docs/runbook/chain-indexer.md`
 - **节点地址按密码对待**：只经 `RpcEndpoint` 解析，失败只报变量名与主机名，永不回显原文（`URI.create` 会把整条含 key 的输入放进异常）；审计节点与主节点同一主机 = 拒绝启动；没配审计节点要在启动日志里写明「单节点」
 - **翻译层是外部 JSON 的唯一入口**：`EthRpc` 缺字段就指名拒绝，不留空指针；`EthRpcTest` 用 2026-09-04 录自 Sepolia 的真实响应做契约测试，`ChainIndexerBootSmokeTest` 让容器真的装配一次索引器（条件注解、属性绑定、`@Scheduled` 三者从此有默认覆盖）

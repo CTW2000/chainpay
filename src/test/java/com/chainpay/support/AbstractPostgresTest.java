@@ -104,7 +104,13 @@ public abstract class AbstractPostgresTest {
         // M3-⓪：系统连接以 chainpay_system 连同一个库（同 db/init/01-roles.sql）
         r.add("chainpay.system-db.username", () -> "chainpay_system");
         r.add("chainpay.system-db.password", () -> "chainpay_system_dev");
+        // M3-①：收款地址模块用 Hardhat 公开助记词的账户层 xpub（m/44'/60'/0'），派出的地址是公开常数，可当已知答案
+        r.add("chainpay.deposit.xpub", () -> HARDHAT_ACCOUNT_XPUB);
     }
+
+    /** Hardhat 默认助记词 test…junk 在 m/44'/60'/0' 的 xpub（tools/xpub.sh 算出，与 Hardhat 公布的前三个地址一致）。 */
+    public static final String HARDHAT_ACCOUNT_XPUB =
+            "xpub6Ce9NcJvTk36xtLSrJLZqE7wtgA5deCeYs7rSQtreh4cj6ByPtrg9sD7V2FNFLPnf8heNP3FGkeV9qwfzvZNSd54JoNXVsXFYSYwHsnJxqP";
 
     /** 容器的 JDBC 地址与属主凭证，给「换一个身份连库」的测试用。 */
     protected static String jdbcUrl() {
