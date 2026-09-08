@@ -153,6 +153,12 @@ public final class FakeChain implements ChainReader {
         defineCall(token, Abi.encodeCall(Abi.BALANCE_OF, holder), Abi.encodeUint(balance));
     }
 
+    /** 某个地址在某一块上的余额：入账任务问的是「那一块」的状态，同一地址在不同块上余额不同。 */
+    public void defineBalanceAt(String token, String holder, long block, java.math.BigInteger balance) {
+        callAnswers.put(token.toLowerCase() + ":" + Abi.encodeCall(Abi.BALANCE_OF, holder).toLowerCase() + ":" + Hex.fromLong(block),
+                Abi.encodeUint(balance));
+    }
+
     /** 原始形式：某个 (to, data) 的返回值。 */
     public void defineCall(String to, String data, String result) {
         callAnswers.put(to.toLowerCase() + ":" + data.toLowerCase(), result);
@@ -271,7 +277,11 @@ public final class FakeChain implements ChainReader {
     @Override
     public String call(String to, String data, String blockTag) {
         beforeCall.run();
-        String answer = callAnswers.get(to.toLowerCase() + ":" + data.toLowerCase());
+        String key = to.toLowerCase() + ":" + data.toLowerCase();
+        String answer = callAnswers.get(key + ":" + blockTag);            // 先找按块高定义的，再退回不分块高的
+        if (answer == null) {
+            answer = callAnswers.get(key);
+        }
         if (answer == null) {
             throw new JsonRpcException(3, "execution reverted（假节点：" + to + " 没有定义对 "
                     + data.substring(0, Math.min(10, data.length())) + " 的回答）");

@@ -202,6 +202,8 @@ M1 花了三步才把「这个账户是你的吗」做对（认证 ≠ 授权、
 
 ### M3-③ 策略与例外
 
+> **已做（2026-09-07）**：V20、`min_deposit`、两节点 balanceOf 核对、瞬时/结构性异常分类、HELD → APPROVED 人工路径、`docs/runbook/deposit.md`。
+
 状态机（写进 CHECK 约束）：`CREDITED` / `IGNORED_ZERO` / `REJECTED_DUST` / `HELD_OVERFLOW` / `HELD_BALANCE_MISMATCH` / `HELD_NODE_DISAGREE`。HELD 类永远不自动重试成 CREDITED，只能人处理后改状态——**入账任务遇到 HELD 要跳过继续，不能卡住整个队列**（CLAUDE.md 那条判决）。
 
 - `chain_token` 加 `min_deposit`（账本单位）；低于它 → `REJECTED_DUST`，记录但不入账
