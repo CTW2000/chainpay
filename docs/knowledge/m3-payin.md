@@ -189,6 +189,8 @@ M1 花了三步才把「这个账户是你的吗」做对（认证 ≠ 授权、
 
 ### M3-② 入账队列与记账
 
+> **已做（2026-09-07）**：V19 `deposit`、`DepositPoster`、`DepositPostingScheduler`，14 条测试。策略（最小入账额、balanceOf 核对）在 ③。
+
 - **表**：`V19 deposit(id, transfer_log_id UNIQUE → chain_transfer_log, address, merchant_id, token, amount_ledger NUMERIC(38,18), status, transfer_id → transfer, hold_reason, created_at, credited_at)`；状态词表见 ③
 - **任务**：`DepositPoster`（定时，独立于索引器）：
   1. 从 `chain_transfer_confirmation` 取 `level = 'FINAL'`、`to_address ∈ deposit_address(ACTIVE)`、尚无 `deposit` 行的记录

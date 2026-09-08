@@ -43,7 +43,7 @@ class AdaptiveWindowTest extends AbstractPostgresTest {
 
     @BeforeEach
     void resetChainTables() {
-        jdbc.sql("TRUNCATE chain_transfer_log, indexer_cursor").update();
+        jdbc.sql("TRUNCATE chain_transfer_log, indexer_cursor CASCADE").update();
         chain = new FakeChain().withBlocks(100);
     }
 

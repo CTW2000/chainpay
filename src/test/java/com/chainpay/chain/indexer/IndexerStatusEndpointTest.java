@@ -47,7 +47,7 @@ class IndexerStatusEndpointTest extends AbstractPostgresTest {
 
     @BeforeEach
     void resetChainTables() {
-        jdbc.sql("TRUNCATE chain_transfer_log, indexer_cursor, chain_head, chain_reconcile, indexer_state").update();
+        jdbc.sql("TRUNCATE chain_transfer_log, indexer_cursor, chain_head, chain_reconcile, indexer_state CASCADE").update();
     }
 
     @Test

@@ -106,6 +106,14 @@ chainpay:
     degraded-after-failures: 30
     # 审计节点同样只从环境变量来：CHAINPAY_CHAIN_AUDIT_RPC_URL，可不设
 
+  # M3 · 收款。xpub 故意不在这里给：设了环境变量 CHAINPAY_DEPOSIT_XPUB 才装配收款地址模块；
+  # 入账任务还要同时有主节点（chain.rpc-url），两者都有才装配。
+  deposit:
+    # 入账任务多久跑一轮。finalized 本身落后十几分钟，比 30 秒更勤没有意义
+    post-interval: 30s
+    # 每轮最多处理几条 FINAL 日志
+    batch-size: 50
+
 logging:
   level:
     # 想看每条 SQL 时把这行打开 —— 账本层的一个核心目的就是"SQL 看得见"

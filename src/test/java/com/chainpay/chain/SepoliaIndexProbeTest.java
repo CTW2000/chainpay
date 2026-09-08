@@ -64,7 +64,7 @@ class SepoliaIndexProbeTest extends AbstractPostgresTest {
     @Test
     @DisplayName("最近 300 块的 LINK 转账落库后，库内条数等于链上条数，书签哈希等于链上哈希")
     void indexesRecentBlocksAndReconcilesAgainstTheChain() {
-        jdbc.sql("TRUNCATE chain_transfer_log, indexer_cursor, chain_head, chain_reconcile").update();
+        jdbc.sql("TRUNCATE chain_transfer_log, indexer_cursor, chain_head, chain_reconcile CASCADE").update();
         var chain = new EthRpc(new JsonRpcClient(URI.create(System.getenv("CHAINPAY_SEPOLIA_RPC"))));
         long startBlock = chain.blockNumber() - BLOCKS_BACK;
         var indexer = new BlockIndexer(chain, cursors, transferLogs, new TransactionTemplate(txManager),

@@ -62,7 +62,7 @@ class LogReconcilerTest extends AbstractPostgresTest {
 
     @BeforeEach
     void resetChainTables() {
-        jdbc.sql("TRUNCATE chain_transfer_log, indexer_cursor, chain_head, chain_reconcile").update();
+        jdbc.sql("TRUNCATE chain_transfer_log, indexer_cursor, chain_head, chain_reconcile CASCADE").update();
         chain = new FakeChain();
     }
 

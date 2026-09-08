@@ -79,7 +79,7 @@ class ChainIndexerSchedulerTest extends AbstractPostgresTest {
 
     @BeforeEach
     void resetChainTables() {
-        jdbc.sql("TRUNCATE chain_transfer_log, indexer_cursor, chain_head, chain_reorg, chain_reconcile, indexer_state").update();
+        jdbc.sql("TRUNCATE chain_transfer_log, indexer_cursor, chain_head, chain_reorg, chain_reconcile, indexer_state CASCADE").update();
         jdbc.sql("UPDATE chain_token SET status = 'ACTIVE', verified_at = NULL WHERE address = :link").param("link", LINK).update();
         chain = new FakeChain();
         chain.defineToken(LINK, "LINK", 18);                        // 链上答得出，且和 V13 预置的一致

@@ -50,7 +50,7 @@ class ConfirmationViewTest extends AbstractPostgresTest {
 
     @BeforeEach
     void resetChainTables() {
-        jdbc.sql("TRUNCATE chain_transfer_log, indexer_cursor, chain_head").update();
+        jdbc.sql("TRUNCATE chain_transfer_log, indexer_cursor, chain_head CASCADE").update();
         chain = new FakeChain();
     }
 

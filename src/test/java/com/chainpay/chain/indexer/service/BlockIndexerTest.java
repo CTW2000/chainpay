@@ -71,7 +71,7 @@ class BlockIndexerTest extends AbstractPostgresTest {
     @BeforeEach
     void resetChainTables() {
         // 应用角色没有 DELETE / TRUNCATE，清表只能用属主连接
-        jdbc.sql("TRUNCATE chain_transfer_log, indexer_cursor").update();
+        jdbc.sql("TRUNCATE chain_transfer_log, indexer_cursor CASCADE").update();
         jdbc.sql("DELETE FROM chain_token WHERE address <> :link").param("link", LINK).update();   // 白名单只留 V13 预置的 LINK
         chain = new FakeChain();
     }
