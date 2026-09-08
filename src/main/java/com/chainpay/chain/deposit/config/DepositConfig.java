@@ -1,7 +1,9 @@
 package com.chainpay.chain.deposit.config;
 
 import com.chainpay.chain.deposit.repository.DepositAddressRepository;
+import com.chainpay.chain.deposit.repository.DepositQueryRepository;
 import com.chainpay.chain.deposit.service.DepositAddressService;
+import com.chainpay.chain.deposit.service.DepositQueryService;
 import com.chainpay.chain.indexer.repository.ChainTokenRepository;
 import com.chainpay.chain.wallet.DepositAddressDeriver;
 import com.chainpay.chain.wallet.ExtendedPublicKey;
@@ -33,6 +35,11 @@ class DepositConfig {
         log.info("收款地址模块已装配：账户层 xpub 指纹 {}，m/44'/60'/0'/0/0 = {}（应等于钱包的第一个账户）",
                 fingerprint, deriver.addressAt(0));
         return deriver;
+    }
+
+    @Bean
+    DepositQueryService depositQueryService(DepositQueryRepository repository) {
+        return new DepositQueryService(repository);
     }
 
     @Bean

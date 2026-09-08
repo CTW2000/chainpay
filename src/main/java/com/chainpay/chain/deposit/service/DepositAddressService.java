@@ -23,6 +23,13 @@ import org.springframework.transaction.support.TransactionTemplate;
  */
 public final class DepositAddressService {
 
+    /** 代币不在白名单里或已停用：对外是 2008，换个代币再来。 */
+    public static class UnsupportedTokenException extends RuntimeException {
+        public UnsupportedTokenException(String message) {
+            super(message);
+        }
+    }
+
     private final DepositAddressDeriver deriver;
     private final DepositAddressRepository addresses;
     private final ChainTokenRepository tokens;
@@ -40,9 +47,9 @@ public final class DepositAddressService {
         String token = EthAddress.lowercase(tokenAddress);
         return tx.execute(status -> {
             ChainToken chainToken = tokens.find(token)
-                    .orElseThrow(() -> new IllegalStateException("代币未登记：" + token + "。只为白名单里的代币分配收款地址"));
+                    .orElseThrow(() -> new UnsupportedTokenException("代币未登记：" + token + "。只为白名单里的代币分配收款地址"));
             if (!chainToken.isActive()) {
-                throw new IllegalStateException("代币已停用：" + token);
+                throw new UnsupportedTokenException("代币已停用：" + token);
             }
             MerchantRow merchant = addresses.findMerchant(merchantId)
                     .orElseThrow(() -> new IllegalStateException("商户不存在：" + merchantId));

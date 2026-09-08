@@ -3,6 +3,7 @@ package com.chainpay.common.web;
 import com.chainpay.merchant.service.AdminService;
 import com.chainpay.security.service.AccountAccessService;
 
+import com.chainpay.chain.deposit.service.DepositAddressService.UnsupportedTokenException;
 import com.chainpay.merchant.service.AdminService.AlreadyExistsException;
 import com.chainpay.security.service.AccountAccessService.AccessDeniedException;
 import com.chainpay.ledger.service.LedgerException;
@@ -96,6 +97,12 @@ public class ApiExceptionHandler {
      * {@code duplicate key value violates unique constraint "merchant_code_uk"} ——
      * 表名和约束名对调用方毫无用处，对想摸清库结构的人却很有用。
      */
+    /** 代币不在白名单 → 400 + 2008。消息里只有代币地址，没有内部结构。 */
+    @ExceptionHandler(UnsupportedTokenException.class)
+    public ResponseEntity<ApiResponse<Void>> handleUnsupportedToken(UnsupportedTokenException e) {
+        return ResponseEntity.badRequest().body(ApiResponse.error(ErrorCode.TOKEN_NOT_SUPPORTED, e.getMessage()));
+    }
+
     @ExceptionHandler(AlreadyExistsException.class)
     public ResponseEntity<ApiResponse<Void>> handleAlreadyExists(AlreadyExistsException e) {
         return ResponseEntity.status(HttpStatus.CONFLICT)

@@ -58,6 +58,8 @@ public enum ErrorCode {
     CURRENCY_MISMATCH("2006", false),
     /** 请求体超过上限。2xxx：请求本身有错，别原样重试。 */
     PAYLOAD_TOO_LARGE("2007", false),
+    /** 代币不在白名单里或已停用（M3）。2xxx：换个代币再来，原样重试永远是这个结果。 */
+    TOKEN_NOT_SUPPORTED("2008", false),
 
     // ---- 3xxx 权限 ---------------------------------------------------
     /**

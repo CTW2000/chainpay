@@ -195,10 +195,10 @@ class DepositAddressServiceTest extends AbstractPostgresTest {
     @DisplayName("★ 代币不在白名单或已停用：拒绝，不分配、不建账户")
     void rejectsUnregisteredOrDisabledToken() {
         assertThatThrownBy(() -> tenantScope.asMerchant(acmeId, () -> service.allocate(acmeId, UNKNOWN_TOKEN)))
-                .isInstanceOf(IllegalStateException.class).hasMessageContaining("未登记");
+                .isInstanceOf(DepositAddressService.UnsupportedTokenException.class).hasMessageContaining("未登记");
         jdbc.sql("UPDATE chain_token SET status = 'DISABLED' WHERE address = :link").param("link", LINK).update();
         assertThatThrownBy(() -> tenantScope.asMerchant(acmeId, () -> service.allocate(acmeId, LINK)))
-                .isInstanceOf(IllegalStateException.class).hasMessageContaining("停用");
+                .isInstanceOf(DepositAddressService.UnsupportedTokenException.class).hasMessageContaining("停用");
         assertThat(jdbc.sql("SELECT count(*) FROM deposit_address").query(Long.class).single()).isZero();
         assertThat(jdbc.sql("SELECT count(*) FROM account").query(Long.class).single()).isZero();
     }

@@ -212,6 +212,8 @@ M1 花了三步才把「这个账户是你的吗」做对（认证 ≠ 授权、
 
 ### M3-④ 对外接口（照币安 / OKX）
 
+> **已做（2026-09-07）**：`DepositController`、`DepositQueryService`、`DepositQueryRepository`，错误码 2008，5 条真 HTTP 测试。
+
 - `POST /api/v1/deposit-addresses {token}` → `{address(EIP-55), token, createdAt}`，幂等
 - `GET /api/v1/deposits?token=…&status=…` → 列表，金额字符串，含 `confirmations` 与 `level`（SEEN/SAFE/FINAL），让商户看到「在路上」的钱
 - 余额接口区分 `available`（已记账）与 `pending`（SEEN/SAFE 合计）——两个门槛在 API 上的样子
