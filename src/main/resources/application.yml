@@ -2,6 +2,15 @@ spring:
   application:
     name: chainpay
 
+  task:
+    scheduling:
+      # ★ 每个 @Scheduled 任务至少一条线程 ★（M3-⑤ 演练实测，2026-09-08）
+      # Spring 默认只有一条调度线程，索引器（12 秒一轮）和入账任务（30 秒一轮）排队用它：
+      # 入账事务等锁时 chain_head 也停了更新，确认数冻结、降级检测不跑、一条 ERROR 都没有。
+      # 现在两个任务、留有余量；加定时任务时同步加大，ChainIndexerBootSmokeTest 断言「线程数 ≥ 注册的任务数」。
+      pool:
+        size: 4
+
   datasource:
     # 对应 docker-compose.yml 里绑在 127.0.0.1:5433 的 Postgres 18。
     #
@@ -84,6 +93,9 @@ chainpay:
     password: ${CHAINPAY_SYSTEM_DB_PASSWORD}
     # 只有定时任务用它，两条连接足够；开小是为了让并发问题暴露（同 spring.datasource.hikari）
     maximum-pool-size: 2
+    # 等锁的上限（M3-⑤ 演练实测）。没有它，别的事务握着账本表时入账事务会无限期等下去，还拖住调度线程。
+    # 超时按瞬时失败处理：这一轮提前结束、下一轮再来，不进 HELD。5 秒：账本事务都很短，等得更久说明有人握着不该握的锁
+    lock-timeout: 5s
 
   # M2 · 区块索引器（Sepolia）。
   # rpc-url 故意不在这里给：设了环境变量 CHAINPAY_CHAIN_RPC_URL 才装配索引器

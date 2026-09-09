@@ -17,6 +17,11 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.Instant;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -26,6 +31,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.context.ApplicationContext;
 import org.springframework.scheduling.annotation.ScheduledAnnotationBeanPostProcessor;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -110,5 +116,41 @@ class ChainIndexerBootSmokeTest extends AbstractPostgresTest {
         assertThat(data.get("lastTickOutcome").asString()).isEqualTo("RETRY_LATER");
         assertThat(data.get("consecutiveFailures").asInt()).isGreaterThanOrEqualTo(1);
         assertThat(data.get("auditMode").asString()).contains("单节点");
+    }
+
+    /**
+     * M3-⑤ 演练实测：入账事务等锁时 {@code chain_head} 不再更新——两个 {@code @Scheduled} 任务共用 Spring 默认的一条调度线程，
+     * 一个卡住另一个跟着停，而降级检测在轮里做，轮不跑连 ERROR 都没有。每个任务至少要有自己的一条线程。
+     */
+    @Test
+    @DisplayName("★ 调度线程不止一条：一个定时任务卡住，别的任务照跑")
+    void aBlockedScheduledTaskDoesNotStallTheOthers() throws Exception {
+        ThreadPoolTaskScheduler taskScheduler = context.getBean(ThreadPoolTaskScheduler.class);
+        int registered = context.getBean(ScheduledAnnotationBeanPostProcessor.class).getScheduledTasks().size();
+        assertThat(taskScheduler.getScheduledThreadPoolExecutor().getCorePoolSize())
+                .as("每个 @Scheduled 任务至少一条线程（现在注册了 %d 个）", registered)
+                .isGreaterThanOrEqualTo(registered);
+
+        CountDownLatch blockedStarted = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        AtomicInteger heartbeats = new AtomicInteger();
+        ScheduledFuture<?> blocker = taskScheduler.schedule(() -> {
+            blockedStarted.countDown();
+            try {
+                release.await(10, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }, Instant.now());
+        ScheduledFuture<?> heartbeat = taskScheduler.scheduleAtFixedRate(heartbeats::incrementAndGet, Duration.ofMillis(50));
+        try {
+            assertThat(blockedStarted.await(5, TimeUnit.SECONDS)).as("卡住的任务先拿到线程").isTrue();
+            Thread.sleep(1_000);
+            assertThat(heartbeats.get()).as("一个任务占着线程等锁时，别的任务仍在跑").isGreaterThanOrEqualTo(3);
+        } finally {
+            release.countDown();
+            heartbeat.cancel(true);
+            blocker.cancel(true);
+        }
     }
 }

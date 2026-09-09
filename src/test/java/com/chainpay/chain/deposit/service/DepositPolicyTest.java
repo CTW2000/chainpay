@@ -7,6 +7,7 @@ import com.chainpay.chain.deposit.domain.PostingResult;
 import com.chainpay.chain.deposit.repository.DepositRepository;
 import com.chainpay.chain.rpc.JsonRpcException;
 import java.math.BigInteger;
+import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.DisplayName;
@@ -154,6 +155,24 @@ class DepositPolicyTest extends AbstractDepositPostingTest {
         assertThat(jdbc.sql("SELECT count(*) FROM deposit").query(Long.class).single()).isZero();
 
         assertThat(poster.postOnce().credited()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("★ 账本表被别的事务锁住：等锁超时按瞬时处理，这一轮提前结束、不记 HELD；锁一放下一轮照记")
+    void lockedLedgerMakesTheRoundRetryLaterNotHeld() throws Exception {
+        pay(5, TEN_LINK);
+        indexUpTo(100, 90, 50);
+
+        try (AutoCloseable lock = holdExclusiveLock("entry", Duration.ofSeconds(6))) {
+            PostingResult first = poster().postOnce();
+
+            assertThat(first.retryLater()).as(first.detail()).isTrue();
+            assertThat(first.detail()).contains("瞬时");
+            assertThat(jdbc.sql("SELECT count(*) FROM deposit").query(Long.class).single()).as("占坑随事务一起回滚").isZero();
+        }
+
+        assertThat(poster().postOnce().credited()).isEqualTo(1);
+        assertThat(depositStatus(5)).startsWith("CREDITED");
     }
 
     @Test

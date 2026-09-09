@@ -67,8 +67,22 @@ public final class BlockIndexer {
     private final String cursorName;
     private final String token;
     private final int batchBlocks;
-    /** 当前 eth_getLogs 的窗口：撞上限减半，成功翻倍回到 batchBlocks。 */
+    /** 当前 eth_getLogs 的窗口（块数）。 */
     private final java.util.concurrent.atomic.AtomicInteger window;
+    /**
+     * 失败过的尺寸里最小的那个（0 = 还没撞过上限）。有它在，成功后只向它二分逼近，不翻倍撞回去。
+     * 2026-09-08 真环境实测：Alchemy 免费层限 10 块，「成功后翻倍」在这个固定上限上永远震荡，一半调用注定失败。
+     */
+    private final java.util.concurrent.atomic.AtomicInteger knownTooLarge;
+    /** 最近成功过的最大尺寸：再撞上限时退到这里，不必从一半重新爬。 */
+    private final java.util.concurrent.atomic.AtomicInteger knownGood;
+    /** 自上次失败以来连续成功的批数。 */
+    private final java.util.concurrent.atomic.AtomicInteger successStreak;
+    /**
+     * 天花板之下连续成功满这么多批就忘掉它、重新试探一次：提供商放宽了限制要能发现，
+     * 一次瞬时的带 code 的错也不该把窗口压低到进程重启。100 批在稳态约 20 分钟。
+     */
+    static final int REPROBE_AFTER = 100;
 
     public BlockIndexer(ChainReader chain,
                         IndexerCursorRepository cursors,
@@ -88,6 +102,9 @@ public final class BlockIndexer {
         this.token = requireAddress(token);
         this.batchBlocks = batchBlocks;
         this.window = new java.util.concurrent.atomic.AtomicInteger(batchBlocks);
+        this.knownTooLarge = new java.util.concurrent.atomic.AtomicInteger(0);
+        this.knownGood = new java.util.concurrent.atomic.AtomicInteger(0);
+        this.successStreak = new java.util.concurrent.atomic.AtomicInteger(0);
     }
 
     /**
@@ -116,6 +133,33 @@ public final class BlockIndexer {
 
     public int currentWindow() {
         return window.get();
+    }
+
+    /** 撞上限：记住这个尺寸，退到最近成功过的尺寸；从没成功过（或上限降到了它之下）就减半。 */
+    private void shrinkAfterFailure(int failedSize) {
+        knownTooLarge.set(failedSize);
+        if (knownGood.get() >= failedSize) {
+            knownGood.set(0);                                   // 以前能过的尺寸现在不行了：上限降了，重新摸
+        }
+        window.set(Math.max(1, Math.max(knownGood.get(), failedSize / 2)));
+        successStreak.set(0);
+    }
+
+    /**
+     * 成功后长窗口。没撞过上限就翻倍（到 batchBlocks 为止）；撞过就只向记住的天花板二分逼近，
+     * 收敛在「天花板减一」上，之后每批只问一次。连续成功满 {@link #REPROBE_AFTER} 批忘掉天花板试探一次。
+     */
+    private void growAfterSuccess(int usedSize) {
+        knownGood.accumulateAndGet(usedSize, Math::max);
+        int ceiling = knownTooLarge.get();
+        if (ceiling != 0 && successStreak.incrementAndGet() >= REPROBE_AFTER) {
+            knownTooLarge.set(0);
+            successStreak.set(0);
+            ceiling = 0;
+        }
+        int current = window.get();
+        int next = ceiling == 0 ? current * 2 : Math.max(current, (current + ceiling) / 2);
+        window.set(Math.min(batchBlocks, next));
     }
 
     /**
@@ -156,12 +200,14 @@ public final class BlockIndexer {
         if (!first.parentHash().equalsIgnoreCase(cursor.lastBlockHash())) {
             throw new ReorgDetectedException(from, cursor.lastBlockHash(), first.parentHash());
         }
-        // ⑤ 取日志。撞上提供商的上限（带 code 的错）就对半分重试，成功后翻倍回到 batchBlocks；
+        // ⑤ 取日志。撞上提供商的上限（带 code 的错）就对半分重试；成功后不翻倍撞回去，而是记住失败过的尺寸、
+        //    向它二分逼近（shrinkAfterFailure / growAfterSuccess，M3-⑤ 演练补丁）。
         //    减到一块还失败就停下——那不是范围问题。传输失败（code 为空）是瞬时的，不缩窗口、原样抛出
         long to;
         List<RawLog> raw;
         while (true) {
             to = Math.min(cursor.lastBlockNumber() + window.get(), head);
+            int requested = (int) (to - from + 1);
             try {
                 raw = chain.logs(from, to, token, TransferLogDecoder.TRANSFER_TOPIC0);
                 break;
@@ -169,15 +215,14 @@ public final class BlockIndexer {
                 if (e.code() == null) {
                     throw e;
                 }
-                int current = window.get();
-                if (current <= 1 || to == from) {
+                if (requested <= 1) {
                     throw new IllegalStateException("单块 " + from + " 的日志也取不到（节点说：" + e.getMessage()
                             + "）：不是范围问题，换提供商或检查它的归档范围");
                 }
-                window.set(Math.max(1, current / 2));
+                shrinkAfterFailure(requested);
             }
         }
-        window.set(Math.min(batchBlocks, window.get() * 2));
+        growAfterSuccess((int) (to - from + 1));
         BlockHeader last = to == from ? first : chain.block(to);
         if (last.number() != to) {
             throw new IllegalStateException("节点返回了错误的区块：要 " + to + "，给了 " + last.number());

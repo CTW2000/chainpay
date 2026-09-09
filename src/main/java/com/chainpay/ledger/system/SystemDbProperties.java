@@ -1,5 +1,6 @@
 package com.chainpay.ledger.system;
 
+import java.time.Duration;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.bind.DefaultValue;
 
@@ -13,5 +14,7 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
 public record SystemDbProperties(
         @DefaultValue("chainpay_system") String username,
         String password,
-        @DefaultValue("2") int maximumPoolSize
+        @DefaultValue("2") int maximumPoolSize,
+        /** 系统连接等锁的上限；超时按瞬时失败处理（M3-⑤ 演练补丁）。 */
+        @DefaultValue("5s") Duration lockTimeout
 ) {}

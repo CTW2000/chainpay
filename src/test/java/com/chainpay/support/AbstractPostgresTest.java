@@ -1,6 +1,11 @@
 package com.chainpay.support;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.time.Duration;
 
 import com.chainpay.ledger.service.LedgerService;
 import com.chainpay.security.service.RateLimiter;
@@ -104,6 +109,7 @@ public abstract class AbstractPostgresTest {
         // M3-⓪：系统连接以 chainpay_system 连同一个库（同 db/init/01-roles.sql）
         r.add("chainpay.system-db.username", () -> "chainpay_system");
         r.add("chainpay.system-db.password", () -> "chainpay_system_dev");
+        r.add("chainpay.system-db.lock-timeout", () -> "1s");   // 测试里等锁 1 秒就够证明「会放弃」
         // M3-①：收款地址模块用 Hardhat 公开助记词的账户层 xpub（m/44'/60'/0'），派出的地址是公开常数，可当已知答案
         r.add("chainpay.deposit.xpub", () -> HARDHAT_ACCOUNT_XPUB);
     }
@@ -113,6 +119,36 @@ public abstract class AbstractPostgresTest {
             "xpub6Ce9NcJvTk36xtLSrJLZqE7wtgA5deCeYs7rSQtreh4cj6ByPtrg9sD7V2FNFLPnf8heNP3FGkeV9qwfzvZNSd54JoNXVsXFYSYwHsnJxqP";
 
     /** 容器的 JDBC 地址与属主凭证，给「换一个身份连库」的测试用。 */
+    /**
+     * 用属主连接在<b>另一个事务</b>里锁住一张表（EXCLUSIVE：挡写不挡读），模拟「别的事务正握着账本」。
+     * 兜底 {@code autoRelease} 之后自动放锁：被测代码若没有 lock_timeout 会一直等，测试要能以失败结束而不是挂死。
+     * 关闭返回值即放锁。
+     */
+    protected static AutoCloseable holdExclusiveLock(String table, Duration autoRelease) throws SQLException {
+        Connection blocker = DriverManager.getConnection(jdbcUrl(), ownerUsername(), ownerPassword());
+        blocker.setAutoCommit(false);
+        try (Statement st = blocker.createStatement()) {
+            st.execute("LOCK TABLE " + table + " IN EXCLUSIVE MODE");
+        }
+        Thread releaser = new Thread(() -> {
+            try {
+                Thread.sleep(autoRelease.toMillis());
+                blocker.rollback();
+            } catch (Exception ignored) {
+                // 测试已经先放锁并关了连接
+            }
+        }, "lock-auto-release");
+        releaser.setDaemon(true);
+        releaser.start();
+        return () -> {
+            try {
+                blocker.rollback();
+            } finally {
+                blocker.close();
+            }
+        };
+    }
+
     protected static String jdbcUrl() {
         return POSTGRES.getJdbcUrl();
     }

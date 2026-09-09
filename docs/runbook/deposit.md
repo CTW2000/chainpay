@@ -77,5 +77,7 @@ ORDER BY d.id;
 `pg_stat_activity` 里 `usename = 'chainpay_system'` 的连接 `wait_event_type = 'Lock'`。此时 `kill -9` 进程，再终止持锁会话，
 `deposit` 应仍是 0 行、`transfer` / `entry` 计数不变；重启后下一轮恰好记一次。锁别放在 `transfer` 上：`deposit` 的外键会让占坑那条 INSERT 先卡住，演练就只剩「一轮没跑完」。
 
-**注意**：入账任务与索引器共用一个调度线程。入账事务卡住时 `chain_head` 也不再更新、`GET /admin/v1/indexer` 的 `lastTickAt` 停在原地——先查系统连接是否在等锁，再怀疑节点。
+**等锁**：系统连接带 `lock_timeout`（默认 5 秒）。别的事务握着账本表时，入账这一轮以 WARN「记块 N 时数据库瞬时失败：…等锁超时（lock_timeout）」提前结束、下一轮再来，不进 HELD。
+反复出现就找是谁握着锁：`SELECT pid, mode, granted FROM pg_locks WHERE relation IN ('entry'::regclass, 'transfer'::regclass, 'deposit'::regclass) AND mode LIKE '%Exclusive%';`。
+索引器与入账任务从 2026-09-09 起各有调度线程，一个等锁另一个照跑。
 

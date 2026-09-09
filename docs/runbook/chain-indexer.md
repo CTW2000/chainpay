@@ -45,8 +45,8 @@ curl -s -H "X-CP-ADMIN-TOKEN: $CHAINPAY_ADMIN_TOKEN" http://127.0.0.1:8095/admin
 | 连续 N 次瞬时失败（DEGRADED） | 网络、限流、提供商故障 | 看 `lastTick` 的 detail 与 `consecutiveFailures`；不用改状态，恢复后自动回 RUNNING |
 | 审计节点连续 N 次答不出（DEGRADED） | 审计节点挂了或落后 | 检查 `CHAINPAY_CHAIN_AUDIT_RPC_URL`；恢复后自动回 RUNNING |
 | `disputedBlocks > 0` | 两个节点对某块的日志意见不同（有无或内容） | `SELECT * FROM chain_reconcile WHERE disputed > 0`，用区块浏览器裁决；M3 之前不会有人据此入账 |
-| 追块很慢（每轮只前进几十块）且日志里没有 ERROR | 提供商限制了 `eth_getLogs` 的块范围（Alchemy 免费层 10 块，HTTP 400 / code -32600「Under the Free tier plan…」），窗口在上限上反复减半、翻倍 | 不是故障。稳态不受影响（Sepolia 每分钟 5 块）；要快就换套餐、换提供商，或把 `chainpay.chain.batch-blocks` 设到上限以内；落后很远又等不起时按第五节前跳书签 |
-| `lastTickAt` 长时间不动，进程还活着 | 入账任务和索引器共用一个调度线程，入账事务可能卡在数据库锁上 | `SELECT pid, wait_event_type, query FROM pg_stat_activity WHERE usename = 'chainpay_system'`；先解锁再怀疑节点 |
+| 追块很慢（每轮只前进约 `batch-blocks` × 10 以内）且日志里没有 ERROR | 提供商限制了 `eth_getLogs` 的块范围（Alchemy 免费层 10 块，HTTP 400 / code -32600「Under the Free tier plan…」）。窗口会自己收敛到上限、每批只问一次（2026-09-09 起），但每轮仍最多 10 批 | 不是故障。稳态不受影响（Sepolia 每分钟 5 块）；要快就换套餐、换提供商；落后很远又等不起时按第五节前跳书签；「追赶不受每轮 10 批限制」是 M6 的题 |
+| `lastTickAt` 长时间不动，进程还活着 | 2026-09-09 起索引器与入账任务各有线程、系统连接等锁 5 秒就放弃，这一现象不该再出现；出现即是新 bug | 先看线程转储里 scheduling-* 线程在做什么，再 `SELECT pid, wait_event_type, query FROM pg_stat_activity WHERE usename = 'chainpay_system'` |
 
 ## 三、恢复
 

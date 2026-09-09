@@ -9,12 +9,14 @@ import com.chainpay.ledger.service.LedgerService.TransferCommand;
 import com.chainpay.support.AbstractPostgresTest;
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.Duration;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.dao.DataAccessException;
+import org.springframework.dao.TransientDataAccessException;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
 /**
@@ -126,12 +128,37 @@ class SystemLedgerTest extends AbstractPostgresTest {
     }
 
     @Test
+    @DisplayName("★ 系统连接带 lock_timeout：等锁超过上限就放弃，抛的是瞬时异常——入账任务据此下一轮再来，而不是 HELD_ERROR")
+    void lockWaitFailsFastAsATransientError() throws Exception {
+        try (AutoCloseable lock = holdExclusiveLock("entry", Duration.ofSeconds(6))) {
+            long started = System.nanoTime();
+
+            assertThatThrownBy(() -> systemLedger.inTransaction(s ->
+                    s.jdbc().sql("LOCK TABLE entry IN ROW EXCLUSIVE MODE").update()))
+                    .isInstanceOf(TransientDataAccessException.class)
+                    .hasStackTraceContaining("lock timeout");
+
+            assertThat(Duration.ofNanos(System.nanoTime() - started))
+                    .as("测试基类把 lock-timeout 钉在 1 秒；没有超时会等到兜底放锁的 6 秒后成功")
+                    .isLessThan(Duration.ofSeconds(4));
+        }
+    }
+
+    @Test
+    @DisplayName("系统池里每条连接都带着配置的 lock_timeout（测试钉 1s）")
+    void systemConnectionsCarryTheConfiguredLockTimeout() {
+        String timeout = systemLedger.inTransaction(s -> s.jdbc().sql("SHOW lock_timeout").query(String.class).single());
+
+        assertThat(timeout).isEqualTo("1s");
+    }
+
+    @Test
     @DisplayName("★ 配错身份就起不来：应用角色没有 BYPASSRLS 被拒；属主是超级用户也被拒")
     void refusesTheWrongIdentityAtStartup() {
-        assertThatThrownBy(() -> SystemLedger.connect(jdbcUrl(), "chainpay_app", "chainpay_app_dev", 1))
+        assertThatThrownBy(() -> SystemLedger.connect(jdbcUrl(), "chainpay_app", "chainpay_app_dev", 1, Duration.ofSeconds(1)))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("BYPASSRLS");
-        assertThatThrownBy(() -> SystemLedger.connect(jdbcUrl(), ownerUsername(), ownerPassword(), 1))
+        assertThatThrownBy(() -> SystemLedger.connect(jdbcUrl(), ownerUsername(), ownerPassword(), 1, Duration.ofSeconds(1)))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("超级用户");
     }

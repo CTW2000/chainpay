@@ -4,9 +4,13 @@ import com.chainpay.ledger.service.LedgerService;
 import com.chainpay.ledger.service.LedgerServiceImpl;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
+import java.time.Duration;
 import java.util.function.Function;
+import org.springframework.dao.CannotAcquireLockException;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.jdbc.support.JdbcTransactionManager;
+import org.springframework.jdbc.support.SQLExceptionTranslator;
 import org.springframework.transaction.support.TransactionTemplate;
 
 /**
@@ -41,12 +45,18 @@ public final class SystemLedger implements AutoCloseable {
     private SystemLedger(HikariDataSource pool) {
         this.pool = pool;
         this.tx = new TransactionTemplate(new JdbcTransactionManager(pool));
-        JdbcClient jdbc = JdbcClient.create(pool);
+        JdbcTemplate template = new JdbcTemplate(pool);
+        template.setExceptionTranslator(lockTimeoutAsTransient(template.getExceptionTranslator()));
+        JdbcClient jdbc = JdbcClient.create(template);
         this.session = new Session(jdbc, new LedgerServiceImpl(jdbc));
     }
 
     /** 建池、连一次、核对身份。任何一步不满足都抛出，池随之关闭。 */
-    public static SystemLedger connect(String jdbcUrl, String username, String password, int maximumPoolSize) {
+    public static SystemLedger connect(String jdbcUrl, String username, String password, int maximumPoolSize,
+                                       Duration lockTimeout) {
+        if (lockTimeout == null || lockTimeout.isZero() || lockTimeout.isNegative()) {
+            throw new IllegalArgumentException("lockTimeout 必须大于 0：PostgreSQL 里 0 表示无限等待，那正是要去掉的行为");
+        }
         if (password == null || password.isBlank()) {
             throw new IllegalStateException("系统连接没有密码：设 CHAINPAY_SYSTEM_DB_PASSWORD"
                     + "（角色 chainpay_system 由 db/init/01-roles.sql 创建）");
@@ -58,6 +68,10 @@ public final class SystemLedger implements AutoCloseable {
         config.setMaximumPoolSize(maximumPoolSize);
         config.setPoolName("chainpay-system");
         config.setConnectionTimeout(3_000);
+        // 等锁的上限（M3-⑤ 演练实测）：没有它，一个被别的事务握着的账本表能让入账事务无限期等下去，
+        // 而且拖住的是调度线程。超时时 PostgreSQL 抛 SQLSTATE 55P03，被翻译成瞬时异常，入账任务下一轮再来。
+        // 会话级 SET：池里每条物理连接建立时执行一次、之后一直带着；值来自 Duration，不是外部字符串。
+        config.setConnectionInitSql("SET lock_timeout = '" + lockTimeout.toMillis() + "ms'");
         HikariDataSource pool = new HikariDataSource(config);        // 建池即连一次：连不上、密码错，这里就抛
         SystemLedger ledger = new SystemLedger(pool);
         try {
@@ -88,6 +102,21 @@ public final class SystemLedger implements AutoCloseable {
             throw new IllegalStateException("系统连接的角色 " + id.user() + " 没有 BYPASSRLS："
                     + "RLS 会让它一行都看不到，入账任务将静默地无事可做。用 db/init/01-roles.sql 里的 chainpay_system");
         }
+    }
+
+    /**
+     * 等锁超时（SQLSTATE 55P03）是瞬时的：换个时刻再来多半就成了。Spring 7 的 SQLSTATE 翻译器不认识 55 这一类，
+     * 会给 {@code UncategorizedSQLException}（非瞬时）——入账任务据此把那笔记成 HELD_ERROR、等人来看，
+     * 每一次等锁超时都变成一张工单。红灯测试实测就是这样（2026-09-09）。
+     * 所以在系统连接上把它翻成 {@link CannotAcquireLockException}（{@code TransientDataAccessException} 的子类），其余交回默认翻译器。
+     */
+    private static SQLExceptionTranslator lockTimeoutAsTransient(SQLExceptionTranslator defaults) {
+        return (task, sql, ex) -> {
+            if ("55P03".equals(ex.getSQLState())) {
+                return new CannotAcquireLockException(task + "；等锁超时（lock_timeout）：" + ex.getMessage(), ex);
+            }
+            return defaults.translate(task, sql, ex);
+        };
     }
 
     @Override

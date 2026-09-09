@@ -12,6 +12,6 @@ class SystemLedgerConfig {
 
     @Bean(destroyMethod = "close")
     SystemLedger systemLedger(@Value("${spring.datasource.url}") String jdbcUrl, SystemDbProperties system) {
-        return SystemLedger.connect(jdbcUrl, system.username(), system.password(), system.maximumPoolSize());
+        return SystemLedger.connect(jdbcUrl, system.username(), system.password(), system.maximumPoolSize(), system.lockTimeout());
     }
 }
