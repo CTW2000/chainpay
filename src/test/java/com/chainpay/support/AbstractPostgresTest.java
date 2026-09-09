@@ -8,6 +8,7 @@ import java.sql.Statement;
 import java.time.Duration;
 
 import com.chainpay.ledger.service.LedgerService;
+import com.chainpay.ledger.system.SystemLedger;
 import com.chainpay.security.service.RateLimiter;
 import com.chainpay.security.service.TenantScope;
 import com.redis.testcontainers.RedisContainer;
@@ -179,8 +180,9 @@ public abstract class AbstractPostgresTest {
     @Autowired
     protected StringRedisTemplate redisTemplate;
 
+    /** 系统身份的账本入口（M3-⓪）：系统任务与 M0 的账本测试都从这里进。 */
     @Autowired
-    private LedgerService realLedger;
+    protected SystemLedger systemLedger;
 
     @Autowired
     protected TenantScope tenantScope;
@@ -202,7 +204,7 @@ public abstract class AbstractPostgresTest {
      */
     @BeforeEach
     void resetLedger() {
-        ledger = new SystemScopedLedger(realLedger, tenantScope);
+        ledger = new SystemScopedLedger(systemLedger);
         jdbc.sql("TRUNCATE entry, transfer, account RESTART IDENTITY CASCADE").update();
         // Redis 里的计数也要清 —— 现在计数主要存在那里，只清本地等于没清。
         redisTemplate.getConnectionFactory().getConnection().serverCommands().flushAll();

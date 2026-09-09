@@ -8,7 +8,6 @@ import com.chainpay.chain.indexer.service.BlockIndexer;
 import com.chainpay.chain.indexer.service.ChainHeadTracker;
 import com.chainpay.chain.support.FakeChain;
 import com.chainpay.ledger.service.LedgerService;
-import com.chainpay.ledger.system.SystemLedger;
 import com.chainpay.support.AbstractPostgresTest;
 import java.math.BigDecimal;
 import java.math.BigInteger;
@@ -34,9 +33,6 @@ abstract class AbstractDepositPostingTest extends AbstractPostgresTest {
     static final String CURSOR = "test:link:transfer";
     static final BigInteger TEN_LINK = new BigInteger("10000000000000000000");
     static final BigInteger ONE_LINK = new BigInteger("1000000000000000000");
-
-    @Autowired
-    protected SystemLedger systemLedger;
 
     @Autowired
     protected DepositAddressService addressService;

@@ -561,7 +561,13 @@ FINAL 门槛、镜像账户 `chain:custody:<TOKEN>`、金额换算、`balanceOf`
 
 - ✅ **M3-⑤ 补丁**（2026-09-09）演练暴露的三道取舍题，修两道、推一道：① getLogs 窗口记住失败过的尺寸、向它二分逼近（`knownTooLarge` / `knownGood`，收敛在上限上后每批只问一次，连续成功 100 批才忘掉天花板试探一次），真环境实测追块从每轮 32 到 75 块变成稳定的 100 块、零失败调用；② `spring.task.scheduling.pool.size: 4`（每个 `@Scheduled` 任务至少一条线程）+ 系统连接 `lock_timeout` 5s（Hikari `connectionInitSql`）。**红灯里最值钱的一条**：PostgreSQL 等锁超时抛 SQLSTATE 55P03，Spring 7 翻成 `UncategorizedSQLException`（非瞬时），入账任务据此把那笔记成 HELD_ERROR——加了超时反而让每次等锁变成一张工单；于是系统池的 JdbcTemplate 装翻译器把 55P03 翻成 `CannotAcquireLockException`（瞬时）。③「追赶不受每轮 10 批限制」推到 M6（停机恢复那一族）。5 条新测试先红后绿（固定上限 10 块 60 批失败 ≤ 8 且停在 10；上限解除后满一个周期才试探；等锁 1 秒即抛瞬时异常；池里连接带 lock_timeout；账本被锁时入账 retryLater 不 HELD、放锁后照记；一个调度任务卡住别的照跑），四面墙各红了该红的（翻倍回去 → 3 红；不设超时 → 3 红；不翻译 55P03 → 2 红且日志出现 HELD_ERROR；线程池 1 → 1 红）。全套 295 跑 0 败 0 错 2 跳
 
-**M3 ⓪ 到 ⑤ 全部完成（2026-09-06 至 09-08），演练补丁 09-09；⑥ webhook 推迟到 M5 之后。** 复盘 `docs/retro/M3.md`（§3 第 ⑤ 步：M3-before 的 30 问哪几条是自己想到的）由用户写。
+**M3 ⓪ 到 ⑤ 全部完成（2026-09-06 至 09-08），演练补丁 09-09；⑥ webhook 推迟到 M5 之后。**
+
+#### M4 进度
+
+- 📝 **规划与前置知识**（2026-09-09）`docs/knowledge/m4-payout.md`：账户与 nonce、EIP-1559 交易的字段、gas 三个数、RLP 与签名（RFC 6979、low-s、yParity、from 从签名恢复）、交易的一生（回执 status 0 也是上链、同 nonce 只能一笔、广播按内容幂等）、热钱包与冷钱包、复式记账视角的出账（冻结 / 结算 / 解冻）、风控；六步规划与十条取舍（用户按建议定）。动手前的 30 问在 `docs/retro/M4-before.md`（本地）
+- ✅ **M4-⓪**（2026-09-09）地基：V21 拆掉会话变量那道门（五张表策略去掉 `is_system_scope()`、函数删除，`TenantScope.asSystem` 删除，M0 测试脚手架改走 `SystemLedger`）+ 四张表（`hot_wallet`：`next_nonce` 是意图、无 RLS、应用角色连读都没有；`payout`：以冻结开始、`freeze_transfer_id NOT NULL UNIQUE`、settle / reverse 互斥且与状态一一对应、幂等键按商户唯一、RLS 商户只看只插；`payout_tx`：原文先落库、`tx_hash` 唯一、MINED ⇔ 带块、**部分唯一索引 (hot_wallet, nonce) WHERE MINED**；`payout_address` 白名单）+ 系统角色无 DELETE。`PayoutStatus` / `PayoutTxStatus` 显式转换表（BROADCAST 没有到 FAILED 的边：广播后只有回执能宣布结局）。`PayoutLedger` 三笔账本流 `WITHDRAWAL_FREEZE`（商户连接、asMerchant）/ `WITHDRAWAL` / `WITHDRAWAL_REVERSE`（系统身份），「结算过的不能再解冻」由冻结账户不许为负守。23 条先红后绿（状态机 5、账本流 6、表与权限与拆门 12）；三面墙：门装回去 → 红；去掉部分唯一索引 → 红；冻结账户允许为负 → 红。全套 318 跑 0 败 0 错 2 跳。真实启动：V21 落到开发库，带门的策略 5 → 0
+ 复盘 `docs/retro/M3.md`（§3 第 ⑤ 步：M3-before 的 30 问哪几条是自己想到的）由用户写。
 
 ---
 

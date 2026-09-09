@@ -23,6 +23,24 @@
 
 > 判据：解释是为了让用户能**独立判断**这段代码对不对，不是让用户相信它是对的。
 
+### 讲解的结构（2026-09-09 由用户定，硬要求）
+
+用户反馈：讲解时把代码里的字段和逻辑混在一起，看着费劲；重点常被一句话带过。这是学习项目，目的是让用户获得知识，尤其是基础知识。
+从此每一次讲解都按下面的顺序，**不跳层、不混层**：
+
+1. **先讲整体**：这一步在整个系统里的位置、要解决的问题、不做会怎样。这一层不出现任何字段名、类名、SQL。
+2. **再讲基础知识**：这一步用到的概念从零讲（数据库的、以太坊的、记账的、并发的），每个概念配一个能落地的例子。
+   重点不许一句话概括——要讲清「是什么、为什么、错了会怎样」，能给数字就给数字，能给失败场景就给失败场景。
+3. **再讲逻辑与流程**：用图（ASCII 流程图、状态图、表格）讲数据怎么流、状态怎么变、哪几道门各守什么。这一层仍然不贴代码。
+4. **最后单独讲代码**：只挑承重的几段，每段先说它在上面哪个位置、干什么，再贴代码，再逐段用大白话解释。
+   字段名、类名、SQL 关键字第一次出现时要先说明它是什么，不能突然冒出来。
+5. 一段讲解只讲一件事；「为什么这么做」和「不这么做会怎样」都要展开成具体场景，不用一句话带过。
+6. **图的载体**（2026-09-09 由用户定）：复杂的东西——系统结构、多组件交互、状态机、并发时序、一笔钱或一笔交易的一生——
+   做成浏览器页面（Artifact，真正的流程图 / 状态图 / 结构图）配详细解释让用户看；简单的关系用 ASCII 图或表格在终端里讲。
+   **不把所有讲解都搬进浏览器**，那太费 token：一步最多一页，只装那一步里靠文字讲不清的部分。
+
+> 判据：读者不看代码也能复述这一步的逻辑；读到代码时，每一个名字都已经在前面被介绍过。
+
 ## 1. 技术栈（不要擅自更换）
 
 | 层 | 选型 | 版本 |
@@ -59,6 +77,7 @@ com.chainpay
     ├── erc20/           Transfer 事件解码、ABI 编解码与 eth_call 问合约、金额换算
     ├── wallet/          收款地址派生（M3-①）：Keccak/EIP-55、Base58Check、BIP-32 公钥派生；私钥数学只给 XpubTool 与测试
     ├── deposit/         收款（M3）：config 装配（配了 xpub 才生效）、service 分配与入账、repository、domain、controller 商户接口
+    ├── payout/          付款（M4）：domain 状态机（PayoutStatus / PayoutTxStatus 显式转换表）、service 三笔账本流（PayoutLedger）
     └── indexer/         索引器（2026-09-02 拆分：20 个文件按类型分四组）
         ├── service/     BlockIndexer、ChainHeadTracker、ReorgRecovery、ChainIndexerScheduler 及它们抛的异常
         ├── repository/  四张表的 SQL：书签、事件、链头、重组审计
@@ -112,13 +131,15 @@ SELECT * FROM ledger_invariant WHERE total <> 0;   -- 必须 0 行
 应用以**普通角色** `chainpay_app` 连库（不是超级用户、不是表的所有者），RLS 对它无条件生效。
 角色由 `db/init/01-roles.sql` 建；Flyway 以属主跑迁移。**不要为迁就任何特权角色写代码。**
 
-三种作用域，默认哪个都不设 = 一行都看不到（fail-closed）：
+两种作用域，默认哪个都不设 = 一行都看不到（fail-closed）：
 
 | | 谁用 | 看到什么 | 权限来自 |
 |---|---|---|---|
 | `TenantScope.asMerchant(id, …)` | HTTP 控制器 | 只有该商户的行 | 会话变量（同一条应用连接） |
-| `SystemLedger.inTransaction(…)` | M3 入账、结算、M4 出账 | 全部行 | **连接身份**：独立角色 `chainpay_system`（BYPASSRLS，非超级用户，非属主）+ 独立连接池 |
-| `TenantScope.asSystem(…)` | 只剩测试注资（`SystemScopedLedger`） | 全部行 | 会话变量——权宜之计，M4 删 |
+| `SystemLedger.inTransaction(…)` | M3 入账、结算、M4 出账、M0 账本测试的脚手架 | 全部行 | **连接身份**：独立角色 `chainpay_system`（BYPASSRLS，非超级用户，非属主）+ 独立连接池 |
+
+**第三种（`TenantScope.asSystem`，会话变量 `chainpay.system = on` 放行策略）已于 M4-⓪（2026-09-09）删除**，V21 同时把五张表策略里的 `is_system_scope()` 分支拆掉、函数删掉：
+从此没有任何一个会话变量能打开整库，`PayoutSchemaTest.theSessionVariableDoorIsGone` 守着（应用连接上 set_config 之后仍一行看不到）。
 
 **M3-⓪（2026-09-06）兑现了那句承诺**：系统权限是连接身份，不是一个开关。`SystemLedger` 建池即自检
 （不是 BYPASSRLS、或者是超级用户 = 拒绝启动），事务边界由它自己的模板给（手工 `new` 的 `LedgerServiceImpl`
@@ -184,6 +205,7 @@ M2 的形态已在 2026-09-02 出现：不是「先查再改」，是「两个�
 - **入账策略**（M3-③，2026-09-07）：**信合约做的，不信合约说的**——记账前向两个节点问该地址在那一块的 `balanceOf`，必须等于事件累计（转入减转出，原始单位），对不上或问不到 = HELD_BALANCE_MISMATCH，转账扣费、弹性供应、静默铸币、节点撒谎都在这里露馅。`chain_token.min_deposit` 是每种代币的最小入账额（账本单位，0 = 不限），低于它 REJECTED_DUST 记录不入账也不退。失败分两种：瞬时的（`JsonRpcException` code 为空、`TransientDataAccessException`）这一轮提前结束；结构性的这一笔 HELD_ERROR 带异常原文、队列继续。HELD 的人工路径：人复核后把行改成 APPROVED 并把谁、为什么写进 `hold_reason`，任务下一轮不再核对、用 `UPDATE … WHERE status = 'APPROVED'` 重新占坑、同一幂等键记账；**人永远不手工碰账本表**。每种状态该做什么见 `docs/runbook/deposit.md`
 - **收款接口**（M3-④，2026-09-07）：`POST /api/v1/deposit-addresses {token}` 一户一币一址且幂等，地址给 EIP-55 写法；`GET /api/v1/deposits` 把已处理的行和「在路上」的钱（PENDING）并在一起，都带 `level` 与 `confirmations`；`GET /api/v1/deposits/balance` 分 `available`（账本余额）与 `pending`（在路上合计）。查询走应用连接、整段在 `asMerchant` 里：地址表与入账表有 RLS，链表没有但每条查询都经地址表连接，别人的转账结构上带不出来；没有「按 id 查一条」的接口，「不存在」与「不是你的」连区分的机会都没有。金额一律字符串；HELD 只露状态不露原因；请求体只有 token，地址与序号由服务端派生；白名单外或停用的代币回 400 + 2008（`TOKEN_NOT_SUPPORTED`）；没配 xpub 时这些路径是 404
 - **真环境演练**（M3-⑤，2026-09-08）：一笔真实的 Sepolia LINK 走完 SEEN → SAFE → FINAL → CREDITED（入块到 FINAL 约 18 分钟）；`kill -9` 演练证明占坑、镜像账户、转账、分录在一个事务里同生同死；书签回退重放不双记。演练留下的规矩与补丁：① **动书签（前跳或回退）必须用两个节点都同意的块哈希**，先记旧值，只在停机或两轮之间做（做法见 `docs/runbook/chain-indexer.md` 第五节）；② Alchemy 免费层 `eth_getLogs` 限 10 块，「对半分、成功后翻倍」在固定上限上震荡——已修，见上面「RPC 不信任」；追赶速度仍受「每轮 10 批」限制，那是 M6 的题（停机恢复）；③ 入账任务与索引器曾共用单线程调度器——已修，见下一条。给人用的签名客户端是 `tools/api.py`，凭证只从环境变量来；`entry`/`deposit` 这类带外键的表，锁被引用表会连带挡住引用表的插入
+- **出账地基**（M4-⓪，2026-09-09）：出账是**账本先扣、链上后发生**，中间的不确定期用冻结账户 `user:<商户>:<币>:frozen`（LIABILITY，属于商户）表达。三笔账本流都是普通 `ledger.transfer`：申请 `WITHDRAWAL_FREEZE`（可用 → 冻结，键 `withdrawal:<申请幂等键>:freeze`，走商户连接与 asMerchant）、FINAL `WITHDRAWAL`（冻结 → 托管镜像，键 `withdrawal:<id>:settle`，系统身份）、失败 `WITHDRAWAL_REVERSE`（冻结 → 可用，键 `withdrawal:<id>:reverse`，系统身份）；结算过的不能再解冻由**冻结账户不许为负**守，不靠代码记得。V21 四张表：`hot_wallet`（`next_nonce` 是意图，真相在链上由对账拉回；无 RLS，应用角色连读都没有）、`payout`（`freeze_transfer_id NOT NULL UNIQUE`——每笔提现以冻结开始，先冻结再插行同一事务；settle / reverse 互斥；CONFIRMED ⇔ 有结算、FAILED/REJECTED ⇔ 有解冻且写原因；`UNIQUE (merchant_id, idempotency_key)`；RLS 商户只看只插自己的，应用角色无 UPDATE）、`payout_tx`（签好的原文先落库再广播；`tx_hash` 唯一；MINED ⇔ 带块号块哈希；**部分唯一索引 (hot_wallet, nonce) WHERE status = 'MINED'**——加速后只有一笔上链由数据库守；无 RLS，应用角色只读）、`payout_address`（白名单，RLS 同账户表）。状态机是显式转换表（`PayoutStatus`：PENDING_APPROVAL → QUEUED → SIGNED → BROADCAST → MINED → CONFIRMED，核准可拒、排队与上链可失败、上链可因重组退回；**BROADCAST 没有到 FAILED 的边**——广播后只有回执能宣布结局；`PayoutTxStatus`：SIGNED → BROADCAST → MINED / DROPPED / REPLACED，丢弃可重发、上链可因重组退回、被替代是终态）。系统角色对四张表都没有 DELETE
 - **演练补丁**（2026-09-09）：`spring.task.scheduling.pool.size` ≥ `@Scheduled` 任务数（现在 4，两个任务），`ChainIndexerBootSmokeTest` 用一个卡住的任务证明别的任务照跑——Spring 默认只有一条调度线程，入账事务等锁时索引器跟着停、降级检测不跑、一条 ERROR 都没有。系统连接带 `lock_timeout`（`chainpay.system-db.lock-timeout`，默认 5s，Hikari `connectionInitSql`）：等锁超过上限就放弃。**Spring 7 把 SQLSTATE 55P03 翻成 `UncategorizedSQLException`（非瞬时）**，入账任务会据此记 HELD_ERROR、每次等锁超时都变成一张工单——红灯测试实测；所以系统池的 `JdbcTemplate` 装了翻译器把 55P03 翻成 `CannotAcquireLockException`（瞬时），其余交回默认翻译。加超时的同时必须问「超时会被翻成哪一类」，否则修法比病更重
 - **停下要能被问到**（M2-⑥ 补丁 3）：状态表 `indexer_state`（RUNNING / DEGRADED / HALTED）。进程启动先读它，HALTED 就不碰节点，**重启不算恢复**，人改回 RUNNING 才算；连续 `degraded-after-failures` 次瞬时失败、或审计节点连续答不出 = DEGRADED，每轮 ERROR；HTTP 401 / 403 是凭证失效，`RpcAuthException` 直接停下不重试；只读接口 `GET /admin/v1/indexer` 一次给全状态、书签、链头、落后块数、争议块数。每种停机原因该做什么见 `docs/runbook/chain-indexer.md`
 - **节点地址按密码对待**：只经 `RpcEndpoint` 解析，失败只报变量名与主机名，永不回显原文（`URI.create` 会把整条含 key 的输入放进异常）；审计节点与主节点同一主机 = 拒绝启动；没配审计节点要在启动日志里写明「单节点」

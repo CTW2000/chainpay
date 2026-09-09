@@ -36,6 +36,10 @@ import org.springframework.transaction.annotation.Transactional;
  *
  * <p>修法不是让本类更小心，是<b>让连接本身就是普通角色</b>（见 db/init/01-roles.sql）。
  * RLS 对它无条件生效，本类只剩一件事：设租户变量。上面那句不对称，现在才是真的。
+ *
+ * <p><b>asSystem 已删（M4-⓪，2026-09-09）。</b>它曾用会话变量 {@code chainpay.system = on} 放行策略，
+ * 是应用还以超级用户连库时留下的第二条路。M3-⓪ 起系统权限是连接身份（{@code SystemLedger}，BYPASSRLS 的独立角色），
+ * V21 把策略里的 {@code is_system_scope()} 分支一起拆掉：从此没有任何一个会话变量能打开整库。
  */
 @Service
 public class TenantScope {
@@ -59,28 +63,6 @@ public class TenantScope {
     @Transactional(propagation = Propagation.REQUIRED)
     public <T> T asMerchant(long merchantId, Supplier<T> work) {
         enterTenantScope(merchantId);
-        return work.get();
-    }
-
-    /**
-     * 在「系统作用域」的事务里执行一段工作：注资、结算、M3 入账、M4 出账——
-     * 那些<b>不属于任何商户</b>、要碰平台账户（merchant_id 为 NULL）的操作。
-     *
-     * <p><b>★ 这个方法永远不该从 HTTP 控制器调用 ★</b>
-     * 系统作用域看得到全部行。它和 {@link #asMerchant} 的信任边界一样——
-     * 都是「哪段 Java 代码在调」——但后果不对称：asMerchant 传错 id 只是串到另一个商户，
-     * asSystem 从控制器调出去就是整库对商户开放。
-     * 目前靠评审守着；接口多起来后用 ArchUnit 断言 controller 包不得引用本方法。
-     *
-     * <p>为什么它必须存在：应用改用普通角色之后，RLS 对它无条件生效，
-     * 没有这个作用域就没有任何代码能碰平台账户——M0 的账本测试全部「账户不存在」。
-     * 之前不需要它，是因为超级用户把这个设计空白盖住了。
-     */
-    @Transactional(propagation = Propagation.REQUIRED)
-    public <T> T asSystem(Supplier<T> work) {
-        jdbcClient.sql("SELECT set_config('chainpay.system', 'on', true)")
-                .query(String.class)
-                .single();
         return work.get();
     }
 

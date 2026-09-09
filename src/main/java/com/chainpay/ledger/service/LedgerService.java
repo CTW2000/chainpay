@@ -31,8 +31,12 @@ public interface LedgerService {
         INTERNAL,
         /** 链上充值入账（M3）。 */
         DEPOSIT,
-        /** 链上提现出账（M4）。 */
+        /** 提现申请时把可用余额挪进冻结账户（M4-⓪）：user → user:…:frozen。 */
+        WITHDRAWAL_FREEZE,
+        /** 链上提现出账（M4）：链上 FINAL 之后，冻结 → 托管镜像。 */
         WITHDRAWAL,
+        /** 提现失败或被拒后把冻结的钱还给商户（M4-⓪）：user:…:frozen → user。 */
+        WITHDRAWAL_REVERSE,
         /** 手续费。 */
         FEE,
         /** 换汇的其中一条腿（M5 之后）。 */
