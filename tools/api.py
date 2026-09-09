@@ -10,9 +10,10 @@
     CHAINPAY_API_SECRET   发凭证时唯一一次出现的 secret
     CHAINPAY_API_BASE     默认 http://127.0.0.1:8095
 
-签名协议（与 ApiKeyAuthFilter / SignedRequests 一致，改协议要三处同改）：
-    prehash   = 毫秒时间戳 + nonce(32 个十六进制字符) + 方法 + 路径(含查询串) + body
-    signature = Base64(HMAC-SHA256(prehash, secret))
+签名协议 CP2（与 ApiCredentialService.prehash / 测试助手 SignedRequests 一字不差，改协议要三处同改）：
+    canonical = "CP2\\n" + 毫秒时间戳 + "\\n" + nonce(32 个十六进制字符) + "\\n" + 方法 + "\\n" + 路径(含查询串，原样) + "\\n" + sha256hex(body)
+    signature = Base64(HMAC-SHA256(canonical, secret))
+换行能当分隔符，因为没有任何一段可能含有它；请求体换成哈希后最后一段也定长，边界因此唯一。
 """
 import base64
 import hashlib
@@ -27,8 +28,9 @@ import urllib.request
 
 
 def sign(secret: str, timestamp_ms: int, nonce: str, method: str, path: str, body: str) -> str:
-    prehash = f"{timestamp_ms}{nonce}{method}{path}{body}".encode("utf-8")
-    digest = hmac.new(secret.encode("utf-8"), prehash, hashlib.sha256).digest()
+    body_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()
+    canonical = f"CP2\n{timestamp_ms}\n{nonce}\n{method}\n{path}\n{body_hash}".encode("utf-8")
+    digest = hmac.new(secret.encode("utf-8"), canonical, hashlib.sha256).digest()
     return base64.b64encode(digest).decode("ascii")
 
 

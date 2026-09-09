@@ -3,6 +3,7 @@ package com.chainpay.security;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.chainpay.security.service.ApiCredentialService;
+import com.chainpay.security.service.ApiCredentialService.SignedRequest;
 import java.util.Base64;
 import java.util.HexFormat;
 import org.junit.jupiter.api.DisplayName;
@@ -53,25 +54,49 @@ class HmacKnownAnswerTest {
                 .isEqualTo("5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843");
     }
 
-    // ---- 项目形态向量：timestamp + nonce + method + path + body，Base64 输出 ----
+    // ---- 项目形态向量（CP2 规范串）：版本标签、五段各占一行、请求体换成 SHA-256；Base64 输出 ----
+
+    static final String SECRET = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    static final String NONCE = "00000000000000000000000000000000";
 
     @Test
-    @DisplayName("★ 项目 prehash 格式的向量（含非 ASCII）—— 钉住拼接、UTF-8、Base64、算法")
-    void projectShapedVector() {
-        // 期望值由 Python 3 标准库独立算出：
-        //   hmac.new(secret.encode(), prehash.encode(), hashlib.sha256) → base64
-        // body 里放一个非 ASCII 串，让「密钥/消息按 UTF-8 编码」也成为被守的对象。
-        // 诚实的边界：在默认字符集就是 UTF-8 的机器上，getBytes() 漏写 UTF_8 不会红——
-        // 那个错只在默认字符集不同的机器上现形。
-        String secret = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-        String prehash = "1700000000000"
-                + "00000000000000000000000000000000"
-                + "POST"
-                + "/api/v1/transfers"
-                + "{\"memo\":\"转账\"}";
+    @DisplayName("★ CP2 向量：POST + 非 ASCII 请求体 —— 钉住版本标签、换行分隔、UTF-8、请求体哈希、Base64、算法")
+    void cp2VectorWithBody() {
+        // 期望值由 Python 3 标准库独立算出（不从 Java 实现里抄）：
+        //   canonical = "CP2\n" + ts + "\n" + nonce + "\n" + method + "\n" + path + "\n" + sha256hex(body)
+        //   base64(hmac.new(secret.encode(), canonical.encode(), hashlib.sha256).digest())
+        var request = new SignedRequest("ak_x", 1700000000000L, NONCE, "POST", "/api/v1/transfers?x=1",
+                "{\"memo\":\"转账\"}", "");
 
-        assertThat(ApiCredentialService.sign(prehash, secret))
-                .isEqualTo("qnVM0vfGHZALADHxjpf7QM819aj8JZ+s7Lkaged4KA8=");
+        assertThat(ApiCredentialService.prehash(request))
+                .isEqualTo("CP2\n1700000000000\n" + NONCE + "\nPOST\n/api/v1/transfers?x=1\n"
+                        + "2f7b48d0a4782735c4e9348eac8dc7590296053e588f7fb2c4c758055e876d41");
+        assertThat(ApiCredentialService.sign(ApiCredentialService.prehash(request), SECRET))
+                .isEqualTo("YBzjg+lssuTNrnJfzspc9+zO4XFTcJOO9D63KNpRAOM=");
+    }
+
+    @Test
+    @DisplayName("★ CP2 向量：GET 空请求体 —— 空体的哈希是固定值 e3b0c442…，GET 与 POST 走同一条规则")
+    void cp2VectorWithEmptyBody() {
+        var request = new SignedRequest("ak_x", 1700000000000L, NONCE, "GET", "/api/v1/deposits/balance?token=0xabc", "", "");
+
+        assertThat(ApiCredentialService.prehash(request)).endsWith("\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+        assertThat(ApiCredentialService.sign(ApiCredentialService.prehash(request), SECRET))
+                .isEqualTo("QvReKUMPv+0Hwsj1NFcfz0K3zySNlJ+iu0I6p9ivibA=");
+    }
+
+    @Test
+    @DisplayName("★ 边界不能滑动：路径末尾的字符挪进请求体开头，签名串必须不同（无分隔符拼接时它们完全相同）")
+    void movingBytesAcrossThePathBodyBoundaryChangesTheCanonicalString() {
+        var original = new SignedRequest("ak_x", 1700000000000L, NONCE, "POST", "/api/v1/transfers", "{\"memo\":\"x\"}", "");
+        var shifted = new SignedRequest("ak_x", 1700000000000L, NONCE, "POST", "/api/v1/transfers{", "\"memo\":\"x\"}", "");
+
+        // 缺陷本身先钉成事实：五段直接拼接时，两个不同的请求是同一串字节
+        assertThat(original.path() + original.body()).isEqualTo(shifted.path() + shifted.body());
+
+        assertThat(ApiCredentialService.prehash(original))
+                .as("请求到签名串的映射必须是单射：不同的请求不能共享一个签名")
+                .isNotEqualTo(ApiCredentialService.prehash(shifted));
     }
 
     /** 我们的 sign() 输出 Base64；RFC 给的是十六进制，解码后转成同一种表示再比。 */

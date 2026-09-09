@@ -1,6 +1,9 @@
 package com.chainpay.support;
 
 import com.chainpay.security.service.ApiCredentialService;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.util.HexFormat;
 
@@ -32,10 +35,16 @@ public final class SignedRequests {
         return HexFormat.of().formatHex(raw);
     }
 
-    /** 按协议拼出被签名的字符串：时间戳 + nonce + 方法 + 路径 + body。 */
+    /** CP2 规范串：版本标签、五段各占一行、请求体换成 SHA-256（与 ApiCredentialService.prehash、tools/api.py 一字不差）。 */
     public static String prehash(long timestampMillis, String nonce, String method,
                                  String path, String body) {
-        return timestampMillis + nonce + method + path + (body == null ? "" : body);
+        byte[] digest;
+        try {
+            digest = MessageDigest.getInstance("SHA-256").digest((body == null ? "" : body).getBytes(StandardCharsets.UTF_8));
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
+        return "CP2\n" + timestampMillis + "\n" + nonce + "\n" + method + "\n" + path + "\n" + HexFormat.of().formatHex(digest);
     }
 
     /** 算签名。 */

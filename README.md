@@ -85,7 +85,7 @@ tools/xpub.sh                                            # 按提示输入助记
 它只打印 `CHAINPAY_DEPOSIT_XPUB=…` 和前三个地址；前三个地址必须和 MetaMask 里同一助记词的前三个账户一致，一致才说明配进去的 xpub 是你钱包的那一支。助记词不进参数、不进环境变量、不进任何文件。
 
 **手工调商户接口**（M3-⑤ 真环境演练走的就是这条路）：先用管理接口给商户发一把凭证，`secret` 只在这一次响应里出现；
-然后用签名客户端 `tools/api.py`（纯标准库，签名串的拼法与 `ApiKeyAuthFilter` / 测试里的 `SignedRequests` 一致，改协议要三处同改）：
+然后用签名客户端 `tools/api.py`（纯标准库，CP2 规范串的拼法与 `ApiCredentialService.prehash` / 测试里的 `SignedRequests` 一字不差，改协议要三处同改；CP2 = 版本标签、五段各占一行、请求体换成 SHA-256）：
 
 ```bash
 curl -s -X POST -H "X-CP-ADMIN-TOKEN: $CHAINPAY_ADMIN_TOKEN" -H 'Content-Type: application/json' -d '{"label":"drill"}' http://127.0.0.1:8095/admin/v1/merchants/1/credentials

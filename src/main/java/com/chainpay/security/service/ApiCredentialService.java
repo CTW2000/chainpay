@@ -6,6 +6,8 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Duration;
 import java.util.Base64;
+import java.security.NoSuchAlgorithmException;
+import java.util.HexFormat;
 import java.util.Optional;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
@@ -24,12 +26,18 @@ import org.springframework.stereotype.Service;
  * 服务端用自己存的 secret 重算一遍，对得上就说明对方确实知道 secret。
  * <b>钥匙从不离开双方。</b>
  *
- * <p>签名串的构造照 OKX v5，比币安更严：
+ * <p>签名串是 CP2 规范串（2026-09-09 起；此前照 OKX v5 五段无分隔符直接拼接）：
  *
  * <pre>
- *   prehash   = timestamp + nonce + method + requestPath + body
- *   signature = Base64( HMAC-SHA256(prehash, secret) )
+ *   canonical = "CP2" ‖ LF ‖ timestamp ‖ LF ‖ nonce ‖ LF ‖ method ‖ LF ‖ requestPath ‖ LF ‖ SHA256hex(body)
+ *   signature = Base64( HMAC-SHA256(canonical, secret) )
  * </pre>
+ *
+ * <p><b>为什么换：</b>HMAC 只认字节，「请求 → 字节串」这个映射必须是单射，否则两个不同的请求共享一个签名。
+ * 无分隔符拼接靠「每段定长」保证单射，可路径与请求体从来都不定长：把路径末尾的字符挪进请求体开头，拼出的字节一模一样。
+ * 今天做不成事只因现有路由与 JSON 的形状碰巧不给机会——每加一个接口都要重新论证一次，没人会一直做。
+ * CP2 让每段要么定长（时间戳、nonce、请求体的哈希）要么不含换行（方法、路径），边界因此唯一；版本标签受签名保护，
+ * 下次改协议可以 CP3 与 CP2 并存一个过渡期，而不是像这次一样硬切（今天没有外部客户端，硬切最便宜）。
  *
  * <p>五个部分各自防一件事：
  * <ul>
@@ -190,19 +198,25 @@ public class ApiCredentialService {
     }
 
     /**
-     * 构造被签名的字符串。
+     * 构造被签名的 CP2 规范串。三处副本必须一字不差：这里、测试助手 {@code SignedRequests}、{@code tools/api.py}。
      *
-     * <p><b>拼接顺序和分隔方式必须双方完全一致</b>，差一个字符签名就对不上。
-     * 这里不加分隔符，与 OKX v5 一致 —— 因为 timestamp 是定长数字、
-     * method 是大写字母、path 以 {@code /} 开头，天然不会有歧义。
-     *
-     * <p>（如果各段长度可变且字符集重叠，就必须加分隔符，
-     * 否则 {@code "ab"+"c"} 和 {@code "a"+"bc"} 会算出同一个签名 ——
-     * 这是拼接式签名的经典漏洞。）
+     * <p>换行能当分隔符，是因为任何一段都不可能含有它：时间戳是数字，nonce 是十六进制，方法是字母，
+     * 路径里的换行在 HTTP 中只能以 {@code %0A} 三个普通字符出现，请求体换成了 64 个十六进制字符的哈希。
+     * 路径连查询串<b>原样</b>签，不排序、不解码——规范化本身就是新的歧义来源，签双方都拿得到的原样字节最不容易错。
+     * 空请求体的哈希是固定值 {@code e3b0c442…}，GET 与 POST 走同一条规则。
      */
     public static String prehash(SignedRequest request) {
-        return request.timestampMillis() + request.nonce()
-                + request.method() + request.path() + request.body();
+        return "CP2\n" + request.timestampMillis() + "\n" + request.nonce() + "\n" + request.method() + "\n"
+                + request.path() + "\n" + sha256Hex(request.body() == null ? "" : request.body());
+    }
+
+    /** 请求体的 SHA-256，十六进制小写：把变长的最后一段变成定长。 */
+    static String sha256Hex(String body) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(body.getBytes(StandardCharsets.UTF_8)));
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("JVM 没有 SHA-256", e);
+        }
     }
 
     /** 用 secret 对内容算 HMAC-SHA256，返回 Base64。 */
