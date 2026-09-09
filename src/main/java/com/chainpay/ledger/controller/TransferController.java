@@ -1,5 +1,7 @@
 package com.chainpay.ledger.controller;
 
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
 import com.chainpay.common.web.ApiResponse;
 
 import com.chainpay.security.service.AccountAccessService;
@@ -53,11 +55,11 @@ public class TransferController {
      */
     public record CreateTransferRequest(
             String clientTransferId,
-            String currency,
-            String amount,
+            @NotBlank String currency,
+            @NotBlank String amount,
             long debitAccountId,
             long creditAccountId,
-            String code
+            @NotBlank String code
     ) {}
 
     /**
@@ -94,7 +96,7 @@ public class TransferController {
     @PostMapping("/transfers")
     public ApiResponse<CreateTransferResponse> create(
             @RequestAttribute(ApiKeyAuthFilter.ATTR_MERCHANT_ID) long merchantId,
-            @RequestBody CreateTransferRequest request) {
+            @Valid @RequestBody CreateTransferRequest request) {
 
         // ★ 授权发生在这里，而且绕不过去 ★
         //

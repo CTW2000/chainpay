@@ -173,6 +173,13 @@ public abstract class AbstractPostgresTest {
     protected final JdbcClient jdbc = JdbcClient.create(new DriverManagerDataSource(
             POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword()));
 
+    /**
+     * 系统角色的连接，只给判官用：V22 的 {@code ledger_judge()} 只在能看到全部行的身份下给结论。
+     * 此前三个判官用属主连接读视图，能读通只因为 Testcontainers 的属主恰好是超级用户（2026-09-09 扫描补丁）。
+     */
+    protected final JdbcClient systemJdbc = JdbcClient.create(new DriverManagerDataSource(
+            POSTGRES.getJdbcUrl(), "chainpay_system", "chainpay_system_dev"));
+
     /** 限流器是单例，计数跨测试累积，必须在每个测试前重置。 */
     @Autowired
     protected RateLimiter rateLimiter;
@@ -282,14 +289,14 @@ public abstract class AbstractPostgresTest {
      * <p>返回违反不变量的币种数。任何时刻调用都必须是 0。
      */
     protected long invariantViolations() {
-        return jdbc.sql("SELECT COUNT(*) FROM ledger_invariant WHERE total <> 0")
+        return systemJdbc.sql("SELECT COUNT(*) FROM ledger_judge() WHERE check_name = 'ledger_invariant'")
                 .query(Long.class)
                 .single();
     }
 
     /** 有多少个「不该为负」的账户余额为负。任何时刻都必须是 0。 */
     protected long illegalNegativeBalances() {
-        return jdbc.sql("SELECT COUNT(*) FROM account_balance WHERE balance < 0 AND NOT allow_negative")
+        return systemJdbc.sql("SELECT COUNT(*) FROM ledger_judge() WHERE check_name = 'negative_balance'")
                 .query(Long.class)
                 .single();
     }
@@ -308,7 +315,7 @@ public abstract class AbstractPostgresTest {
      * 两个都为 0，账才既平又准。
      */
     protected long balanceDrift() {
-        return jdbc.sql("SELECT COUNT(*) FROM balance_consistency WHERE stored <> computed")
+        return systemJdbc.sql("SELECT COUNT(*) FROM ledger_judge() WHERE check_name = 'balance_consistency'")
                 .query(Long.class)
                 .single();
     }

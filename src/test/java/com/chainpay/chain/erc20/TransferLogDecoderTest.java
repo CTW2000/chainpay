@@ -99,6 +99,18 @@ class TransferLogDecoderTest {
     }
 
     @Test
+    @DisplayName("★ logIndex 超出 int 范围（0x100000000 会被 (int) 截成 0）—— 拒绝，绝不静默换坐标")
+    void logIndexBeyondIntRangeIsRejected() {
+        var huge = new RawLog(REAL_LINK_TRANSFER.address(), REAL_LINK_TRANSFER.topics(), REAL_LINK_TRANSFER.data(),
+                REAL_LINK_TRANSFER.blockNumber(), REAL_LINK_TRANSFER.blockHash(), REAL_LINK_TRANSFER.transactionHash(),
+                REAL_LINK_TRANSFER.transactionIndex(), "0x100000000", false);
+
+        assertThatThrownBy(() -> TransferLogDecoder.decode(huge))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("logIndex");
+    }
+
+    @Test
     @DisplayName("★ data 不是 32 字节 —— 拒绝，绝不静默截断或补零")
     void rejectsWrongDataLength() {
         var shortData = new RawLog(REAL_LINK_TRANSFER.address(), REAL_LINK_TRANSFER.topics(),

@@ -142,6 +142,18 @@ class DepositApiTest extends AbstractDepositPostingTest {
 
     // ------------------------------------------------------------------ 脚手架
 
+    @Test
+    @DisplayName("★ 查询参数类型不对或缺失 —— 400，不是 500")
+    void badQueryParametersAreBadRequests() {
+        var badLimit = signedGet(acmeSecret, "ak_acme", "/api/v1/deposits?limit=abc");
+        assertThat(badLimit.statusCode()).as(badLimit.body()).isEqualTo(400);
+        assertThat(badLimit.body()).contains("\"code\":\"2001\"");
+
+        var missingToken = signedGet(acmeSecret, "ak_acme", "/api/v1/deposits/balance");
+        assertThat(missingToken.statusCode()).as(missingToken.body()).isEqualTo(400);
+        assertThat(missingToken.body()).contains("\"code\":\"2001\"");
+    }
+
     private static int count(String haystack, String needle) {
         Matcher m = Pattern.compile(Pattern.quote(needle)).matcher(haystack);
         int n = 0;

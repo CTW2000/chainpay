@@ -561,7 +561,10 @@ FINAL 门槛、镜像账户 `chain:custody:<TOKEN>`、金额换算、`balanceOf`
 
 - ✅ **M3-⑤ 补丁**（2026-09-09）演练暴露的三道取舍题，修两道、推一道：① getLogs 窗口记住失败过的尺寸、向它二分逼近（`knownTooLarge` / `knownGood`，收敛在上限上后每批只问一次，连续成功 100 批才忘掉天花板试探一次），真环境实测追块从每轮 32 到 75 块变成稳定的 100 块、零失败调用；② `spring.task.scheduling.pool.size: 4`（每个 `@Scheduled` 任务至少一条线程）+ 系统连接 `lock_timeout` 5s（Hikari `connectionInitSql`）。**红灯里最值钱的一条**：PostgreSQL 等锁超时抛 SQLSTATE 55P03，Spring 7 翻成 `UncategorizedSQLException`（非瞬时），入账任务据此把那笔记成 HELD_ERROR——加了超时反而让每次等锁变成一张工单；于是系统池的 JdbcTemplate 装翻译器把 55P03 翻成 `CannotAcquireLockException`（瞬时）。③「追赶不受每轮 10 批限制」推到 M6（停机恢复那一族）。5 条新测试先红后绿（固定上限 10 块 60 批失败 ≤ 8 且停在 10；上限解除后满一个周期才试探；等锁 1 秒即抛瞬时异常；池里连接带 lock_timeout；账本被锁时入账 retryLater 不 HELD、放锁后照记；一个调度任务卡住别的照跑），四面墙各红了该红的（翻倍回去 → 3 红；不设超时 → 3 红；不翻译 55P03 → 2 红且日志出现 HELD_ERROR；线程池 1 → 1 红）。全套 295 跑 0 败 0 错 2 跳
 
-**M3 ⓪ 到 ⑤ 全部完成（2026-09-06 至 09-08），演练补丁 09-09；⑥ webhook 推迟到 M5 之后。**
+- 🔒 **M0–M3 安全扫描与补丁**（2026-09-09）按 `question` 技能 + OWASP 清单派 4 个代理分维度扫 7,875 行主代码与 20 个迁移，逐条回读核实，15 条发现（`docs/knowledge` 未单独存档，计分在 QuestionSkillForAi 的 `questions.md`）。修了 14 条（第 15 条监听地址与日志级别留 M6）：V22（判官授权系统角色 + 拒绝盲跑的 `ledger_judge()`；`to_address` / `from_address` 部分索引与三个外键索引；`deposit` / `deposit_address` / `payout` / `payout_address` 补 FORCE；七条租户策略包成 `(SELECT …)`）；`BlockIndexer.persist` 与 `indexer_cursor` 守卫比号也比哈希；转账与收款地址接口 `@Valid` + 四类形状错误映射 400/2001；nonce 格式检查挪到验签之前且限定十六进制；凭证未命中做诱饵解密等耗时；入账块哈希 `equalsIgnoreCase`；`logIndex` 范围检查与 `Hex` 字符集；对账解码失败记 disputed 不停机；`http://` 只给回环与内网；`XpubTool` 无终端拒绝；`SystemLedger` 启动跑判官。真实启动时又撞上一条：开发库索引器自 08:11 起 HALTED，原因是 Alchemy 各后端头不一致（`eth_blockNumber` 已看到 11666704，`getLogs` 说超出链头），带 code 的错被一路减半到单块后按「不是范围问题」停机——链头两块以内的单块失败改判瞬时并恢复窗口状态（`TIP_TOLERANCE_BLOCKS`），两条测试钉住「链头附近瞬时、远离链头仍停机」。18 条新测试先红后绿（含三个新守卫：`SchemaGuardTest` 扫 `pg_class`/`pg_views`/`pg_policies`/EXPLAIN，`ControllerBoundaryTest` 扫 `@RequestBody`，`LedgerJudgeTest` 用属主塞一条单边分录让判官报出来），五面墙各红了该红的。**第一条的教训**：一个验证「今天能跑通」不等于它在验证任何东西，判官能查通只是超级用户绕过 RLS 的副作用，换成托管数据库的属主它会静默把坏账报成平账——由此给提问模板补了 T12「换个身份、换个环境再问一遍」。两条是 08-31 报过未修的原样复发（`9.1`、`7.9`），技能加了「对照上一轮扫描日志标未修」的规则
+- 🔒 **两个会话同时改一棵工作树的教训**（2026-09-09）：扫描补丁与 M4-⓪ 在同一工作区并行，迁移编号、策略、脚手架、文档四处重叠。处置：扫描补丁整体存档撤出、等 M4-⓪ 提交后重放到它之上。以后并行做事给其中一方开独立的 git worktree
+
+**M3 ⓪ 到 ⑤ 全部完成（2026-09-06 至 09-08），演练补丁 09-09，安全扫描补丁 09-09；⑥ webhook 推迟到 M5 之后。**
 
 #### M4 进度
 

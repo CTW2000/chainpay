@@ -119,12 +119,12 @@ public final class DepositPoster {
         BlockHeader p = cache.primaryHeader(c.blockNumber());
         BlockHeader a = cache.auditHeader(c.blockNumber());
         Instant occurredAt = Instant.ofEpochSecond(p.timestamp());
-        if (!p.hash().equals(c.blockHash())) {
+        if (!p.hash().equalsIgnoreCase(c.blockHash())) {          // 节点给的大小写不受我们控制，库里是小写
             return Verdict.held(DepositStatus.HELD_NODE_DISAGREE, amountOrNull(c), occurredAt,
                     "主节点现在说块 " + c.blockNumber() + " 的哈希是 " + p.hash() + "，库里是 " + c.blockHash()
                             + "：索引之后节点改口，或曾发生重组而视图仍判 FINAL");
         }
-        if (!a.hash().equals(c.blockHash())) {
+        if (!a.hash().equalsIgnoreCase(c.blockHash())) {
             return Verdict.held(DepositStatus.HELD_NODE_DISAGREE, amountOrNull(c), occurredAt,
                     "审计节点对块 " + c.blockNumber() + " 的哈希意见不同：它说 " + a.hash() + "，库里是 " + c.blockHash());
         }

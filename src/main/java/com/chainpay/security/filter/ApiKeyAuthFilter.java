@@ -1,5 +1,6 @@
 package com.chainpay.security.filter;
 
+import java.util.regex.Pattern;
 import com.chainpay.security.service.ApiCredentialService;
 import com.chainpay.security.service.RateLimiter;
 import com.chainpay.security.service.ReplayGuard;
@@ -63,6 +64,8 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
      * 概率约为 2 的负 128 次方级别 —— 比硬件出错的概率低得多。
      */
     private static final int NONCE_HEX_LENGTH = 32;
+    /** 恰好 32 个十六进制字符。格式在**验签之前**检查，见 doFilterInternal 里的说明。 */
+    private static final Pattern NONCE_PATTERN = Pattern.compile("[0-9a-fA-F]{" + NONCE_HEX_LENGTH + "}");
 
     /** 认证成功后，商户 id 放在这个请求属性里，供控制器读取。 */
     public static final String ATTR_MERCHANT_ID = "chainpay.merchantId";
@@ -151,10 +154,24 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
 
         String nonce = request.getHeader(HEADER_NONCE);
 
+        // ★ nonce 的格式在验签之前检查（2026-09-09 扫描补丁）★
+        //
+        // 上面 NONCE_HEX_LENGTH 的 javadoc 用「nonce 定长」论证 prehash 无分隔符拼接不会有歧义。
+        // 这个前提必须在**算签名之前**就成立：2026-09-09 之前长度检查排在 authenticate 之后，
+        // 论证的承重墙不在它指的位置——ApiContractTest.nonceLengthIsEnforced 里 4 位 nonce 的签名能验过，
+        // 被拒只是因为后面那条为防 Redis 膨胀写的检查碰巧也管到了它。
+        //
+        // 旧注释担心「认证之前的逻辑都是免费攻击面」。那条理由对碰 Redis 的重放登记成立（所以它仍在验签之后），
+        // 对一个只看请求头的正则不成立：不分配、不落库、不碰任何外部系统，和上面的 Content-Length 检查同一性质。
+        if (nonce == null || !NONCE_PATTERN.matcher(nonce).matches()) {
+            unauthorized(response);
+            return;
+        }
+
         var merchant = credentials.authenticate(new SignedRequest(
                 apiKey,
                 parseTimestamp(request.getHeader(HEADER_TIMESTAMP)),
-                nonce == null ? "" : nonce,
+                nonce,
                 request.getMethod(),
                 fullPath(request),
                 cached.bodyAsString(),
@@ -187,25 +204,8 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
         // 放在之前的话，任何人拿一个瞎编的 nonce 就能往 Redis 里塞垃圾，
         // 这个「保护措施」本身会变成一条不需要凭证的内存耗尽通道。
         // 放在之后，登记表里只会有**验证过的**请求。
-        //
-        // ★ 长度校验必须在这里：验签之后、碰 Redis 之前 ★
-        //
-        // 不能放在验签**之前**：那样没有凭证的人也能触发它，
-        // 而任何在认证之前就执行的逻辑都是一条免费的攻击面。
-        //
-        // 也不能省掉：验签**拦不住**超长 nonce。
-        // nonce 是签名串的一部分，所以持有 secret 的调用方
-        // 完全可以拿一个 1MB 的 nonce 算出**完全正确**的签名 ——
-        // 验签会通过。挡住它的只有这里这一行。
-        // 也就是说这道检查防的不是外部攻击者，而是**有合法凭证的调用方**
-        // （被盗用的商户凭证、或者我们自己写错的客户端）。
-        //
-        // ApiContractTest.nonceLengthIsEnforced 断言的正是这一点：
-        // 「签名算对了也不行」。把这行删掉，那条测试立刻变红 —— 已实测。
-        if (nonce == null || nonce.length() != NONCE_HEX_LENGTH) {
-            unauthorized(response);
-            return;
-        }
+        // nonce 的长度与字符集已在验签之前由 NONCE_PATTERN 钉死：验签拦不住持有 secret 的人塞 1MB nonce，
+        // 但格式检查拦得住，而且它在算签名之前就把「定长」这个前提立住了。
         if (!replayGuard.isFirstUse(apiKey, nonce)) {
             replayed(response);
             return;

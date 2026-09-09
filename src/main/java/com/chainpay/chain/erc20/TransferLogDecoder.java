@@ -46,7 +46,7 @@ public final class TransferLogDecoder {
                 Hex.toLong(log.blockNumber()),
                 log.blockHash(),
                 log.transactionHash(),
-                (int) Hex.toLong(log.logIndex()));
+                logIndex(log.logIndex()));
     }
 
     /**
@@ -58,5 +58,14 @@ public final class TransferLogDecoder {
             throw new IllegalArgumentException("topic 不是补零的地址：" + topic);
         }
         return "0x" + topic.substring(ADDRESS_PADDING.length()).toLowerCase();
+    }
+
+    /** logIndex 是节点给的数：先在 long 上比过范围再收窄，(int) 直接截断会把 0x100000000 静默变成 0（2026-09-09 扫描补丁）。 */
+    private static int logIndex(String hex) {
+        long index = Hex.toLong(hex);
+        if (index < 0 || index > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException("logIndex 超出范围：" + hex);
+        }
+        return (int) index;
     }
 }

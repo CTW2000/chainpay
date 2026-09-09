@@ -83,6 +83,8 @@ public final class BlockIndexer {
      * 一次瞬时的带 code 的错也不该把窗口压低到进程重启。100 批在稳态约 20 分钟。
      */
     static final int REPROBE_AFTER = 100;
+    /** 离链头这么多块以内的单块失败按瞬时处理：负载均衡的提供商各后端的头差一两块是常态。 */
+    static final int TIP_TOLERANCE_BLOCKS = 2;
 
     public BlockIndexer(ChainReader chain,
                         IndexerCursorRepository cursors,
@@ -205,6 +207,10 @@ public final class BlockIndexer {
         //    减到一块还失败就停下——那不是范围问题。传输失败（code 为空）是瞬时的，不缩窗口、原样抛出
         long to;
         List<RawLog> raw;
+        int windowBefore = window.get();
+        int knownTooLargeBefore = knownTooLarge.get();
+        int knownGoodBefore = knownGood.get();
+        int streakBefore = successStreak.get();
         while (true) {
             to = Math.min(cursor.lastBlockNumber() + window.get(), head);
             int requested = (int) (to - from + 1);
@@ -216,6 +222,17 @@ public final class BlockIndexer {
                     throw e;
                 }
                 if (requested <= 1) {
+                    if (head - to <= TIP_TOLERANCE_BLOCKS) {
+                        // 链头附近的单块也取不到：不是范围问题，是提供商前后不一致——eth_blockNumber 的后端已经看到这块，
+                        // getLogs 的后端还没有（2026-09-09 真实启动实测，Alchemy 原话 "block range extends beyond current head block"，
+                        // 此前按「不是范围问题」停机叫人）。按瞬时处理，下一轮再来；一路减半得到的「范围信息」也是假的，整体恢复
+                        window.set(windowBefore);
+                        knownTooLarge.set(knownTooLargeBefore);
+                        knownGood.set(knownGoodBefore);
+                        successStreak.set(streakBefore);
+                        throw new JsonRpcException(null, "块 " + from + " 在链头附近（head " + head
+                                + "）单块取日志也失败：节点前后不一致，稍后再试 · " + e.getMessage());
+                    }
                     throw new IllegalStateException("单块 " + from + " 的日志也取不到（节点说：" + e.getMessage()
                             + "）：不是范围问题，换提供商或检查它的归档范围");
                 }
@@ -293,12 +310,16 @@ public final class BlockIndexer {
     private BatchResult persist(IndexerCursor expected, List<Erc20Transfer> transfers,
                                 BlockHeader last, long from, long to) {
         IndexerCursor locked = cursors.lock(cursorName);
-        if (locked.lastBlockNumber() != expected.lastBlockNumber()) {
-            // 别的实例在我们取数据期间推走了书签。我们手里这批是按旧书签算的，作废
+        boolean untouched = locked.lastBlockNumber() == expected.lastBlockNumber()
+                && locked.lastBlockHash().equalsIgnoreCase(expected.lastBlockHash());
+        if (!untouched) {
+            // 别的实例在我们取数据期间推走了书签，或者重组恢复后重放到了同一个号的另一条分支。
+            // 书签的身份是「号 + 哈希」：同号不同哈希是另一个世界的这一块，按旧分支算的这批作废。
+            // 2026-09-09 之前这里只比号——ReorgRecovery 比了哈希，这边没跟上（扫描补丁）
             return BatchResult.skipped(from, to, transfers.size());
         }
         int inserted = transferLogs.recordCanonical(transfers);
-        if (!cursors.advance(cursorName, expected.lastBlockNumber(), to, last.hash())) {
+        if (!cursors.advance(cursorName, expected.lastBlockNumber(), expected.lastBlockHash(), to, last.hash())) {
             throw new IllegalStateException("书签在锁内被改动，不应发生：" + cursorName);
         }
         return new BatchResult(BatchOutcome.INDEXED, from, to, transfers.size(), inserted);

@@ -267,6 +267,83 @@ class BlockIndexerTest extends AbstractPostgresTest {
     }
 
     @Test
+    @DisplayName("★ 书签同号不同哈希：慢实例取数据期间书签换了分支，落库必须 SKIPPED，一行不写")
+    void aStaleWriterIsRejectedWhenOnlyTheCursorHashChanged() throws Exception {
+        chain.withBlocks(30);
+        chain.addTransfer(LINK, 12, ALICE, BOB, TEN_LINK);
+        BlockIndexer indexer = indexer(10);
+        indexer.start(0);
+        assertThat(indexer.indexNextBatch().outcome()).isEqualTo(INDEXED);          // 书签 (10, hash10)
+
+        CountDownLatch staleIsFetching = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        chain.beforeLogs(() -> {
+            if ("stale-writer".equals(Thread.currentThread().getName())) {
+                staleIsFetching.countDown();
+                await(release);
+            }
+        });
+        AtomicReference<BatchResult> staleResult = new AtomicReference<>();
+        Thread stale = new Thread(() -> staleResult.set(indexer.indexNextBatch()), "stale-writer");
+        stale.start();
+        assertThat(staleIsFetching.await(5, SECONDS)).isTrue();
+
+        // 另一个实例在它取数据期间重组恢复又重放：书签还是 10 号，哈希换成了另一条分支
+        String otherBranch = FakeChain.hashOf(10, "B");
+        jdbc.sql("UPDATE indexer_cursor SET last_block_hash = :h WHERE name = :n")
+                .param("h", otherBranch).param("n", CURSOR).update();
+        release.countDown();
+        stale.join(5_000);
+
+        assertThat(staleResult.get()).isNotNull();
+        assertThat(staleResult.get().outcome())
+                .as("号相同哈希不同 = 书签换了分支，按旧分支算的这批不能落库；ReorgRecovery 比哈希，persist 也必须比")
+                .isEqualTo(SKIPPED_CURSOR_MOVED);
+        assertThat(cursor()).isEqualTo(new IndexerCursor(CURSOR, 10, otherBranch));
+        assertThat(rowCount()).isZero();
+    }
+
+    @Test
+    @DisplayName("★ 链头附近单块 getLogs 也报带 code 的错（提供商各后端头不一致）：是瞬时的，下一轮再来，不是停机")
+    void aCodedFailureAtTheTipIsTransientNotAHalt() {
+        chain.withBlocks(10);
+        BlockIndexer indexer = indexer(5);
+        indexer.start(0);
+        assertThat(indexer.indexNextBatch().outcome()).isEqualTo(INDEXED);                 // 1..5
+        assertThat(indexer.indexNextBatch().outcome()).isEqualTo(INDEXED);                 // 6..10，追到链头
+        chain.withBlocks(11);                                                              // eth_blockNumber 的后端看到了 11
+        chain.beforeLogs(() -> {                                                           // getLogs 的后端还没有：2026-09-09 08:11 Alchemy 原话
+            throw new JsonRpcException(-32000, "block range extends beyond current head block");
+        });
+
+        assertThatThrownBy(indexer::indexNextBatch)
+                .as("单块 11 就是链头：不是范围问题，是节点前后不一致——瞬时，不停机")
+                .isInstanceOf(JsonRpcException.class)
+                .satisfies(e -> assertThat(((JsonRpcException) e).code()).as("code 为空 = 瞬时，调度器下一轮再来").isNull());
+        assertThat(cursor()).isEqualTo(new IndexerCursor(CURSOR, 10, FakeChain.hashOf(10)));
+
+        chain.beforeLogs(() -> { });                                                       // 节点追上来了，链也继续长
+        chain.withBlocks(20);
+        assertThat(indexer.indexNextBatch()).as("减半得到的窗口是假信息，必须整体恢复：下一批仍是整批 5 块")
+                .isEqualTo(new BatchResult(INDEXED, 11, 15, 0, 0));
+    }
+
+    @Test
+    @DisplayName("离链头很远的单块也取不到：仍然停下叫人（那才是归档范围或套餐问题）")
+    void aCodedFailureFarBelowTheTipStillHalts() {
+        chain.withBlocks(200);
+        BlockIndexer indexer = indexer(5);
+        indexer.start(0);
+        chain.beforeLogs(() -> {
+            throw new JsonRpcException(-32000, "query returned more than 10000 results");
+        });
+
+        assertThatThrownBy(indexer::indexNextBatch)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("单块");
+    }
+
+    @Test
     @DisplayName("★ 重组检测：下一块的 parentHash 接不上书签，停下，什么都不写")
     void haltsWhenTheNextBlockDoesNotChainOntoTheCursor() {
         chain.withBlocks(10);

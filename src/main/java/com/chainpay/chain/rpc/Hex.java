@@ -30,6 +30,11 @@ public final class Hex {
         if (hex == null || !hex.startsWith("0x")) {
             throw new IllegalArgumentException("不是 0x 开头的十六进制：" + hex);
         }
-        return hex.substring(2);
+        String digits = hex.substring(2);
+        // 以太坊的 Quantity 永远是非负十六进制；Long.parseLong 与 BigInteger 都接受前导 -/+，只查前缀会把 0x-1 放成 -1（2026-09-09 扫描补丁）
+        if (!digits.matches("[0-9a-fA-F]*")) {
+            throw new IllegalArgumentException("不是十六进制数量（只允许 0-9a-f）：" + hex);
+        }
+        return digits;
     }
 }

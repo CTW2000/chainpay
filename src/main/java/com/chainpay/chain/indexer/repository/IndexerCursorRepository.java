@@ -81,27 +81,29 @@ public class IndexerCursorRepository {
     }
 
     /** 往前推。只能从 {@code expectedLast} 出发改，见 {@link #move}。 */
-    public boolean advance(String name, long expectedLast, long newLast, String newHash) {
-        return move(name, expectedLast, newLast, newHash);
+    public boolean advance(String name, long expectedLast, String expectedHash, long newLast, String newHash) {
+        return move(name, expectedLast, expectedHash, newLast, newHash);
     }
 
     /** 退回祖先（重组恢复）。同一条 SQL、同一个守卫。 */
-    public boolean rewind(String name, long expectedLast, long newLast, String newHash) {
-        return move(name, expectedLast, newLast, newHash);
+    public boolean rewind(String name, long expectedLast, String expectedHash, long newLast, String newHash) {
+        return move(name, expectedLast, expectedHash, newLast, newHash);
     }
 
     /**
      * WHERE 里带上期望值：值已不是它就一行都不改，返回 false。
      * 就算调用方算错了范围，也不可能把书签改成别的起点。
      */
-    private boolean move(String name, long expectedLast, long newLast, String newHash) {
+    private boolean move(String name, long expectedLast, String expectedHash, long newLast, String newHash) {
+        // 守卫的是「号 + 哈希」：同一个号在重组后可以对应另一条分支，只比号等于把书签的身份定义成了块号（2026-09-09 扫描补丁）
         return jdbc.sql("""
                         UPDATE indexer_cursor
                         SET last_block_number = :newLast, last_block_hash = :newHash, updated_at = now()
-                        WHERE name = :name AND last_block_number = :expectedLast
+                        WHERE name = :name AND last_block_number = :expectedLast AND last_block_hash = :expectedHash
                         """)
                 .param("name", name)
                 .param("expectedLast", expectedLast)
+                .param("expectedHash", expectedHash.toLowerCase(java.util.Locale.ROOT))
                 .param("newLast", newLast)
                 .param("newHash", newHash)
                 .update() == 1;

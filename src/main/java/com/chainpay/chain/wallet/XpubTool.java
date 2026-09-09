@@ -1,10 +1,7 @@
 package com.chainpay.chain.wallet;
 
-import java.io.BufferedReader;
 import java.io.Console;
 import java.io.IOException;
-import java.io.InputStreamReader;
-import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 
 /**
@@ -20,7 +17,7 @@ public final class XpubTool {
 
     public static void main(String[] args) throws IOException {
         System.err.println("chainpay · 离线 xpub 工具：读一行助记词，输出 m/44'/60'/0' 的 xpub 与前三个地址。请断网运行。");
-        String mnemonic = readMnemonic();
+        String mnemonic = readMnemonic(System.console());
         byte[] seed = Bip39.seed(mnemonic, "");
         ExtendedPrivateKey account;
         try {
@@ -36,21 +33,25 @@ public final class XpubTool {
         }
     }
 
-    private static String readMnemonic() throws IOException {
-        Console console = System.console();
-        if (console != null) {
-            char[] chars = console.readPassword("助记词（输入时不显示）: ");
-            try {
-                return new String(chars);
-            } finally {
-                Arrays.fill(chars, ' ');
-            }
+    /**
+     * 只从真实终端读，不回显。没有 Console（管道、IDE 控制台、CI）就拒绝——此前退回明文 readLine，
+     * 把「不回显」这条硬要求悄悄丢掉了（2026-09-09 扫描补丁）。
+     *
+     * <p>诚实说明：readPassword 给的 char[] 在这里被转成了 String，NFKD 归一化也只对 String 做，
+     * 于是助记词以不可清零的 String 在堆里多活到 GC 为止。这是离线短命进程里可接受的残余，不是被忽略的。
+     */
+    static String readMnemonic(Console console) {
+        if (console == null) {
+            throw new IllegalStateException("助记词只在真实终端里交互读取（不回显）：管道、IDE 控制台、CI 拿不到 Console，拒绝运行");
         }
-        BufferedReader in = new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8));
-        String line = in.readLine();
-        if (line == null || line.isBlank()) {
+        char[] chars = console.readPassword("助记词（输入时不显示）: ");
+        if (chars == null || chars.length == 0) {
             throw new IllegalArgumentException("没有读到助记词");
         }
-        return line;
+        try {
+            return new String(chars);
+        } finally {
+            Arrays.fill(chars, ' ');
+        }
     }
 }

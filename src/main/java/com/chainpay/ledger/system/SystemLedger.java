@@ -1,5 +1,8 @@
 package com.chainpay.ledger.system;
 
+import java.util.List;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import com.chainpay.ledger.service.LedgerService;
 import com.chainpay.ledger.service.LedgerServiceImpl;
 import com.zaxxer.hikari.HikariConfig;
@@ -34,6 +37,8 @@ import org.springframework.transaction.support.TransactionTemplate;
  * 配错了就起不来，远好过看起来正常。
  */
 public final class SystemLedger implements AutoCloseable {
+
+    private static final Logger log = LoggerFactory.getLogger(SystemLedger.class);
 
     /** 一次系统事务里能用的两样东西：系统连接上的 SQL 客户端，和绑在同一连接上的账本。 */
     public record Session(JdbcClient jdbc, LedgerService ledger) {}
@@ -76,6 +81,7 @@ public final class SystemLedger implements AutoCloseable {
         SystemLedger ledger = new SystemLedger(pool);
         try {
             ledger.requireSystemIdentity();
+            ledger.judgeAtBoot();
         } catch (RuntimeException e) {
             pool.close();
             throw e;
@@ -117,6 +123,24 @@ public final class SystemLedger implements AutoCloseable {
             }
             return defaults.translate(task, sql, ex);
         };
+    }
+
+    /**
+     * 启动时以系统身份跑一次判官并把可见分录数打进日志（2026-09-09 扫描补丁）。
+     * 判官「能查通」曾经只是超级用户绕过 RLS 的副作用；现在它在一个声明过能看全部行的身份下跑，
+     * 0 处违规才算平账。有违规打 ERROR 但不拒绝启动：失衡要人进来查，起不来反而挡路。
+     */
+    private void judgeAtBoot() {
+        List<String> violations = session.jdbc()
+                .sql("SELECT check_name || ' ' || subject || ' ' || detail FROM ledger_judge()")
+                .query(String.class).list();
+        long entries = session.jdbc().sql("SELECT count(*) FROM entry").query(Long.class).single();
+        if (violations.isEmpty()) {
+            log.info("账本判官（系统身份）：0 处违规，可见分录 {} 条", entries);
+        } else {
+            violations.forEach(v -> log.error("账本判官：{}", v));
+            log.error("账本判官（系统身份）：{} 处违规，可见分录 {} 条——不变量被破坏，先查再动", violations.size(), entries);
+        }
     }
 
     @Override

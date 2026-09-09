@@ -1,5 +1,6 @@
 package com.chainpay.chain.rpc;
 
+import java.util.Locale;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.Optional;
@@ -33,7 +34,19 @@ public record RpcEndpoint(URI uri, String host) {
             throw new IllegalArgumentException(envName + " 必须是 http(s)://主机/…（收到的 scheme=" + scheme
                     + "，host=" + host + "；原文不回显）");
         }
+        if ("http".equalsIgnoreCase(scheme) && !isLoopbackOrPrivate(host)) {
+            throw new IllegalArgumentException(envName + " 用 http:// 指向公网主机 " + host
+                    + "：URL 里带 key，会明文传输；请改用 https://（只有本机或内网节点允许 http）");
+        }
         return new RpcEndpoint(uri, host);
+    }
+
+    /** 回环与 RFC 1918 内网地址允许明文 http（本地节点、局域网节点）。只看字面量，不解析 DNS（2026-09-09 扫描补丁）。 */
+    static boolean isLoopbackOrPrivate(String host) {
+        String h = host.toLowerCase(Locale.ROOT);
+        return h.equals("localhost") || h.equals("::1") || h.equals("[::1]") || h.startsWith("127.")
+                || h.startsWith("10.") || h.startsWith("192.168.")
+                || h.matches("172\\.(1[6-9]|2[0-9]|3[01])\\..*");
     }
 
     /** 可选的地址（审计节点）：空就是空，不是错。 */

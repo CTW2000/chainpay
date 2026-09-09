@@ -1,5 +1,9 @@
 package com.chainpay.common.web;
 
+import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import com.chainpay.merchant.service.AdminService;
 import com.chainpay.security.service.AccountAccessService;
 
@@ -152,6 +156,21 @@ public class ApiExceptionHandler {
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<ApiResponse<Void>> handleBadInput(IllegalArgumentException e) {
         log.warn("请求参数无效: {}", e.getMessage());
+        return ResponseEntity.badRequest()
+                .body(ApiResponse.error(ErrorCode.INVALID_REQUEST, "请求参数无效"));
+    }
+
+    /**
+     * 请求的形状不对 → 400 / 2001：校验注解不过（字段缺失、null、空白）、请求体不是 JSON、
+     * 查询参数缺失或类型不匹配。
+     *
+     * <p>2026-09-09 扫描补丁：这四类此前都落进下面的兜底，回 500。500 对客户端的含义是「稍后重试」，
+     * 而这些请求原样重试永远一样——正是 M1 为余额不足修过一次的重试风暴。不回显框架给的细节。
+     */
+    @ExceptionHandler({MethodArgumentNotValidException.class, HttpMessageNotReadableException.class,
+            MissingServletRequestParameterException.class, MethodArgumentTypeMismatchException.class})
+    public ResponseEntity<ApiResponse<Void>> handleMalformedRequest(Exception e) {
+        log.warn("请求形状无效: {}", e.getClass().getSimpleName());
         return ResponseEntity.badRequest()
                 .body(ApiResponse.error(ErrorCode.INVALID_REQUEST, "请求参数无效"));
     }

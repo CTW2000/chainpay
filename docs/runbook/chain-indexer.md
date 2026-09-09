@@ -39,12 +39,12 @@ curl -s -H "X-CP-ADMIN-TOKEN: $CHAINPAY_ADMIN_TOKEN" http://127.0.0.1:8095/admin
 | 节点拒绝了我们的凭证（HTTP 401 / 403） | key 失效或被撤销，重试永远没用 | 到提供商控制台换 key，更新 `CHAINPAY_CHAIN_RPC_URL`（或审计的那个）；改回 RUNNING、重启 |
 | 代币未登记 / 代币已停用 / decimals 不一致 | 白名单、配置、链三者不一致 | 核对 `chain_token` 与 `chainpay.chain.token-address`；决定是改表还是改配置；改回 RUNNING、重启 |
 | 没有书签，也没配 chainpay.chain.start-block | 第一次启动没告诉它从哪开始 | 配 `CHAINPAY_CHAIN_START_BLOCK`（当前链头减几百，十进制，不能是未来的块）；改回 RUNNING、重启 |
-| 单块 N 的日志也取不到 | 提供商在这个高度答不出（归档范围、套餐限制） | 换提供商；改回 RUNNING、重启 |
+| 单块 N 的日志也取不到 | 提供商在这个高度答不出（归档范围、套餐限制）。**链头两块以内**的单块失败不算——那是负载均衡的各后端头不一致（"block range extends beyond current head block"），2026-09-09 起按瞬时处理、自动下一轮再来，不会走到这一行 | 换提供商；改回 RUNNING、重启 |
 | 节点返回了错误的区块 / …缺少字段… / 不是数组 | 节点返回的形状不对 | 换节点，或向提供商报障；改回 RUNNING、重启 |
 | 日志块 N 的哈希与区块头不符 / 答非所问 | 节点前后不一致或塞入了不属于这批的日志 | 一次是瞬时（自动重试）；反复出现就换节点 |
 | 连续 N 次瞬时失败（DEGRADED） | 网络、限流、提供商故障 | 看 `lastTick` 的 detail 与 `consecutiveFailures`；不用改状态，恢复后自动回 RUNNING |
 | 审计节点连续 N 次答不出（DEGRADED） | 审计节点挂了或落后 | 检查 `CHAINPAY_CHAIN_AUDIT_RPC_URL`；恢复后自动回 RUNNING |
-| `disputedBlocks > 0` | 两个节点对某块的日志意见不同（有无或内容） | `SELECT * FROM chain_reconcile WHERE disputed > 0`，用区块浏览器裁决；M3 之前不会有人据此入账 |
+| `disputedBlocks > 0` | 两个节点对某块的日志意见不同（有无或内容）；或某个节点的回执里有一条解不了的日志（2026-09-09 起记 disputed 而不是停机，原因在 WARN 日志里） | `SELECT * FROM chain_reconcile WHERE disputed > 0`，用区块浏览器裁决；解不了的日志看该轮 WARN「回执里有一条解不了的日志」并核对节点 |
 | 追块很慢（每轮只前进约 `batch-blocks` × 10 以内）且日志里没有 ERROR | 提供商限制了 `eth_getLogs` 的块范围（Alchemy 免费层 10 块，HTTP 400 / code -32600「Under the Free tier plan…」）。窗口会自己收敛到上限、每批只问一次（2026-09-09 起），但每轮仍最多 10 批 | 不是故障。稳态不受影响（Sepolia 每分钟 5 块）；要快就换套餐、换提供商；落后很远又等不起时按第五节前跳书签；「追赶不受每轮 10 批限制」是 M6 的题 |
 | `lastTickAt` 长时间不动，进程还活着 | 2026-09-09 起索引器与入账任务各有线程、系统连接等锁 5 秒就放弃，这一现象不该再出现；出现即是新 bug | 先看线程转储里 scheduling-* 线程在做什么，再 `SELECT pid, wait_event_type, query FROM pg_stat_activity WHERE usename = 'chainpay_system'` |
 

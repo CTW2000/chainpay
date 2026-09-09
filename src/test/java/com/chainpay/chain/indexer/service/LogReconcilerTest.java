@@ -1,5 +1,7 @@
 package com.chainpay.chain.indexer.service;
 
+import com.chainpay.chain.rpc.Hex;
+import com.chainpay.chain.erc20.TransferLogDecoder;
 import static com.chainpay.chain.indexer.domain.BatchOutcome.INDEXED;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -145,6 +147,23 @@ class LogReconcilerTest extends AbstractPostgresTest {
         assertThat(r).isEqualTo(new BlockReconciliation(50, FakeChain.hashOf(50), 1, 0, 0, 0, 1));
         assertThat(statusByHash()).containsOnlyKeys(FakeChain.hashOf(20));
         assertThat(reconcileRows()).containsExactly(List.of(50L, 1L, 0L, 0L, 0L, 1L));
+    }
+
+    @Test
+    @DisplayName("★ 审计节点回执里有一条解不了的日志：本块记为 disputed 等人看，不是把整个索引器停掉")
+    void undecodableAuditLogMarksTheBlockDisputedInsteadOfHalting() {
+        chain.withBlocks(100);
+        chain.reportSafe(90);
+        chain.reportFinalized(80);
+        indexAll();
+        FakeChain audit = new FakeChain().withBlocks(100);
+        audit.addRawLog(new RawLog(LINK, List.of(TransferLogDecoder.TRANSFER_TOPIC0), "0x",     // 只有 1 个 topic：形状不对
+                Hex.fromLong(50), FakeChain.hashOf(50), FakeChain.txHashOf(50, 0), "0x0", "0x0", false));
+
+        BlockReconciliation r = reconciler(audit).reconcileBlock(50);
+
+        assertThat(r.disputed()).as("审计路径的坏数据是「等人看」，不是「解码失败即停机」——那是索引路径的规矩").isEqualTo(1);
+        assertThat(reconcileRows()).hasSize(1);
     }
 
     @Test

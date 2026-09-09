@@ -46,6 +46,23 @@ class RpcEndpointTest {
     }
 
     @Test
+    @DisplayName("★ 带 key 的 URL 用 http:// 指向公网主机 —— 拒绝：key 会明文传输")
+    void plainHttpToAPublicHostIsRejected() {
+        assertThatThrownBy(() -> RpcEndpoint.parse(ENV, "http://eth-sepolia.g.alchemy.com/v2/" + KEY))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("https")
+                .hasMessageNotContaining(KEY);
+    }
+
+    @Test
+    @DisplayName("http:// 指向回环或内网地址（本地节点）—— 放行")
+    void plainHttpToLoopbackOrPrivateHostsIsAllowed() {
+        assertThat(RpcEndpoint.parse(ENV, "http://localhost:8545").host()).isEqualTo("localhost");
+        assertThat(RpcEndpoint.parse(ENV, "http://127.0.0.1:8545").host()).isEqualTo("127.0.0.1");
+        assertThat(RpcEndpoint.parse(ENV, "http://192.168.1.10:8545").host()).isEqualTo("192.168.1.10");
+    }
+
+    @Test
     @DisplayName("空值：主节点必填，报错说明变量名；审计节点可选，空就是空")
     void blankHandling() {
         assertThatThrownBy(() -> RpcEndpoint.parse(ENV, "  "))

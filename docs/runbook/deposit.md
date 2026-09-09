@@ -51,7 +51,18 @@ UPDATE chain_token SET min_deposit = 1 WHERE address = '0x…';   -- 账本单�
 
 下一轮起生效，此前记成 REJECTED_DUST 的不补记。
 
-## 五、核对一笔入账走完了没有（M3-⑤ 演练的做法）
+## 五、账本判官怎么跑（2026-09-09 起）
+
+```sql
+SELECT * FROM ledger_judge();   -- 必须 0 行
+```
+
+**只能以 `chainpay_system` 身份跑**（BYPASSRLS）。用别的身份它会直接拒绝并说明原因，而不是给一个「0 行」——
+此前两个判官视图对非超级用户属主静默返回 0 行，把坏账报成平账。三类违规各一行：`ledger_invariant`（某币种分录不平）、
+`balance_consistency`（物化余额与分录求和不符）、`negative_balance`（不该为负的账户为负）。应用启动时也会以系统身份跑一次并把结果打进日志：
+`账本判官（系统身份）：0 处违规，可见分录 N 条`；有违规每条一行 ERROR，不拒绝启动——失衡要人进来查。
+
+## 六、核对一笔入账走完了没有（M3-⑤ 演练的做法）
 
 商户视角用签名客户端（凭证放 `env/drill.env`，用法见 README）：
 

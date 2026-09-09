@@ -1,5 +1,7 @@
 package com.chainpay.chain.deposit.service;
 
+import com.chainpay.chain.support.FakeChain;
+import java.util.Locale;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.chainpay.chain.deposit.domain.DepositCandidate;
@@ -169,6 +171,19 @@ class DepositPolicyTest extends AbstractDepositPostingTest {
             assertThat(first.retryLater()).as(first.detail()).isTrue();
             assertThat(first.detail()).contains("瞬时");
             assertThat(jdbc.sql("SELECT count(*) FROM deposit").query(Long.class).single()).as("占坑随事务一起回滚").isZero();
+        }
+
+        assertThat(poster().postOnce().credited()).isEqualTo(1);
+        assertThat(depositStatus(5)).startsWith("CREDITED");
+    }
+
+    @Test
+    @DisplayName("★ 节点把块哈希写成大写 —— 仍是同一个块，照记；不能因为大小写把每一笔都判成 HELD_NODE_DISAGREE")
+    void headerHashCaseDoesNotChangeTheVerdict() {
+        pay(5, TEN_LINK);
+        indexUpTo(100, 90, 50);
+        for (FakeChain node : List.of(chain, audit)) {
+            node.tamperHash(5, FakeChain.hashOf(5).toUpperCase(Locale.ROOT));      // 库里是小写，节点现在给大写
         }
 
         assertThat(poster().postOnce().credited()).isEqualTo(1);

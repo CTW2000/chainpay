@@ -1,5 +1,7 @@
 package com.chainpay.chain.deposit.controller;
 
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
 import com.chainpay.chain.deposit.domain.DepositAddress;
 import com.chainpay.chain.deposit.repository.DepositQueryRepository.DepositRow;
 import com.chainpay.chain.deposit.service.DepositAddressService;
@@ -37,7 +39,7 @@ import org.springframework.web.bind.annotation.RestController;
 @ConditionalOnProperty("chainpay.deposit.xpub")
 public class DepositController {
 
-    public record CreateAddressRequest(String token) {}
+    public record CreateAddressRequest(@NotBlank String token) {}
 
     public record AddressResponse(String address, String token, String symbol, String status) {}
 
@@ -65,10 +67,7 @@ public class DepositController {
     /** 一户一币一址，幂等：再申请返回同一个地址。 */
     @PostMapping("/deposit-addresses")
     public ApiResponse<AddressResponse> create(@RequestAttribute(ApiKeyAuthFilter.ATTR_MERCHANT_ID) long merchantId,
-                                               @RequestBody CreateAddressRequest request) {
-        if (request == null || request.token() == null) {
-            throw new IllegalArgumentException("缺少 token");
-        }
+                                               @Valid @RequestBody CreateAddressRequest request) {
         return ApiResponse.ok(tenantScope.asMerchant(merchantId, () -> {
             DepositAddress allocated = addresses.allocate(merchantId, request.token());
             String symbol = queries.balance(allocated.token()).symbol();

@@ -126,7 +126,12 @@ public final class LogReconciler {
         }
 
         // ② 事实源：审计节点回执里属于我们代币的 Transfer；③ 库里 CANONICAL 的行（整条载荷）
-        Map<String, Erc20Transfer> expected = ourTransfers(audit.blockReceipts(blockNumber));
+        Map<String, Erc20Transfer> expected;
+        try {
+            expected = ourTransfers(audit.blockReceipts(blockNumber));
+        } catch (IllegalArgumentException e) {
+            return recordUndecodable(blockNumber, ours.hash(), "审计节点", e);
+        }
         Map<String, Erc20Transfer> found = new LinkedHashMap<>();
         for (Erc20Transfer t : transferLogs.canonicalLogsInBlock(blockNumber)) {
             found.put(key(t.blockHash(), t.logIndex()), t);
@@ -144,7 +149,12 @@ public final class LogReconciler {
         }
 
         // ④ 差异要两个节点都点头：主节点的回执。补录还要求两个节点给的内容一致；内容之争永远不由代码裁决
-        Map<String, Erc20Transfer> primaryHas = ourTransfers(primary.blockReceipts(blockNumber));
+        Map<String, Erc20Transfer> primaryHas;
+        try {
+            primaryHas = ourTransfers(primary.blockReceipts(blockNumber));
+        } catch (IllegalArgumentException e) {
+            return recordUndecodable(blockNumber, ours.hash(), "主节点", e);
+        }
         List<Erc20Transfer> toRepair = missing.stream()
                 .filter(t -> {
                     Erc20Transfer p = primaryHas.get(key(t.blockHash(), t.logIndex()));
@@ -168,6 +178,21 @@ public final class LogReconciler {
             }
             BlockReconciliation result = new BlockReconciliation(blockNumber, ours.hash(),
                     expected.size(), found.size(), repaired, orphaned, disputed);
+            reconciles.record(result);
+            return result;
+        });
+    }
+
+    /**
+     * 回执里有一条解不了的日志。这是审计路径：坏数据的出口是「记为 disputed 等人看」，不是把索引器停掉——
+     * 「解码失败即停机」是索引路径的规矩（一条被跳过的日志就是一笔可能丢失的入账），对账不写入账证据，
+     * 那条规矩不适用于这一帧。2026-09-09 之前这个异常谁也没接，一路穿到 tick 让整个索引器 HALTED，且没记块（扫描补丁）。
+     */
+    private BlockReconciliation recordUndecodable(long blockNumber, String blockHash, String node, IllegalArgumentException e) {
+        log.warn("对账块 {}：{} 的回执里有一条解不了的日志（{}），本块记为 disputed 等人看", blockNumber, node, e.getMessage());
+        int found = transferLogs.canonicalLogsInBlock(blockNumber).size();
+        return tx.execute(status -> {
+            BlockReconciliation result = new BlockReconciliation(blockNumber, blockHash, 0, found, 0, 0, 1);
             reconciles.record(result);
             return result;
         });

@@ -106,7 +106,7 @@ public final class ReorgRecovery {
                 return ReorgResult.skipped(cursorBlock);
             }
             int orphaned = transferLogs.orphanAbove(found.number());
-            if (!cursors.rewind(cursorName, cursorBlock, found.number(), found.hash())) {
+            if (!cursors.rewind(cursorName, cursorBlock, cursorHash, found.number(), found.hash())) {
                 throw new IllegalStateException("书签在锁内被改动，不应发生：" + cursorName);
             }
             reorgs.record(cursor, found, orphaned);

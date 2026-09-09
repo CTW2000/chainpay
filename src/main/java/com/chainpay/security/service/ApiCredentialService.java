@@ -95,10 +95,16 @@ public class ApiCredentialService {
 
     private final JdbcClient jdbcClient;
     private final SecretCipher cipher;
+    /**
+     * 诱饵密文：key 不存在时也拿它解密一次并算一次 HMAC，让「不存在」和「签名错」两条失败路径等耗时。
+     * 响应早已做到不可区分（同一个 401 / 1001），耗时也要——否则计时能确认「这个 api_key 是活的」（2026-09-09 扫描补丁）。
+     */
+    private final String decoyCiphertext;
 
     public ApiCredentialService(JdbcClient jdbcClient, SecretCipher cipher) {
         this.jdbcClient = jdbcClient;
         this.cipher = cipher;
+        this.decoyCiphertext = cipher.encrypt(cipher.generateSecret());
     }
 
     /** 认证成功后我们知道的全部信息。 */
@@ -162,6 +168,8 @@ public class ApiCredentialService {
                 .optional();
 
         if (row.isEmpty()) {
+            // 未命中也走一遍解密 + HMAC：两条失败路径同样贵，结果丢弃
+            sign(prehash(request), cipher.decrypt(decoyCiphertext));
             return Optional.empty();
         }
 

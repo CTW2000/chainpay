@@ -311,6 +311,48 @@ class ApiContractTest extends AbstractPostgresTest {
     }
 
     @Test
+    @DisplayName("★ nonce 必须是 32 个十六进制字符，且在验签之前就检查：字符集不对，签名算对了也 401")
+    void nonceMustBeHexadecimalBeforeSignatureVerification() {
+        String path = "/api/v1/accounts/" + accountId + "/balance";
+        long ts = System.currentTimeMillis();
+        String notHex = "z".repeat(32);                                        // 长度对，字符集不对
+
+        var response = sendSigned(path, "GET", null, ts, notHex,
+                SignedRequests.sign(secret, ts, notHex, "GET", path, ""));
+
+        assertThat(response.statusCode())
+                .as("过滤器 javadoc 用「nonce 定长」论证拼接无歧义，这个前提必须在验签之前被强制，而不是验签之后")
+                .isEqualTo(401);
+    }
+
+    @Test
+    @DisplayName("★ 请求体字段为 null（amount / code）—— 400 / 2001，不是 500：500 会被客户端当成「稍后重试」")
+    void nullFieldsAreBadRequestsNotServerErrors() {
+        var nullAmount = signedPost("/api/v1/transfers", """
+                {"clientTransferId":"t-null-amount","currency":"USDT","amount":null,
+                 "debitAccountId":%d,"creditAccountId":%d,"code":"INTERNAL"}"""
+                .formatted(accountId, otherAccountId));
+        assertThat(nullAmount.statusCode()).as(nullAmount.body()).isEqualTo(400);
+        assertThat(nullAmount.body()).contains("\"code\":\"2001\"");
+
+        var nullCode = signedPost("/api/v1/transfers", """
+                {"clientTransferId":"t-null-code","currency":"USDT","amount":"1",
+                 "debitAccountId":%d,"creditAccountId":%d,"code":null}"""
+                .formatted(accountId, otherAccountId));
+        assertThat(nullCode.statusCode()).as(nullCode.body()).isEqualTo(400);
+        assertThat(nullCode.body()).contains("\"code\":\"2001\"");
+    }
+
+    @Test
+    @DisplayName("★ 请求体不是 JSON —— 400 / 2001，不是 500")
+    void malformedJsonIsABadRequest() {
+        var garbage = signedPost("/api/v1/transfers", "{not json");
+
+        assertThat(garbage.statusCode()).as(garbage.body()).isEqualTo(400);
+        assertThat(garbage.body()).contains("\"code\":\"2001\"");
+    }
+
+    @Test
     @DisplayName("★ nonce 长度必须固定 —— 变长会让签名拼接产生歧义，超长会被用来打 Redis")
     void nonceLengthIsEnforced() {
         // 两个理由都是承重的：
