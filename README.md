@@ -84,7 +84,24 @@ tools/xpub.sh                                            # 按提示输入助记
 
 它只打印 `CHAINPAY_DEPOSIT_XPUB=…` 和前三个地址；前三个地址必须和 MetaMask 里同一助记词的前三个账户一致，一致才说明配进去的 xpub 是你钱包的那一支。助记词不进参数、不进环境变量、不进任何文件。
 
-### 3. 想手工连数据库看看（可选）
+**手工调商户接口**（M3-⑤ 真环境演练走的就是这条路）：先用管理接口给商户发一把凭证，`secret` 只在这一次响应里出现；
+然后用签名客户端 `tools/api.py`（纯标准库，签名串的拼法与 `ApiKeyAuthFilter` / 测试里的 `SignedRequests` 一致，改协议要三处同改）：
+
+```bash
+curl -s -X POST -H "X-CP-ADMIN-TOKEN: $CHAINPAY_ADMIN_TOKEN" -H 'Content-Type: application/json' -d '{"label":"drill"}' http://127.0.0.1:8095/admin/v1/merchants/1/credentials
+```
+
+把响应里的 `apiKey` / `secret` 写进 `env/drill.env`（`CHAINPAY_API_KEY`、`CHAINPAY_API_SECRET`，可选 `CHAINPAY_API_BASE`；被 `env/*.env` 挡在 git 外），
+凭证只从环境变量进脚本，不进参数、不进 shell 历史：
+
+```bash
+set -a; source env/drill.env; set +a
+tools/api.py POST /api/v1/deposit-addresses '{"token":"0x779877A7B0D9E8603169DdbD7836e478b4624789"}'
+tools/api.py GET  '/api/v1/deposits?token=0x779877A7B0D9E8603169DdbD7836e478b4624789&limit=5'
+tools/api.py GET  '/api/v1/deposits/balance?token=0x779877A7B0D9E8603169DdbD7836e478b4624789'
+```
+
+### 4. 想手工连数据库看看（可选）
 
 ```bash
 docker compose up -d

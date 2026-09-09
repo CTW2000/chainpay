@@ -50,3 +50,32 @@ UPDATE chain_token SET min_deposit = 1 WHERE address = '0x…';   -- 账本单�
 ```
 
 下一轮起生效，此前记成 REJECTED_DUST 的不补记。
+
+## 五、核对一笔入账走完了没有（M3-⑤ 演练的做法）
+
+商户视角用签名客户端（凭证放 `env/drill.env`，用法见 README）：
+
+```bash
+set -a; source env/drill.env; set +a
+tools/api.py GET '/api/v1/deposits?token=0x779877A7B0D9E8603169DdbD7836e478b4624789&limit=5'
+```
+
+`status` 与 `level` 一起看：PENDING/SEEN → PENDING/SAFE（约 12 分钟）→ PENDING/FINAL（约 18 分钟）→ CREDITED/FINAL（FINAL 后 30 秒内）。
+FINAL 了却一直 PENDING，先看审计节点是不是答不出（索引器手册第二节）：审计节点不在，入账任务把核对失败当瞬时、每轮重来，一笔都不记。
+
+账本视角：
+
+```sql
+SELECT d.id, d.status, d.transfer_id, a.code, e.amount
+FROM deposit d JOIN entry e ON e.transfer_id = d.transfer_id JOIN account a ON a.id = e.account_id
+ORDER BY d.id;
+```
+
+一笔 CREDITED 对应两条分录：`chain:custody:<币>` 负、`user:<商户>:<币>` 正，金额相等。
+
+**崩溃演练怎么做**（不要在生产做）：另开一个会话 `LOCK TABLE entry IN EXCLUSIVE MODE; SELECT pg_sleep(600);`，入账事务会在占坑、建镜像账户、写转账之后卡在写分录；
+`pg_stat_activity` 里 `usename = 'chainpay_system'` 的连接 `wait_event_type = 'Lock'`。此时 `kill -9` 进程，再终止持锁会话，
+`deposit` 应仍是 0 行、`transfer` / `entry` 计数不变；重启后下一轮恰好记一次。锁别放在 `transfer` 上：`deposit` 的外键会让占坑那条 INSERT 先卡住，演练就只剩「一轮没跑完」。
+
+**注意**：入账任务与索引器共用一个调度线程。入账事务卡住时 `chain_head` 也不再更新、`GET /admin/v1/indexer` 的 `lastTickAt` 停在原地——先查系统连接是否在等锁，再怀疑节点。
+

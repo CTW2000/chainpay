@@ -45,6 +45,8 @@ curl -s -H "X-CP-ADMIN-TOKEN: $CHAINPAY_ADMIN_TOKEN" http://127.0.0.1:8095/admin
 | 连续 N 次瞬时失败（DEGRADED） | 网络、限流、提供商故障 | 看 `lastTick` 的 detail 与 `consecutiveFailures`；不用改状态，恢复后自动回 RUNNING |
 | 审计节点连续 N 次答不出（DEGRADED） | 审计节点挂了或落后 | 检查 `CHAINPAY_CHAIN_AUDIT_RPC_URL`；恢复后自动回 RUNNING |
 | `disputedBlocks > 0` | 两个节点对某块的日志意见不同（有无或内容） | `SELECT * FROM chain_reconcile WHERE disputed > 0`，用区块浏览器裁决；M3 之前不会有人据此入账 |
+| 追块很慢（每轮只前进几十块）且日志里没有 ERROR | 提供商限制了 `eth_getLogs` 的块范围（Alchemy 免费层 10 块，HTTP 400 / code -32600「Under the Free tier plan…」），窗口在上限上反复减半、翻倍 | 不是故障。稳态不受影响（Sepolia 每分钟 5 块）；要快就换套餐、换提供商，或把 `chainpay.chain.batch-blocks` 设到上限以内；落后很远又等不起时按第五节前跳书签 |
+| `lastTickAt` 长时间不动，进程还活着 | 入账任务和索引器共用一个调度线程，入账事务可能卡在数据库锁上 | `SELECT pid, wait_event_type, query FROM pg_stat_activity WHERE usename = 'chainpay_system'`；先解锁再怀疑节点 |
 
 ## 三、恢复
 
@@ -60,3 +62,21 @@ UPDATE indexer_state SET status = 'RUNNING', reason = NULL WHERE name = 'sepolia
 
 启动日志里有一行「索引器主节点 主机名；双节点：审计节点 主机名」或「…单节点（未配置 CHAINPAY_CHAIN_AUDIT_RPC_URL）」。
 审计节点和主节点是同一台主机时应用会拒绝启动：同一家的两把 key 不算独立，等于自比对。
+
+## 五、动书签（前跳或回退）
+
+书签是「这个块及之前都处理过了」的承诺，下一批用 `block(from).parentHash` 核对书签里的哈希。所以动书签只有一种安全做法：
+
+1. 先记下旧值：`SELECT last_block_number, last_block_hash FROM indexer_cursor WHERE name = 'sepolia:link:transfer';`
+2. 目标块的哈希**向两个节点各要一次，必须一致**（`eth_getBlockByNumber`）。一个节点给的哈希只是一个节点的说法。
+3. 停机，或确认在两轮之间（`lastTickAt` 刚更新）；然后
+
+```sql
+UPDATE indexer_cursor
+SET last_block_number = <N>, last_block_hash = '<两个节点一致的哈希>', updated_at = now()
+WHERE name = 'sepolia:link:transfer' AND last_block_number = <旧值>;   -- 带旧值做守卫，UPDATE 0 就说明书签又动了
+```
+
+回退是重放：日志行按（块哈希，日志序号）唯一，已有的行不会再插一次，`deposit` 与账本不受影响（M3-⑤ 实测）。
+前跳是放弃一段历史：跳过的块里如果有到收款地址的转账，它们永远不会入账，而且之后该地址的 `balanceOf` 会和事件累计对不上、进 HELD——只在确认没有已分配地址有活动时做（开发库），生产不做。
+

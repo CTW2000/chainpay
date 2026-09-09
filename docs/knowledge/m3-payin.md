@@ -219,11 +219,36 @@ M1 花了三步才把「这个账户是你的吗」做对（认证 ≠ 授权、
 - 余额接口区分 `available`（已记账）与 `pending`（SEEN/SAFE 合计）——两个门槛在 API 上的样子
 - 参照：币安 `GET /sapi/v1/capital/deposit/address`、`/deposit/hisrec`；OKX `GET /api/v5/asset/deposit-address`、`/asset/deposit-history`（动手前查一次官方文档，字段会变）
 
-### M3-⑤ 真环境演练
+### M3-⑤ 真环境演练（2026-09-08 完成）
 
-- 准备：一个**测试专用**助记词（按真密钥对待，不进 git、不进聊天记录）；MetaMask 导入它；Sepolia ETH（付 gas）与 Sepolia LINK（Chainlink 的测试网水龙头 faucets.chain.link，以页面为准）
-- 流程：分配地址 → 从 MetaMask 转 1 LINK → 看 `deposits` 接口里 SEEN → SAFE → FINAL（约 13 分钟）→ `CREDITED` → 余额接口 available 增加
-- 同 M2 的两条演练：书签回退 1000 块重放不双记；入账任务跑到一半 `kill -9` 重启不漏不重
+**准备**：管理接口给 acme 发一把凭证（id 5，secret 只进 gitignored 的 `env/drill.env`）；用 `tools/api.py`（会签名的 curl，见 README）申请 LINK 收款地址，
+得到序号 0 = `m/44'/60'/0'/0/0`，也就是 MetaMask 的 Account 1。所以付款方不能是 Account 1 自己：这次由 Chainlink 水龙头合约直接打 25 LINK 到该地址，付款方不需要 gas。
+
+**时间线（UTC）**：入块 11660486 → 10:23:53 索引器写入日志 → 10:24:03 商户接口 PENDING/SEEN（1 个确认）→ 10:35:38 SAFE（57）→ 10:42:10 FINAL（88）
+→ 10:45:57 CREDITED（中间插了崩溃演练，否则是 FINAL 后 30 秒内）。余额接口 pending 25 变成 available 25。
+账本：transfer 13，幂等键 `deposit:<块哈希>:34`，分录 `chain:custody:LINK` −25 / `user:acme:LINK` +25，`submitter_merchant_id` 为 NULL（系统身份）。
+
+**演练一 · 入账跑到一半 `kill -9`**：在库里用一个长事务对 `entry` 表 `LOCK TABLE … IN EXCLUSIVE MODE`（只挡写不挡读，商户接口照常）。
+这笔到 FINAL 后，入账事务依次完成占坑（deposit）、建镜像账户（account）、写转账（transfer），卡在写分录；`pg_locks` 里三张表都握着 RowExclusiveLock，
+而已提交的世界里 deposit 仍是空表。此时 `kill -9`，再放锁：孤儿事务被数据库中止，deposit 0 行、镜像账户 0 行、transfer / entry 计数不变。
+重启 31 秒后恰好记一次；deposit 的 id 直接是 3，序列跳号无害。
+第一版把锁放在 `transfer` 上，结果占坑那条 `INSERT INTO deposit` 就卡住了：`deposit` 有指向 `transfer` 的外键，插入要在被引用表上取 RowShareLock，EXCLUSIVE 把它也挡了。
+**外键让一张表上的锁传导到引用它的每张表**——锁 `transfer` 等于锁住所有带 `transfer_id` 外键的插入。
+
+**演练二 · 书签回退重放**：先给 11659778 起的日志行拍快照（行数 + md5），把书签退回 11659777（两个节点对该块哈希一致），让索引器重放到链头。
+结果：书签从 11660597 退回 11659777，索引器重放这 820 块（中途应用随上次会话进程退出、停在 11660557，重启后补完）。范围内日志仍是 155 行、md5 与回退前完全一致，无标废行、无新增行；deposit 仍是那一行 CREDITED，transfer 9、entry 18、余额 ±25，`ledger_invariant` 0 违反。
+不双记靠三层都由数据库守的唯一约束：日志行按（块哈希，日志序号）唯一，`deposit` 按 `transfer_log_id` 唯一，账本按幂等键唯一。
+
+**真环境自己送上门的三件事**
+1. 审计节点 Tenderly 从 08:05 到 08:28 持续 503：头部跟踪器每轮 WARN「连续第 N 次」，第 30 次索引器降级（ERROR，此后每轮再报），恢复后自动「索引器恢复正常」。
+   入账任务在此期间把核对失败归为瞬时、留到下一轮，一笔都不会记——审计节点不在，钱就在路上等。
+2. 08:57 Sepolia 一次深度 3 的重组：索引器自动把书签从 11660074 退到 11660071 重放，标废 0 行。
+3. Alchemy 免费层把 `eth_getLogs` 限在 10 块以内（HTTP 400，code -32600「Under the Free tier plan…」）。「对半分、成功后翻倍」在固定上限上震荡：12 败、6 成、翻倍到 12 再败，
+   每轮 10 批只前进 60 到 100 块；开发库落后的 31k 块要 3 到 5 小时，于是把书签前跳到 11659777（哈希两节点一致，旧值 11629203 已记下）。
+   稳态不受影响，Sepolia 每分钟才 5 块。改进是取舍题，未动代码：失败后不立刻翻倍回去（连续成功若干次再试探）；落后很远时不受「每轮 10 批」限制。
+
+**另一个发现**：入账任务与索引器共用 Spring 默认的单线程调度器。入账事务卡在锁上时 `chain_head.observed_at` 也停了——一个任务被数据库锁或慢节点拖住，另一个跟着停。
+M6 的题：分开执行器，或给系统连接加 `lock_timeout` / `statement_timeout`。
 
 ### M3-⑥（可选，可推迟到 M5 之后）webhook 通知
 
