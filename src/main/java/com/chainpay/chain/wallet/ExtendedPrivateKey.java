@@ -89,6 +89,11 @@ public final class ExtendedPrivateKey {
     }
 
     /** 去掉私钥，得到同一位置的 xpub。这是交给服务器的那份。 */
+    /** 这一层的私钥标量。只给本包用（HotWalletDerivation）；包外拿不到私钥，WalletBoundaryTest 守着。 */
+    BigInteger key() {
+        return key;
+    }
+
     public ExtendedPublicKey neuter() {
         return new ExtendedPublicKey(depth, parentFingerprint, childNumber, chainCode, publicPoint());
     }

@@ -101,6 +101,26 @@ tools/api.py GET  '/api/v1/deposits?token=0x779877A7B0D9E8603169DdbD7836e478b462
 tools/api.py GET  '/api/v1/deposits/balance?token=0x779877A7B0D9E8603169DdbD7836e478b4624789'
 ```
 
+**M4 热钱包的私钥怎么来**（服务端唯一的一把私钥，签付款交易用）：断网，用**另一句**助记词，或与收款树同一句——工具走硬化账户 `m/44'/60'/1'/0/0`，和收款树（账户 0'）互相推不出：
+
+```bash
+tools/hotwallet.sh                                       # 按提示输入助记词，不回显；私钥只打印一次
+```
+
+把打印的 `CHAINPAY_PAYOUT_HOT_WALLET_KEY=…` 粘进 `env/local.env` 后清屏。给它打印的地址领 Sepolia ETH（付 gas）并转入 LINK。绝不能用收款树的普通子密钥：xpub 加任意一个子私钥 = 父私钥 = 全部收款地址。
+
+**私钥检查**：提交前、打镜像后、导出日志时跑一遍，命中就退出 1 且只打印值的前 6 位：
+
+```bash
+tools/check-secrets.sh                                   # 扫仓库（git 跟踪 + 未忽略的文件）
+```
+
+```bash
+tools/check-secrets.sh /path/to/logs /path/to/unpacked-image-layer   # 扫任意目录
+```
+
+公开的测试密钥逐值列在 `tools/check-secrets.allow` 里并注明来源；新加一把要说清楚它为什么可以公开。
+
 ### 4. 想手工连数据库看看（可选）
 
 ```bash

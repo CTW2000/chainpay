@@ -104,6 +104,20 @@
             <artifactId>bcprov-jdk18on</artifactId>
             <version>1.78.1</version>
         </dependency>
+        <!-- M4-①（2026-09-09 改判）：协议层编码用库，不自己写。web3j 只拿 crypto 模块（RLP、EIP-1559 编码、签名与恢复、地址），
+             不拿 core（JSON-RPC 客户端我们自己写，那里面全是策略）。排除 jc-kzg-4844：那是 EIP-4844 blob 交易的原生库，我们永远不发那种交易，
+             付款系统里不该带一个用不上的原生库。BouncyCastle 仍显式保留：M3 的 BIP-32/39 与 xpub 解析用它，web3j 也依赖它。 -->
+        <dependency>
+            <groupId>org.web3j</groupId>
+            <artifactId>crypto</artifactId>
+            <version>6.0.0</version>
+            <exclusions>
+                <exclusion>
+                    <groupId>io.consensys.protocols</groupId>
+                    <artifactId>jc-kzg-4844</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
 
         <!-- ===== 测试 ===== -->
         <dependency>

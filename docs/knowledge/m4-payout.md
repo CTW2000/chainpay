@@ -136,7 +136,13 @@ M3 的入账是「链上先发生，账本后承认」。出账反过来：**账
 - 删 `TenantScope.asSystem`：`SystemScopedLedger` 改走 `SystemLedger`，作用域表只剩两行。
 - 测试：状态机拒绝非法边；三笔账本流各自幂等、`ledger_invariant` 恒 0；RLS 三个方向。
 
-### M4-① 签名（零网络）
+### M4-① 签名（零网络）—— 2026-09-09 完成
+
+> 落地：`chain/wallet` 新增 `Rlp`、`Eip1559Transaction`、`Ecdsa`——先自写并过了全部向量，再按用户改判换成 web3j 6.0.0 `crypto` 的薄包装（同一套测试对库验收，一次全绿；库的解码器宽松，规范性由「拆回再编回必须逐字节相同」守）、
+> `HotWalletSigner`（唯一持钥者）、`HotWalletDerivation` + `HotWalletTool` + `tools/hotwallet.sh`（硬化账户 1' 离线派生）；`chain/payout/config/PayoutConfig`（设了 `CHAINPAY_PAYOUT_HOT_WALLET_KEY` 才装配，日志只打地址）；
+> `tools/check-secrets.sh` + `check-secrets.allow`。已知答案逐字取自 ethereum/tests（RLP 28 例、类型 2 向量、私钥→地址）与 EIP-155 正文算例，见 `src/test/resources/vectors/README.md`。
+> 90 条新测试先红后绿；四面墙：随机 k → EIP-155 的 (r, s) 与确定性各红；去掉 low-s → 24 条消息那条红（EIP-155 向量仍绿：它的 s 碰巧是小的）；
+> 接受前导零 → 官方反例那条红；扫描脚本关掉私钥规则 → 埋进去的私钥没被抓到，红。
 
 - `chain/wallet`：RLP 编码；EIP-1559 类型 2 的签名哈希与原文；ECDSA（RFC 6979、low-s、yParity）与地址恢复；`HotWalletSigner`（进程启动时从环境变量装入私钥，只暴露 `address()` 与 `sign(tx)`，`toString` 不含密钥）。
 - `WalletBoundaryTest` 扩到新类：私钥类型只许出现在 `chain/wallet`。
@@ -183,7 +189,7 @@ M3 的入账是「链上先发生，账本后承认」。出账反过来：**账
 |---|---|---|---|
 | 1 | 热钱包私钥来源 | A 环境变量里的十六进制私钥；B keystore 文件加口令；C 服务器持有助记词自己派生 | **A**。与 M3 的 xpub 同一套注入方式，够 v1；B 多一层加密但口令仍要注入，M6 谈 KMS 时一起看；C 违反「服务端没有助记词」。附加规矩：私钥由离线工具从**另一句助记词或 hardened 账户 1'** 算出，绝不用收款树的账户 |
 | 2 | 交易类型 | A 只做 EIP-1559；B 兼容 legacy | **A**。Sepolia 与主网都支持；两套费率模型只会让卡单策略翻倍 |
-| 3 | 签名实现 | A 自写 RLP + BouncyCastle 的 ECDSA；B 引 web3j | **A**。与 M3 一致，代码量小（RLP 约 60 行、签名约 80 行），KAT 逐字核对；web3j 带一堆我们不用的东西 |
+| 3 | 签名实现 | A 自写 RLP + BouncyCastle 的 ECDSA；B 引 web3j | 先按 A 做完并过了全部向量，**用户改判为 B**（2026-09-09）：协议层编码用库、不重复造轮子。只拿 web3j 6.0.0 的 `crypto` 模块（不拿 `core`，排除 EIP-4844 原生库），薄包装隔离类型，测试原样保留当验收。A 版三个类 487 行换成 326 行薄包装（算法全部委托，剩下的是字段校验、拆回再编回的比对与注释），原则记在 CLAUDE.md §7 |
 | 4 | nonce 分配 | A 库里分配 + 先落库签名后广播 + 单发送线程；B 发送时问节点 pending | **A**。真相虽在链上，但「我打算发第 12 笔」这个意图必须先落库，重启才有据可依；对账把链的真相拉回来 |
 | 5 | 账本流 | A 每商户每币一个冻结账户；B 平台级清算账户 | **A**。商户能在余额接口看到 frozen；RLS 天然归属；M5 对账时冻结合计就是「在路上的出账」 |
 | 6 | gas 记账 | A 记在 `payout_tx`，不进 LINK 账本；B 建 ETH 账户体系 | **A**。ETH 是平台成本，v1 不向商户收费；M5 对账时再决定要不要 ETH 账本 |
