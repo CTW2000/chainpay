@@ -56,11 +56,11 @@ class ChainIndexerConfig {
     ChainReaders chainReaders(ChainIndexerProperties properties) {
         RpcEndpoint primaryEndpoint = RpcEndpoint.parse("CHAINPAY_CHAIN_RPC_URL", properties.rpcUrl());
         Optional<RpcEndpoint> auditEndpoint = RpcEndpoint.parseOptional("CHAINPAY_CHAIN_AUDIT_RPC_URL", properties.auditRpcUrl());
-        ChainReader primary = new EthRpc(new JsonRpcClient(primaryEndpoint.uri()));
+        EthRpc primary = new EthRpc(new JsonRpcClient(primaryEndpoint.uri()));
         if (auditEndpoint.isEmpty()) {
             String mode = "单节点（未配置 CHAINPAY_CHAIN_AUDIT_RPC_URL）：对账走主节点自己的回执路径，能抓索引漏日志，抓不住节点整体撒谎";
             log.warn("索引器主节点 {}；{}", primaryEndpoint.host(), mode);
-            return new ChainReaders(primary, primary, mode);
+            return new ChainReaders(primary, primary, primary, mode);
         }
         if (auditEndpoint.get().host().equalsIgnoreCase(primaryEndpoint.host())) {
             throw new IllegalStateException("审计节点与主节点是同一台主机（" + primaryEndpoint.host()
@@ -69,7 +69,7 @@ class ChainIndexerConfig {
         }
         String mode = "双节点：审计节点 " + auditEndpoint.get().host();
         log.info("索引器主节点 {}；{}", primaryEndpoint.host(), mode);
-        return new ChainReaders(primary, new EthRpc(new JsonRpcClient(auditEndpoint.get().uri())), mode);
+        return new ChainReaders(primary, new EthRpc(new JsonRpcClient(auditEndpoint.get().uri())), primary, mode);
     }
 
     @Bean

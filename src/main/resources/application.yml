@@ -126,6 +126,22 @@ chainpay:
     # 每轮最多处理几条 FINAL 日志
     batch-size: 50
 
+  # M4 · 付款。热钱包私钥故意不在这里给：设了环境变量 CHAINPAY_PAYOUT_HOT_WALLET_KEY 才装配付款模块；
+  # 发送任务还要同时有主节点（chain.rpc-url），两者都有才装配。
+  payout:
+    # 签进交易里的链号（EIP-155）。Sepolia = 11155111；签错链号的交易别的链不认
+    chain-id: 11155111
+    # 发送任务多久跑一轮。签了没广播的、排队的都在这一轮里处理；比出块（12 秒）略快即可
+    send-interval: 10s
+    # 每轮最多签几笔
+    batch-size: 10
+    # 小费地板（gwei）：节点建议低于它时按它出，太低会一直排不上
+    priority-floor-gwei: 1
+    # 总费率上限（gwei）：2 × 基础费 + 小费超过它这一轮不发，等回落。Sepolia 平时几 gwei，涌堵时几十
+    max-fee-gwei: 100
+    # gasLimit 上限：LINK 转账实测 5 万出头，估算 × 1.2 超过它说明这笔交易不正常
+    gas-limit-cap: 200000
+
 logging:
   level:
     # 想看每条 SQL 时把这行打开 —— 账本层的一个核心目的就是"SQL 看得见"

@@ -1,6 +1,8 @@
 package com.chainpay.chain.rpc;
 
 import java.util.ArrayList;
+import java.math.BigInteger;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import tools.jackson.databind.JsonNode;
@@ -15,7 +17,7 @@ import tools.jackson.databind.JsonNode;
  * 接着的 {@code asString()} 是一个不指名字段的空指针——和本模块其它每一处「形状不对就说清收到了什么」的纪律相反
  * （2026-09-03 质询扫描 10.3）。所以每个字段都经 {@link #text}：缺了就指名道姓地拒绝，交给轮询器停下。
  */
-public class EthRpc implements ChainReader {
+public class EthRpc implements ChainReader, ChainSender {
 
     private final JsonRpcClient rpc;
 
@@ -105,6 +107,36 @@ public class EthRpc implements ChainReader {
     public String call(String to, String data, String blockTag) {
         JsonNode result = rpc.call("eth_call", Map.of("to", to, "data", data), blockTag);
         return result == null || result.isNull() ? "0x" : result.asString();
+    }
+
+    @Override
+    public BigInteger transactionCount(String address, String tag) {
+        return Hex.toBigInteger(text(rpc.call("eth_getTransactionCount", address, tag), "eth_getTransactionCount 的结果"));
+    }
+
+    @Override
+    public BigInteger estimateGas(String from, String to, String data) {
+        return Hex.toBigInteger(text(rpc.call("eth_estimateGas", Map.of("from", from, "to", to, "data", data)), "eth_estimateGas 的结果"));
+    }
+
+    /** 基础费从最新块头的 baseFeePerGas 读（EIP-1559 起每个块头都有），小费问 eth_maxPriorityFeePerGas。 */
+    @Override
+    public FeeQuote feeQuote() {
+        JsonNode latest = rpc.call("eth_getBlockByNumber", "latest", false);
+        BigInteger baseFee = Hex.toBigInteger(text(latest, "baseFeePerGas", "eth_getBlockByNumber(latest) 的区块头"));
+        BigInteger tip = Hex.toBigInteger(text(rpc.call("eth_maxPriorityFeePerGas"), "eth_maxPriorityFeePerGas 的结果"));
+        return new FeeQuote(baseFee, tip);
+    }
+
+    @Override
+    public boolean transactionKnown(String txHash) {
+        JsonNode tx = rpc.call("eth_getTransactionByHash", txHash);
+        return tx != null && !tx.isNull();
+    }
+
+    @Override
+    public String sendRawTransaction(byte[] raw) {
+        return text(rpc.call("eth_sendRawTransaction", "0x" + HexFormat.of().formatHex(raw)), "eth_sendRawTransaction 的结果");
     }
 
     private static RawLog toRawLog(JsonNode l, String context) {

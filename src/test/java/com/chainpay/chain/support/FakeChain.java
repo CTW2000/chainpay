@@ -4,6 +4,11 @@ import com.chainpay.chain.erc20.Abi;
 import com.chainpay.chain.erc20.TransferLogDecoder;
 import com.chainpay.chain.rpc.BlockHeader;
 import com.chainpay.chain.rpc.ChainReader;
+import com.chainpay.chain.wallet.Keccak256;
+import com.chainpay.chain.wallet.Eip1559Transaction;
+import com.chainpay.chain.wallet.Ecdsa;
+import com.chainpay.chain.rpc.FeeQuote;
+import com.chainpay.chain.rpc.ChainSender;
 import com.chainpay.chain.rpc.Hex;
 import com.chainpay.chain.rpc.JsonRpcException;
 import com.chainpay.chain.rpc.RawLog;
@@ -35,7 +40,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * <p>日志记着它所在区块的哈希；{@link #logs} 只返回哈希和当前区块一致的日志。
  * 所有状态都是并发安全的。
  */
-public final class FakeChain implements ChainReader {
+public final class FakeChain implements ChainReader, ChainSender {
 
     public static final String GENESIS_PARENT = "0x" + "0".repeat(64);
     private static final String ADDRESS_PADDING = "0x000000000000000000000000";
@@ -54,6 +59,139 @@ public final class FakeChain implements ChainReader {
     private volatile java.util.function.LongConsumer beforeBlock = n -> { };
     /** 撒谎的节点塞进 getLogs 响应里的日志：不看范围、不看分支、不看地址。 */
     private final List<RawLog> injectedIntoGetLogs = new CopyOnWriteArrayList<>();
+
+    // ------------------------------------------------------------------ M4-②：内存池
+    /** 一笔在内存池里等打包的交易。 */
+    public record PendingTx(String hash, String from, long nonce, byte[] raw) {}
+
+    /** 地址 → 已上链的笔数（nonce 的真相）。 */
+    private final ConcurrentMap<String, Long> minedCount = new ConcurrentHashMap<>();
+    /** 哈希 → 待打包。 */
+    private final ConcurrentMap<String, PendingTx> mempool = new ConcurrentHashMap<>();
+    /** 已上链的交易哈希（③ 用；② 只用来回答 transactionKnown）。 */
+    private final Set<String> minedHashes = ConcurrentHashMap.newKeySet();
+    private volatile BigInteger estimatedGas = BigInteger.valueOf(52_000);
+    private volatile JsonRpcException estimateFailure;
+    private volatile FeeQuote feeQuote = new FeeQuote(BigInteger.valueOf(10_000_000_000L), BigInteger.valueOf(1_500_000_000L));
+    private volatile JsonRpcException sendRejection;
+    private volatile Runnable beforeSend = () -> { };
+    private volatile Runnable afterSend = () -> { };
+
+    public void answerEstimateGas(long gas) {
+        this.estimatedGas = BigInteger.valueOf(gas);
+        this.estimateFailure = null;
+    }
+
+    /** 让 eth_estimateGas 像合约 revert 那样失败（带 code）。 */
+    public void failEstimateGas(int code, String message) {
+        this.estimateFailure = new JsonRpcException(code, message);
+    }
+
+    public void quoteFees(BigInteger baseFeePerGas, BigInteger maxPriorityFeePerGas) {
+        this.feeQuote = new FeeQuote(baseFeePerGas, maxPriorityFeePerGas);
+    }
+
+    /** 让广播被节点拒绝（带 code），比如 insufficient funds。 */
+    public void rejectSends(int code, String message) {
+        this.sendRejection = new JsonRpcException(code, message);
+    }
+
+    public void acceptSends() {
+        this.sendRejection = null;
+    }
+
+    /** 广播前的钩子：抛异常 = 请求根本没到节点（传输失败）。 */
+    public void beforeSend(Runnable hook) {
+        this.beforeSend = hook;
+    }
+
+    /** 广播后的钩子：抛异常 = 节点收下了但回答没送到（模拟提交与记录之间崩溃）。 */
+    public void afterSend(Runnable hook) {
+        this.afterSend = hook;
+    }
+
+    /** 别人用这把私钥在别处发了一笔并上链：已上链笔数 +1，我们的库对此一无所知。 */
+    public void externalTransactionFrom(String address) {
+        minedCount.merge(address.toLowerCase(), 1L, Long::sum);
+    }
+
+    public java.util.Collection<PendingTx> mempool() {
+        return List.copyOf(mempool.values());
+    }
+
+    public List<Long> pendingNonces(String address) {
+        return mempool.values().stream().filter(t -> t.from().equalsIgnoreCase(address)).map(PendingTx::nonce).sorted().toList();
+    }
+
+    @Override
+    public BigInteger transactionCount(String address, String tag) {
+        long mined = minedCount.getOrDefault(address.toLowerCase(), 0L);
+        if (!"pending".equals(tag)) {
+            return BigInteger.valueOf(mined);
+        }
+        long next = mined;
+        while (hasPending(address, next)) {
+            next++;
+        }
+        return BigInteger.valueOf(next);
+    }
+
+    private boolean hasPending(String address, long nonce) {
+        return mempool.values().stream().anyMatch(t -> t.from().equalsIgnoreCase(address) && t.nonce() == nonce);
+    }
+
+    @Override
+    public BigInteger estimateGas(String from, String to, String data) {
+        beforeCall.run();
+        if (estimateFailure != null) {
+            throw estimateFailure;
+        }
+        return estimatedGas;
+    }
+
+    @Override
+    public FeeQuote feeQuote() {
+        return feeQuote;
+    }
+
+    @Override
+    public boolean transactionKnown(String txHash) {
+        return mempool.containsKey(txHash.toLowerCase()) || minedHashes.contains(txHash.toLowerCase());
+    }
+
+    /**
+     * 像节点一样收原文：按内容识别（同一份原文再发 = already known），编号低于已上链笔数 = nonce too low，
+     * 同编号已有一笔在池里 = replacement transaction underpriced（③ 再学会比费率）。
+     */
+    @Override
+    public String sendRawTransaction(byte[] raw) {
+        beforeSend.run();
+        synchronized (mempool) {                                   // 钩子之外的部分原子：节点一次只收一份
+            return accept(raw);
+        }
+    }
+
+    private String accept(byte[] raw) {
+        if (sendRejection != null) {
+            throw sendRejection;
+        }
+        Eip1559Transaction.Decoded decoded = Eip1559Transaction.decode(raw);
+        String from = Ecdsa.recoverAddress(decoded.transaction().signingHash(), decoded.signature()).toLowerCase();
+        String hash = "0x" + java.util.HexFormat.of().formatHex(Keccak256.hash(raw));
+        if (mempool.containsKey(hash) || minedHashes.contains(hash)) {
+            throw new JsonRpcException(-32000, "already known");
+        }
+        long nonce = decoded.transaction().nonce();
+        if (nonce < minedCount.getOrDefault(from, 0L)) {
+            throw new JsonRpcException(-32000, "nonce too low: next nonce " + minedCount.get(from) + ", tx nonce " + nonce);
+        }
+        if (hasPending(from, nonce)) {
+            throw new JsonRpcException(-32000, "replacement transaction underpriced");
+        }
+        mempool.put(hash, new PendingTx(hash, from, nonce, raw.clone()));
+        afterSend.run();
+        return hash;
+    }
 
     /** 原始分支上第 N 块的哈希。 */
     public static String hashOf(long number) {

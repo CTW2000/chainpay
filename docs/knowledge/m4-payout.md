@@ -150,12 +150,14 @@ M3 的入账是「链上先发生，账本后承认」。出账反过来：**账
 - 离线工具 `tools/hotwallet.sh`：从**另一句**助记词（或同一句的 hardened 账户 `m/44'/60'/1'/0/0`）算出热钱包私钥与地址，只打印一次，不落盘；README 写清「为什么不能用收款树的账户」。
 - 私钥检查脚本：扫源码、配置、镜像层、日志目录不出现私钥形态的 64 位十六进制（验收标准那条）。
 
-### M4-② nonce 分配与发送
+### M4-② nonce 分配与发送 —— 2026-09-09 完成
 
-- 新 RPC：`eth_getTransactionCount`、`eth_estimateGas`、`eth_feeHistory` 或 `eth_maxPriorityFeePerGas`、`eth_sendRawTransaction`、`eth_getTransactionByHash`、`eth_getTransactionReceipt`；`FakeChain` 学会内存池（收原文、按费率决定是否打包、能丢弃）。
-- 发送任务（单线程、按 FIFO）：一个系统事务里 `SELECT … FOR UPDATE` 锁热钱包行 → 取 `next_nonce` 并加一 → 估 gas、定费率、签名 → 把原文与哈希写进 `payout_tx`（SIGNED）→ 提交；**提交之后**才广播，成功改 BROADCAST。进程在提交与广播之间死掉：重启后所有 SIGNED 行重发原文，节点回 already known 也算成功。
-- 与链对账：启动时与每轮比对 `next_nonce`、链上 `latest` 计数、库里未终结的尝试数；链比库多 = 有人在别处用了这把私钥，**停发叫人**；库比链多且无未终结尝试 = 跳号，补发或以取消交易填坑。
-- 测试：10 笔并发申请 → nonce 连续；两个实例同时发 → 行锁串行、不重号；提交后广播前崩溃 → 重发不重号；already known 当成功；节点计数超前 → 停发。
+- 新 RPC：`eth_getTransactionCount`、`eth_estimateGas`、`eth_maxPriorityFeePerGas`（基础费从 `eth_getBlockByNumber("latest")` 拿，没用 `eth_feeHistory`）、`eth_sendRawTransaction`、`eth_getTransactionByHash`（回执留给 ③）；`FakeChain` 学会内存池：按内容识别 already known、编号低于已上链笔数 = nonce too low、同编号已有一笔 = replacement underpriced（按费率决定打包与丢弃留给 ③）。
+- 发送任务 `PayoutSender.sendOnce()` 每轮三段：**对账**（链上计数事务外问；事务里锁热钱包行、第一次见到从链上计数起步；核 N = C + U，C > N 或 N > C + U 都停整把钱包）→ **重发**（SIGNED 的原样重发，already known 算成功）→ **排队的**（事务外估 gas 与费率；revert = 判失败并解冻，编号没分；事务里锁行、改 SIGNED、签名、写原文、编号 +1、提交；提交之后才广播）。网络永远不在事务里。
+- 广播的回答三类：成功 / already known → BROADCAST；传输失败 → 下一轮重发同一份原文；节点明确拒绝（insufficient funds、nonce too low 且不认识我们的哈希）→ 整把钱包 HALTED，人处理后恢复即重发。规划里「跳号补发或以取消交易填坑」改成停发叫人：② 还没有回执，填坑的判断留给 ③。
+- 费率 `FeePolicy`：小费 = max(节点建议, 地板 1 gwei)；总费率 = 2 × 基础费 + 小费，超过上限（100 gwei）这一轮不发等回落；gasLimit = 估算 × 1.2，超过上限（20 万）判失败。
+- 测试 17 条（发送 12 + EthRpc 合同 5）。**发现**：双实例测试证明不了热钱包行锁——两个线程按同样顺序抢同一笔提现，在提现行上就串行了；拆掉行锁与编号守卫它仍绿。拆墙挖出两处双实例竞态并修：同一笔 revert 由锁提现行让后到的看见已 FAILED；同一份原文两个实例同时重发，BROADCAST 谁先改谁算。
+- 停发原因与处置：`docs/runbook/payout.md`。
 
 ### M4-③ 追踪、结算、卡单
 

@@ -1,5 +1,6 @@
 package com.chainpay.chain.rpc;
 
+import java.math.BigInteger;
 import java.util.List;
 
 /**
@@ -38,4 +39,19 @@ public interface ChainReader {
      * @return 十六进制返回值；合约没有这个函数、或执行 revert，节点以带 code 的错误报出
      */
     String call(String to, String data, String blockTag);
+
+    /**
+     * 该地址已发出的交易数（M4-②）。{@code latest} = 已上链的笔数，是确定的事实；{@code pending} 把<b>这个节点</b>内存池里
+     * 排队的也算上，是它此刻的视角。付款的对账用 latest。
+     */
+    BigInteger transactionCount(String address, String tag);
+
+    /** {@code eth_estimateGas}：节点模拟执行一次。合约 revert（比如热钱包代币不够）以带 code 的异常抛出——在花任何 gas 之前就知道发不出去。 */
+    BigInteger estimateGas(String from, String to, String data);
+
+    /** 最新块的基础费与节点建议的小费。 */
+    FeeQuote feeQuote();
+
+    /** 节点知不知道这笔交易（内存池里或已上链）。「nonce too low」时用它分辨是我们那笔已上链，还是别人用了编号。 */
+    boolean transactionKnown(String txHash);
 }
