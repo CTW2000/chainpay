@@ -20,10 +20,10 @@ public enum PayoutTxStatus {
     SIGNED, BROADCAST, MINED, DROPPED, REPLACED;
 
     private static final Map<PayoutTxStatus, Set<PayoutTxStatus>> EDGES = Map.of(
-            SIGNED, Set.of(BROADCAST),
+            SIGNED, Set.of(BROADCAST, REPLACED),      // 签了没发出去时，同编号的另一笔（加价的替身）先上链了
             BROADCAST, Set.of(MINED, DROPPED, REPLACED),
             MINED, Set.of(BROADCAST, REPLACED),
-            DROPPED, Set.of(BROADCAST),
+            DROPPED, Set.of(BROADCAST, REPLACED),
             REPLACED, Set.of());
 
     public Set<PayoutTxStatus> successors() {

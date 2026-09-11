@@ -9,7 +9,7 @@ spring:
       # 入账事务等锁时 chain_head 也停了更新，确认数冻结、降级检测不跑、一条 ERROR 都没有。
       # 现在两个任务、留有余量；加定时任务时同步加大，ChainIndexerBootSmokeTest 断言「线程数 ≥ 注册的任务数」。
       pool:
-        size: 4
+        size: 5
 
   datasource:
     # 对应 docker-compose.yml 里绑在 127.0.0.1:5433 的 Postgres 18。
@@ -141,6 +141,10 @@ chainpay:
     max-fee-gwei: 100
     # gasLimit 上限：LINK 转账实测 5 万出头，估算 × 1.2 超过它说明这笔交易不正常
     gas-limit-cap: 200000
+    # 追踪任务多久跑一轮：问回执、核 FINAL、结算。回执一块一变，比出块略慢即可
+    track-interval: 15s
+    # 广播后多久还没上链算卡住：同编号加价 25% 再发一笔。Sepolia 12 秒一块，3 分钟约 15 块；太短会白白多付小费
+    stuck-after: 3m
 
 logging:
   level:

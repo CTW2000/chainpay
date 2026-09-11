@@ -5,6 +5,8 @@ import com.chainpay.chain.indexer.config.ChainReaders;
 import com.chainpay.chain.payout.service.FeePolicy;
 import com.chainpay.chain.payout.service.PayoutSendScheduler;
 import com.chainpay.chain.payout.service.PayoutSender;
+import com.chainpay.chain.payout.service.PayoutTrackScheduler;
+import com.chainpay.chain.payout.service.PayoutTracker;
 import com.chainpay.chain.wallet.HotWalletSigner;
 import com.chainpay.ledger.system.SystemLedger;
 import java.math.BigInteger;
@@ -35,12 +37,23 @@ class PayoutSendConfig {
                               PayoutProperties p, ChainIndexerProperties chain) {
         log.info("发送任务已装配：链号 {}，每轮最多 {} 笔，小费地板 {} gwei，总费率上限 {} gwei，gas 上限 {}",
                 p.chainId(), p.batchSize(), p.priorityFloorGwei(), p.maxFeeGwei(), p.gasLimitCap());
-        return new PayoutSender(system, readers.primary(), readers.sender(), signer, fees, p.chainId(), chain.chainName(), p.batchSize());
+        return new PayoutSender(system, readers.primary(), readers.sender(), signer, fees, p.chainId(), chain.chainName(), p.batchSize(), p.stuckAfter());
     }
 
     @Bean
     PayoutSendScheduler payoutSendScheduler(PayoutSender sender) {
         return new PayoutSendScheduler(sender);
+    }
+
+    @Bean
+    PayoutTracker payoutTracker(SystemLedger system, ChainReaders readers) {
+        log.info("追踪任务已装配：回执问主节点，结算要两个节点都说 finalized 且哈希一致（{}）", readers.auditMode());
+        return new PayoutTracker(system, readers.primary(), readers.audit());
+    }
+
+    @Bean
+    PayoutTrackScheduler payoutTrackScheduler(PayoutTracker tracker) {
+        return new PayoutTrackScheduler(tracker);
     }
 
     private static BigInteger gwei(long n) {

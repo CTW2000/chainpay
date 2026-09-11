@@ -13,6 +13,7 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * @param priorityFloorGwei 小费地板：节点建议低于它时按它出，太低会一直排不上
  * @param maxFeeGwei       总费率上限：2 × 基础费 + 小费超过它这一轮不发，等回落
  * @param gasLimitCap      gasLimit 上限：估算 × 1.2 超过它说明这笔交易不正常，直接判失败
+ * @param stuckAfter       广播后多久还没上链算卡住，给同编号加价再发一笔（M4-③）。Sepolia 12 秒一块，3 分钟约 15 块
  */
 @ConfigurationProperties(prefix = "chainpay.payout")
 public record PayoutProperties(
@@ -21,4 +22,5 @@ public record PayoutProperties(
         @DefaultValue("10") int batchSize,
         @DefaultValue("1") long priorityFloorGwei,
         @DefaultValue("100") long maxFeeGwei,
-        @DefaultValue("200000") long gasLimitCap) {}
+        @DefaultValue("200000") long gasLimitCap,
+        @DefaultValue("3m") java.time.Duration stuckAfter) {}

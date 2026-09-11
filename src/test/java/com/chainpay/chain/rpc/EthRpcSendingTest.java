@@ -42,6 +42,7 @@ class EthRpcSendingTest {
         answers.put("eth_getBlockByNumber", "{\"jsonrpc\":\"2.0\",\"result\":{\"number\":\"0xb1e6d1\",\"hash\":\"" + HASH + "\",\"parentHash\":\"" + HASH + "\",\"timestamp\":\"0x68c0\",\"baseFeePerGas\":\"0x2540be400\"}}");
         answers.put("eth_sendRawTransaction", "{\"jsonrpc\":\"2.0\",\"result\":\"" + HASH + "\"}");
         answers.put("eth_getTransactionByHash", "{\"jsonrpc\":\"2.0\",\"result\":null}");
+        answers.put("eth_getTransactionReceipt", "{\"jsonrpc\":\"2.0\",\"result\":{\"transactionHash\":\"" + HASH + "\",\"status\":\"0x1\",\"blockNumber\":\"0xb1e6d1\",\"blockHash\":\"" + HASH + "\",\"gasUsed\":\"0xc738\",\"effectiveGasPrice\":\"0x2540be400\"}}");
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/", exchange -> {
             JsonNode request = json.readTree(exchange.getRequestBody().readAllBytes());
@@ -110,5 +111,20 @@ class EthRpcSendingTest {
         assertThat(rpc.transactionKnown(HASH)).isFalse();
         answers.put("eth_getTransactionByHash", "{\"jsonrpc\":\"2.0\",\"result\":{\"hash\":\"" + HASH + "\",\"nonce\":\"0x0\"}}");
         assertThat(rpc.transactionKnown(HASH)).isTrue();
+    }
+
+    @Test
+    @DisplayName("★ eth_getTransactionReceipt：有回执 → status / 块号 / 块哈希 / gasUsed / effectiveGasPrice；null → 空")
+    void transactionReceiptIsTranslated() {
+        var receipt = rpc.transactionReceipt(HASH).orElseThrow();
+        assertThat(receipt.success()).isTrue();
+        assertThat(receipt.blockNumber()).isEqualTo(0xb1e6d1L);
+        assertThat(receipt.blockHash()).isEqualTo(HASH);
+        assertThat(receipt.gasUsed()).isEqualTo(0xc738L);
+        assertThat(receipt.effectiveGasPrice()).isEqualTo(java.math.BigInteger.valueOf(10_000_000_000L));
+        assertThat(lastParams.get("eth_getTransactionReceipt").get(0).asString()).isEqualTo(HASH);
+
+        answers.put("eth_getTransactionReceipt", "{\"jsonrpc\":\"2.0\",\"result\":null}");
+        assertThat(rpc.transactionReceipt(HASH)).isEmpty();
     }
 }

@@ -55,6 +55,27 @@ public final class FeePolicy {
         return new Fees(priority, maxFee, gasLimit.longValueExact());
     }
 
+    /** 加价的幅度：节点要求两个费率都 ≥ 旧的 110% 才肯顶替，25% 留出基础费继续上涨的余地。 */
+    private static final BigInteger BUMP_PERCENT = BigInteger.valueOf(125);
+
+    /**
+     * 给卡住的尝试算替身的费率：同编号再发一笔，两个费率都取「市价」与「旧的 125%」里大的那个——
+     * 只按市价可能不到节点要求的 +10%（被拒 underpriced），只按 +25% 可能仍低于此刻的基础费（照样排不上）。
+     * 超过上限抛 {@link FeeTooHighException}：这一轮不加，等回落；旧的那笔仍在池里排队，没有损失。gasLimit 沿用旧值——同一笔执行，估算不变。
+     */
+    public Fees bump(FeeQuote quote, BigInteger oldMaxFeePerGas, BigInteger oldMaxPriorityFeePerGas, long gasLimit) {
+        BigInteger priority = quote.maxPriorityFeePerGas().max(priorityFloorWei).max(percentUp(oldMaxPriorityFeePerGas));
+        BigInteger maxFee = quote.baseFeePerGas().multiply(BigInteger.TWO).add(priority).max(percentUp(oldMaxFeePerGas));
+        if (maxFee.compareTo(maxFeeCapWei) > 0) {
+            throw new FeeTooHighException("费率超上限：加价后总费率 " + gwei(maxFee) + " gwei，上限 " + gwei(maxFeeCapWei) + " gwei；这一轮不加价，等回落");
+        }
+        return new Fees(priority, maxFee, gasLimit);
+    }
+
+    private static BigInteger percentUp(BigInteger value) {
+        return value.multiply(BUMP_PERCENT).add(BigInteger.valueOf(99)).divide(BigInteger.valueOf(100));   // 向上取整，保证 ≥ 125%
+    }
+
     private static String gwei(BigInteger wei) {
         return wei.divide(GWEI).toString();
     }

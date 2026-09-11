@@ -135,6 +135,22 @@ public class EthRpc implements ChainReader, ChainSender {
     }
 
     @Override
+    public java.util.Optional<TransactionReceipt> transactionReceipt(String txHash) {
+        JsonNode r = rpc.call("eth_getTransactionReceipt", txHash);
+        if (r == null || r.isNull()) {
+            return java.util.Optional.empty();
+        }
+        String context = "eth_getTransactionReceipt 的回执";
+        return java.util.Optional.of(new TransactionReceipt(
+                text(r, "transactionHash", context),
+                Hex.toLong(text(r, "status", context)) == 1,
+                Hex.toLong(text(r, "blockNumber", context)),
+                text(r, "blockHash", context),
+                Hex.toLong(text(r, "gasUsed", context)),
+                Hex.toBigInteger(text(r, "effectiveGasPrice", context))));
+    }
+
+    @Override
     public String sendRawTransaction(byte[] raw) {
         return text(rpc.call("eth_sendRawTransaction", "0x" + HexFormat.of().formatHex(raw)), "eth_sendRawTransaction 的结果");
     }

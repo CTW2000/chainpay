@@ -159,10 +159,10 @@ M3 的入账是「链上先发生，账本后承认」。出账反过来：**账
 - 测试 17 条（发送 12 + EthRpc 合同 5）。**发现**：双实例测试证明不了热钱包行锁——两个线程按同样顺序抢同一笔提现，在提现行上就串行了；拆掉行锁与编号守卫它仍绿。拆墙挖出两处双实例竞态并修：同一笔 revert 由锁提现行让后到的看见已 FAILED；同一份原文两个实例同时重发，BROADCAST 谁先改谁算。
 - 停发原因与处置：`docs/runbook/payout.md`。
 
-### M4-③ 追踪、结算、卡单
+### M4-③ 追踪、结算、卡单 —— 2026-09-10 完成
 
-- 追踪任务：BROADCAST 的尝试查回执；status 0 → payout FAILED、解冻；status 1 → MINED，等 `chain_head.finalized` 过了它的块且**两个节点对该块哈希一致**（复用 M3-② 的门）→ 结算 → CONFIRMED。
-- 卡单：N 块（约 8 块）未上链 → 同 nonce 加价 25%（不低于节点要求的 +10%）再发一笔，费率不超过配置上限；超上限停下叫人；旧尝试在新尝试上链后标 REPLACED。`eth_getTransactionByHash` 为空且未上链 → dropped，重发原文。
+- 追踪任务：BROADCAST 的尝试查回执；有回执 → MINED（status 0 也是上链），等两个节点的 finalized 都过了它的块且**对该块哈希一致**（复用 M3-② 的门）→ status 1 结算 → CONFIRMED，status 0 解冻 → FAILED（改判：revert 也绑 FINAL，重组可能把它翻回去，冻着的钱多等十几分钟比退错了强）。
+- 卡单：广播超过 `stuck-after`（3 分钟约 15 块）未上链 → 同 nonce 加价，两个费率都取 max(市价, 旧 × 125%)（不低于节点要求的 +110%）再发一笔；超过费率上限**这一轮不加、等回落**（规划里写「停下叫人」，改判：旧的那笔仍在池里排队，没有损失，费率是瞬时的）；旧尝试在新尝试上链后标 REPLACED。`eth_getTransactionByHash` 为空且未上链 → DROPPED，发送任务重发原文；有兄弟正被节点认着 → 是被顶掉，REPLACED。
 - 重组：MINED 的块消失 → 退回 BROADCAST 继续等（结算只在 FINAL 之后，同 M3）。
 - 调度线程：任务数从 2 变 4，`pool.size` 随之提高，冒烟测试的「线程数 ≥ 任务数」断言守着。
 

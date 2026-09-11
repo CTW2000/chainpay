@@ -12,6 +12,7 @@ import com.chainpay.chain.rpc.ChainSender;
 import com.chainpay.chain.rpc.Hex;
 import com.chainpay.chain.rpc.JsonRpcException;
 import com.chainpay.chain.rpc.RawLog;
+import com.chainpay.chain.rpc.TransactionReceipt;
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -62,7 +63,12 @@ public final class FakeChain implements ChainReader, ChainSender {
 
     // ------------------------------------------------------------------ M4-②：内存池
     /** 一笔在内存池里等打包的交易。 */
-    public record PendingTx(String hash, String from, long nonce, byte[] raw) {}
+    public record PendingTx(String hash, String from, long nonce, byte[] raw, BigInteger maxFeePerGas, BigInteger maxPriorityFeePerGas) {}
+
+    /** 已上链的一笔：记它被打进哪块、当时那块的哈希、执行成功与否；块被重组掉，回执就作废、交易退回内存池。 */
+    public record MinedTx(PendingTx tx, long blockNumber, String blockHashAtMining, boolean success) {}
+
+    private final ConcurrentMap<String, MinedTx> receipts = new ConcurrentHashMap<>();
 
     /** 地址 → 已上链的笔数（nonce 的真相）。 */
     private final ConcurrentMap<String, Long> minedCount = new ConcurrentHashMap<>();
@@ -136,6 +142,49 @@ public final class FakeChain implements ChainReader, ChainSender {
         return BigInteger.valueOf(next);
     }
 
+    private static boolean atLeastTenPercentMore(BigInteger candidate, BigInteger old) {
+        return candidate.multiply(BigInteger.valueOf(100)).compareTo(old.multiply(BigInteger.valueOf(110))) >= 0;
+    }
+
+    /**
+     * 把内存池里的一笔打进第 {@code blockNumber} 块（块必须已造出来）。必须是该地址编号最小的那笔——链上 nonce 严格顺序。
+     * {@code success} = 回执的 status：false 是合约 revert，同样占掉编号、扣掉 gas。
+     */
+    public void mine(long blockNumber, String txHash, boolean success) {
+        PendingTx tx = mempool.get(txHash.toLowerCase());
+        if (tx == null) {
+            throw new IllegalStateException("内存池里没有 " + txHash);
+        }
+        long lowest = mempool.values().stream().filter(t -> t.from().equalsIgnoreCase(tx.from())).mapToLong(PendingTx::nonce).min().orElseThrow();
+        if (tx.nonce() != lowest) {
+            throw new IllegalStateException("编号 " + tx.nonce() + " 前面还有 " + lowest + " 没上链");
+        }
+        BlockHeader b = block(blockNumber);
+        mempool.remove(tx.hash());
+        receipts.put(tx.hash(), new MinedTx(tx, blockNumber, b.hash(), success));
+        minedHashes.add(tx.hash());
+        minedCount.put(tx.from().toLowerCase(), tx.nonce() + 1);
+    }
+
+    /** 节点重启、内存池清空：它把这笔忘了（没上链、也不在池里）。 */
+    public void forget(String txHash) {
+        mempool.remove(txHash.toLowerCase());
+    }
+
+    @Override
+    public java.util.Optional<TransactionReceipt> transactionReceipt(String txHash) {
+        MinedTx m = receipts.get(txHash.toLowerCase());
+        if (m == null) {
+            return java.util.Optional.empty();
+        }
+        String current = block(m.blockNumber()).hash();
+        if (!current.equalsIgnoreCase(m.blockHashAtMining())) {     // 那块被重组掉了（tamperHash 之类没走 reorgFrom 的路径）
+            reinjectReorgedTransactions();
+            return java.util.Optional.empty();
+        }
+        return java.util.Optional.of(new TransactionReceipt(m.tx().hash(), m.success(), m.blockNumber(), current, 51_000L, BigInteger.valueOf(10_000_000_000L)));
+    }
+
     private boolean hasPending(String address, long nonce) {
         return mempool.values().stream().anyMatch(t -> t.from().equalsIgnoreCase(address) && t.nonce() == nonce);
     }
@@ -185,10 +234,16 @@ public final class FakeChain implements ChainReader, ChainSender {
         if (nonce < minedCount.getOrDefault(from, 0L)) {
             throw new JsonRpcException(-32000, "nonce too low: next nonce " + minedCount.get(from) + ", tx nonce " + nonce);
         }
-        if (hasPending(from, nonce)) {
-            throw new JsonRpcException(-32000, "replacement transaction underpriced");
+        PendingTx incoming = new PendingTx(hash, from, nonce, raw.clone(), decoded.transaction().maxFeePerGas(), decoded.transaction().maxPriorityFeePerGas());
+        PendingTx old = mempool.values().stream().filter(t -> t.from().equalsIgnoreCase(from) && t.nonce() == nonce).findFirst().orElse(null);
+        if (old != null) {                                          // 同编号已有一笔：像 geth 一样，两个费率都 ≥ 旧的 110% 才顶替，否则 underpriced
+            if (!atLeastTenPercentMore(incoming.maxFeePerGas(), old.maxFeePerGas())
+                    || !atLeastTenPercentMore(incoming.maxPriorityFeePerGas(), old.maxPriorityFeePerGas())) {
+                throw new JsonRpcException(-32000, "replacement transaction underpriced");
+            }
+            mempool.remove(old.hash());                             // 被顶掉的那笔节点就不认识了
         }
-        mempool.put(hash, new PendingTx(hash, from, nonce, raw.clone()));
+        mempool.put(hash, incoming);
         afterSend.run();
         return hash;
     }
@@ -242,6 +297,19 @@ public final class FakeChain implements ChainReader, ChainSender {
             String hash = hashOf(n, branch);
             blocks.put(n, new BlockHeader(n, hash, parent, blocks.get(n).timestamp()));
             parent = hash;
+        }
+        reinjectReorgedTransactions();
+    }
+
+    /** 重组时像 geth 一样：被换掉的块里的交易退回内存池，回执作废、计数回退。 */
+    private void reinjectReorgedTransactions() {
+        for (MinedTx m : List.copyOf(receipts.values())) {
+            if (!block(m.blockNumber()).hash().equalsIgnoreCase(m.blockHashAtMining())) {
+                receipts.remove(m.tx().hash());
+                minedHashes.remove(m.tx().hash());
+                minedCount.put(m.tx().from().toLowerCase(), m.tx().nonce());
+                mempool.put(m.tx().hash(), m.tx());
+            }
         }
     }
 

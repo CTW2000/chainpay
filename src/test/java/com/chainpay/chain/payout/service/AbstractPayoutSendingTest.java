@@ -81,6 +81,25 @@ abstract class AbstractPayoutSendingTest extends AbstractPostgresTest {
         return new PayoutSender(systemLedger, chain, chain, signer, new FeePolicy(GWEI, GWEI.multiply(BigInteger.valueOf(50)), 200_000), SEPOLIA, 10);
     }
 
+    /** 卡住多久算卡住由测试定；Duration.ZERO = 广播过的一律算卡住。 */
+    protected PayoutSender sender(java.time.Duration stuckAfter) {
+        return new PayoutSender(systemLedger, chain, chain, signer, new FeePolicy(GWEI, GWEI.multiply(BigInteger.valueOf(50)), 200_000),
+                SEPOLIA, "sepolia", 10, stuckAfter);
+    }
+
+    /** 追踪任务：主节点与审计节点都是同一个假节点。 */
+    protected PayoutTracker tracker() {
+        return new PayoutTracker(systemLedger, chain, chain);
+    }
+
+    protected PayoutTracker tracker(FakeChain audit) {
+        return new PayoutTracker(systemLedger, chain, audit);
+    }
+
+    protected long transfersWithKey(String idempotencyKey) {
+        return jdbc.sql("SELECT count(*) FROM transfer WHERE idempotency_key = :k").param("k", idempotencyKey).query(Long.class).single();
+    }
+
     protected String payoutStatus(long id) {
         return jdbc.sql("SELECT status FROM payout WHERE id = :id").param("id", id).query(String.class).single();
     }

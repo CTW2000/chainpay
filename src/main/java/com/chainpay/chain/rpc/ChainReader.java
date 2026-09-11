@@ -54,4 +54,7 @@ public interface ChainReader {
 
     /** 节点知不知道这笔交易（内存池里或已上链）。「nonce too low」时用它分辨是我们那笔已上链，还是别人用了编号。 */
     boolean transactionKnown(String txHash);
+
+    /** 回执：空 = 还没上链（在内存池里、或节点已经忘了它）。有回执 = 已写进某个块，status 0 也算上链。 */
+    java.util.Optional<TransactionReceipt> transactionReceipt(String txHash);
 }

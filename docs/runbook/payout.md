@@ -1,6 +1,6 @@
 # 付款（M4）操作手册：热钱包停发了怎么办
 
-> 适用范围：M4-②（编号、签名、广播）。追踪与结算（③）落地后再扩。
+> 适用范围：M4-②（编号、签名、广播）与 M4-③（回执、结算、卡单）。
 > 规矩不变：**人永远不手工碰账本表**（`account` / `transfer` / `entry`）。
 
 ## 一、先看哪里
@@ -12,8 +12,11 @@ SELECT address, next_nonce, status, halt_reason, updated_at FROM hot_wallet;
 -- 提现按状态计数
 SELECT status, count(*) FROM payout GROUP BY status ORDER BY 1;
 
--- 签了没广播出去的尝试（正常情况下这张表里 SIGNED 只存在几毫秒）
-SELECT id, payout_id, nonce, tx_hash, status, updated_at FROM payout_tx WHERE status = 'SIGNED' ORDER BY nonce;
+-- 尝试按状态计数；SIGNED 正常只存在几毫秒，BROADCAST 超过几分钟看第七节
+SELECT status, count(*) FROM payout_tx GROUP BY status ORDER BY 1;
+
+-- 上链了但还没结算的：等哪一步（块号 vs 两个节点的 finalized）
+SELECT t.payout_id, t.nonce, t.block_number, t.reverted, t.updated_at FROM payout_tx t WHERE t.status = 'MINED' ORDER BY t.block_number;
 ```
 
 日志里每轮一行：`发送：看了 N 笔，签 …、广播 …、重发 …、判失败 …`；停发时每轮一行 ERROR `热钱包停发，等人处理：…`。
@@ -58,3 +61,20 @@ UPDATE hot_wallet SET next_nonce = <链上计数 或 C + U>, updated_at = now() 
 ## 六、判失败（FAILED）的提现
 
 估 gas 就 revert（最常见：热钱包的 LINK 不够）的提现会直接 FAILED、写 `failure_reason`、解冻退回商户可用余额，编号没分出去。往热钱包转 LINK 后，商户重新申请即可；**已 FAILED 的不会自动重发**。
+
+## 七、追踪与卡单（M4-③）
+
+追踪任务每 `track-interval`（15s）一轮，日志 `追踪：看了 N 个尝试，上链 …、结算 …、判失败 …、丢弃 …、作废 …、重组退回 …、等 FINAL …`。
+
+| 看到什么 | 发生了什么 | 该做什么 |
+|---|---|---|
+| 提现 MINED 很久不 CONFIRMED，日志每轮 `等 FINAL` | 块还没被两个节点 finalized（Sepolia 约 15 分钟） | 等。`SELECT block_number` 对照 `GET /admin/v1/indexer` 里两个节点的 finalized |
+| 每轮 WARN `审计节点对块 N 的哈希意见不同` | 两个节点对那块看法不一致：审计节点落后、或真的分叉 | 同索引器 runbook 的 disputed 处理：区块浏览器裁决；审计节点恢复后自动结算，不用改状态 |
+| WARN `所在的块 N 被重组：退回 BROADCAST` | 主节点换了分支，那笔交易退回内存池 | 不用做：下一轮会重新等回执；同一笔只会结算一次（幂等键） |
+| WARN `节点忘了…DROPPED，发送任务下一轮原样重发` | 节点重启、内存池清空 | 不用做：编号不变、原文重发 |
+| WARN `卡了超过 …：加价重发，总费率 A → B` | 广播超过 `stuck-after` 没上链，同编号发了替身 | 不用做：谁先上链谁算，另一笔自动 REPLACED。频繁出现 = `priority-floor-gwei` 太低或链在涌堵 |
+| 每轮 WARN `费率超上限：加价后 …` | 链上基础费太高，替身发不出 | 等费率回落；真要现在发，临时调高 `max-fee-gwei` 重启。旧的那笔仍在池里排队，没有损失 |
+| 提现 FAILED，原因 `链上执行失败（回执 status 0…）` | 交易上链但合约 revert（最常见：热钱包 LINK 不够；或收款合约拒收） | 钱已解冻退回商户；gas 已扣在热钱包 ETH 里。查热钱包 LINK 余额，商户重新申请 |
+| `payout_tx` 里同一编号多行：一行 MINED、其余 REPLACED | 加价替换的正常痕迹 | 不用做。**同编号绝不会有两行 MINED**（部分唯一索引守着） |
+| 停发原因 `…费率不够（underpriced）…有人在别处用了这把私钥` | 节点里那个编号的交易费率比我们记的高，不是我们发的 | 按第二节第一行当泄露处理 |
+
