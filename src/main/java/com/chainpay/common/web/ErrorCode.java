@@ -60,6 +60,10 @@ public enum ErrorCode {
     PAYLOAD_TOO_LARGE("2007", false),
     /** 代币不在白名单里或已停用（M3）。2xxx：换个代币再来，原样重试永远是这个结果。 */
     TOKEN_NOT_SUPPORTED("2008", false),
+    /** 提现目标不在本商户的白名单里，或已停用（M4-④）。先登记再提现。 */
+    ADDRESS_NOT_WHITELISTED("2009", false),
+    /** 提现目标是平台自己的收款地址（M4-④）：那是内部转账，不是提现，永远拒绝。 */
+    INTERNAL_ADDRESS("2010", false),
 
     // ---- 3xxx 权限 ---------------------------------------------------
     /**
@@ -84,6 +88,8 @@ public enum ErrorCode {
      * 与 1002（nonce 重放）的区别：那个换 nonce 重签即可，这个要换业务标识。
      */
     IDEMPOTENCY_CONFLICT("4003", false),
+    /** 这笔提现不在等待核准的状态（已核准、已拒绝、或不存在）（M4-④）。 */
+    PAYOUT_NOT_PENDING("4004", false),
 
     // ---- 5xxx 限流 ---------------------------------------------------
     /** 唯一一个「等一会儿再试就能成功」的错误。响应必带 {@code Retry-After}。 */

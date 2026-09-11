@@ -78,3 +78,21 @@ UPDATE hot_wallet SET next_nonce = <链上计数 或 C + U>, updated_at = now() 
 | `payout_tx` 里同一编号多行：一行 MINED、其余 REPLACED | 加价替换的正常痕迹 | 不用做。**同编号绝不会有两行 MINED**（部分唯一索引守着） |
 | 停发原因 `…费率不够（underpriced）…有人在别处用了这把私钥` | 节点里那个编号的交易费率比我们记的高，不是我们发的 | 按第二节第一行当泄露处理 |
 
+## 八、核准与限额（M4-④）
+
+```sql
+-- 等人核准的
+SELECT p.id, m.code, t.symbol, p.to_address, p.amount, p.created_at FROM payout p JOIN merchant m ON m.id = p.merchant_id JOIN chain_token t ON t.address = p.token WHERE p.status = 'PENDING_APPROVAL' ORDER BY p.id;
+-- 每代币的限额
+SELECT * FROM payout_limit;
+```
+
+| 看到什么 | 发生了什么 | 该做什么 |
+|---|---|---|
+| 一笔提现 PENDING_APPROVAL | 超单笔上限、当日自动放行额度用完、或这种代币没定过限额 | 看收款地址与商户历史；`POST /admin/v1/payouts/{id}/approve` 进队列，或 `POST …/reject {reason}` 解冻退回。钱在等待期间冻着 |
+| 所有申请都进 PENDING_APPROVAL | 这种代币没有 `payout_limit` 行 | `PUT /admin/v1/payout-limits/{token} {perTxMax, dailyMax}`（当日 ≥ 单笔）。没定过 = 一律人工是有意的 |
+| 商户说「提现被拒 2010」 | 目标是平台自己的收款地址（任何商户的） | 不放行：那是内部转账，不是提现；让商户换地址 |
+| 商户说「提现被拒 2009」 | 目标没登记或已停用 | 让商户先 `POST /api/v1/withdrawal-addresses` 登记 |
+
+核准与拒绝只改状态和账本，**不碰私钥**；核准后的那笔和普通申请一样由发送任务处理。人永远不手工改 `payout` 的状态。
+

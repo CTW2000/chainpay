@@ -166,10 +166,10 @@ M3 的入账是「链上先发生，账本后承认」。出账反过来：**账
 - 重组：MINED 的块消失 → 退回 BROADCAST 继续等（结算只在 FINAL 之后，同 M3）。
 - 调度线程：任务数从 2 变 4，`pool.size` 随之提高，冒烟测试的「线程数 ≥ 任务数」断言守着。
 
-### M4-④ 风控与商户接口
+### M4-④ 风控与商户接口 —— 2026-09-10 完成
 
-- 白名单：`POST /api/v1/withdrawal-addresses`、`GET …`；提现目标必须在名单里且 ACTIVE；平台自己的收款地址一律拒绝。
-- 限额：每代币单笔上限与当日上限（配置表），超限进 PENDING_APPROVAL，管理接口 `approve / reject`（复用 HELD → APPROVED 的形状）。
+- 白名单：`POST /api/v1/withdrawal-addresses`、`GET …`、`POST …/{id}/disable`；提现目标必须在名单里且 ACTIVE；平台自己的收款地址一律拒绝（登记时与申请时各查一次；商户连接看不到别家的收款地址，那一问走系统身份只回答是或否——没用 SECURITY DEFINER 函数：FORCE RLS 下它靠属主特权才成立，V22 那条教训）。
+- 限额：每代币单笔上限与当日上限（`payout_limit`），超限进 PENDING_APPROVAL，管理接口 `approve / reject`。两处定口径：没有行 = 没定过 → 一律人工（fail-closed）；当日上限只算当日**自动放行**过的，等核准的不占额度（人核准时看得到全部）。
 - `POST /api/v1/withdrawals {token, toAddress, amount, idempotencyKey}`：同商户同幂等键重发返回同一笔；余额不足 → 4xx；`GET /api/v1/withdrawals?…` 列表带链上状态与哈希；余额接口加 `frozen`。
 - 错误码新增段；`ControllerBoundaryTest` 继续守 `SystemLedger` 不进控制器。
 

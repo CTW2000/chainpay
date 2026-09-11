@@ -19,7 +19,7 @@ import java.util.List;
 public final class DepositQueryService {
 
     /** available = 账本余额；pending = 在路上的合计（换算不了时为 null）。 */
-    public record Balance(String token, String symbol, BigDecimal available, BigDecimal pending) {}
+    public record Balance(String token, String symbol, BigDecimal available, BigDecimal pending, BigDecimal frozen) {}
 
     static final int MAX_LIMIT = 200;
 
@@ -49,7 +49,7 @@ public final class DepositQueryService {
         BigDecimal available = repository.availableBalance(normalized)
                 .orElse(BigDecimal.ZERO.setScale(TokenAmounts.LEDGER_SCALE));
         BigInteger pendingRaw = repository.pendingRaw(normalized);
-        return new Balance(normalized, chainToken.symbol(), available, toLedgerOrNull(pendingRaw, chainToken.decimals()));
+        return new Balance(normalized, chainToken.symbol(), available, toLedgerOrNull(pendingRaw, chainToken.decimals()), repository.frozenBalance(chainToken.symbol()));
     }
 
     private static DepositRow withConvertedAmount(DepositRow row) {

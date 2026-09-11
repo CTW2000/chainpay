@@ -24,15 +24,15 @@ import org.springframework.transaction.support.TransactionTemplate;
  * 主链与审计链是两个独立的 FakeChain，同样的块；{@link #pay} 往主链挂一笔到 acme 地址的转账，并在两条链上定义该块的余额
  * （= 到这一块为止转入的累计），让「合约说的」和「合约做的」默认一致，要造分歧的测试再单独覆盖余额。
  */
-abstract class AbstractDepositPostingTest extends AbstractPostgresTest {
+public abstract class AbstractDepositPostingTest extends AbstractPostgresTest {
 
-    static final String LINK = "0x779877a7b0d9e8603169ddbd7836e478b4624789";
-    static final String ALICE = "0x4281ecf07378ee595c564a59048801330f3084ee";
-    static final String BOB = "0x5e97b169613aff0c40a1910e597e9736c3a5ebc3";
-    static final String ACME_ADDRESS = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266".toLowerCase(Locale.ROOT);
-    static final String CURSOR = "test:link:transfer";
-    static final BigInteger TEN_LINK = new BigInteger("10000000000000000000");
-    static final BigInteger ONE_LINK = new BigInteger("1000000000000000000");
+    protected static final String LINK = "0x779877a7b0d9e8603169ddbd7836e478b4624789";
+    protected static final String ALICE = "0x4281ecf07378ee595c564a59048801330f3084ee";
+    protected static final String BOB = "0x5e97b169613aff0c40a1910e597e9736c3a5ebc3";
+    protected static final String ACME_ADDRESS = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266".toLowerCase(Locale.ROOT);
+    protected static final String CURSOR = "test:link:transfer";
+    protected static final BigInteger TEN_LINK = new BigInteger("10000000000000000000");
+    protected static final BigInteger ONE_LINK = new BigInteger("1000000000000000000");
 
     @Autowired
     protected DepositAddressService addressService;
@@ -64,7 +64,7 @@ abstract class AbstractDepositPostingTest extends AbstractPostgresTest {
 
     @BeforeEach
     void seedDepositScaffolding() {
-        jdbc.sql("TRUNCATE chain_transfer_log, indexer_cursor, chain_head, chain_reorg, chain_reconcile, deposit CASCADE").update();
+        jdbc.sql("TRUNCATE payout_tx, payout, payout_address, payout_limit, hot_wallet, chain_transfer_log, indexer_cursor, chain_head, chain_reorg, chain_reconcile, deposit CASCADE").update();
         jdbc.sql("DELETE FROM api_credential").update();
         jdbc.sql("DELETE FROM merchant").update();
         jdbc.sql("ALTER SEQUENCE deposit_address_index_seq RESTART WITH 0").update();

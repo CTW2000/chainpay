@@ -147,6 +147,17 @@ public class PayoutSendRepository {
                 .param("id", attemptId).param("from", from).param("to", to).update() == 1;
     }
 
+    public java.util.Optional<String> findStatus(long payoutId) {
+        return jdbc.sql("SELECT status FROM payout WHERE id = :id").param("id", payoutId).query(String.class).optional();
+    }
+
+    /** 人工拒绝：PENDING_APPROVAL → REJECTED，带原因与解冻转账（CHECK 约束要求两者同在）。 */
+    public boolean markRejected(long payoutId, String reason, long reverseTransferId) {
+        return jdbc.sql("UPDATE payout SET status = 'REJECTED', failure_reason = :r, reverse_transfer_id = :t, updated_at = now() "
+                        + "WHERE id = :id AND status = 'PENDING_APPROVAL'")
+                .param("id", payoutId).param("r", reason).param("t", reverseTransferId).update() == 1;
+    }
+
     /** 锁住这笔提现并读它现在的状态：两个实例同时想给同一笔定结局时，后到的要等先到的提交，然后看到已经定过。 */
     public String lockStatus(long payoutId) {
         return jdbc.sql("SELECT status FROM payout WHERE id = :id FOR UPDATE").param("id", payoutId).query(String.class).single();

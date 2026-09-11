@@ -52,7 +52,7 @@ public class DepositController {
                               String occurredAt, String creditedAt) {}
 
     /** available 已记账可用；pending 在路上（SEEN / SAFE / 已 FINAL 未记）的合计，换算不了时为 null。 */
-    public record BalanceResponse(String token, String symbol, String available, String pending) {}
+    public record BalanceResponse(String token, String symbol, String available, String pending, String frozen) {}
 
     private final DepositAddressService addresses;
     private final DepositQueryService queries;
@@ -97,7 +97,7 @@ public class DepositController {
                                                 @RequestParam String token) {
         return ApiResponse.ok(tenantScope.asMerchant(merchantId, () -> {
             Balance b = queries.balance(token);
-            return new BalanceResponse(b.token(), b.symbol(), text(b.available()), text(b.pending()));
+            return new BalanceResponse(b.token(), b.symbol(), text(b.available()), text(b.pending()), text(b.frozen()));
         }));
     }
 

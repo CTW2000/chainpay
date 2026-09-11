@@ -107,6 +107,12 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
         return ResponseEntity.badRequest().body(ApiResponse.error(ErrorCode.TOKEN_NOT_SUPPORTED, e.getMessage()));
     }
 
+    /** 提现的业务拒绝（白名单、平台地址、状态不对）：状态码与错误码由业务定。 */
+    @ExceptionHandler(com.chainpay.chain.payout.service.WithdrawalRejectedException.class)
+    public ResponseEntity<ApiResponse<Void>> handleWithdrawalRejected(com.chainpay.chain.payout.service.WithdrawalRejectedException e) {
+        return ResponseEntity.status(e.status()).body(ApiResponse.error(e.code(), e.getMessage()));
+    }
+
     @ExceptionHandler(AlreadyExistsException.class)
     public ResponseEntity<ApiResponse<Void>> handleAlreadyExists(AlreadyExistsException e) {
         return ResponseEntity.status(HttpStatus.CONFLICT)
