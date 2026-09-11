@@ -270,7 +270,7 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
      * 客户端按信封解析会拿到解析异常，多半当传输失败重试一个永远失败的请求。
      */
     private void payloadTooLarge(HttpServletResponse response) throws IOException {
-        errors.write(response, HttpStatus.PAYLOAD_TOO_LARGE,
+        errors.write(response, HttpStatus.CONTENT_TOO_LARGE,
                 ErrorCode.PAYLOAD_TOO_LARGE, "请求体超过 1 MB 上限");
     }
 

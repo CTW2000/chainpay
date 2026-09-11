@@ -5,6 +5,16 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.math.BigInteger;
 import java.util.List;
+import org.web3j.abi.FunctionEncoder;
+import org.web3j.abi.FunctionReturnDecoder;
+import org.web3j.abi.TypeEncoder;
+import org.web3j.abi.TypeReference;
+import org.web3j.abi.Utils;
+import org.web3j.abi.datatypes.Address;
+import org.web3j.abi.datatypes.Function;
+import org.web3j.abi.datatypes.Type;
+import org.web3j.abi.datatypes.Utf8String;
+import org.web3j.abi.datatypes.generated.Uint256;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -112,5 +122,32 @@ class AbiTest {
                 .isEqualTo("0x0000000000000000000000000000000000000000000000000000000000000012");
         assertThat(Abi.encodeString("LINK")).isEqualTo("0x" + WORD_32 + WORD_4 + LINK_PADDED);
         assertThat(Abi.decodeString(Abi.encodeString("Wrapped Ether"))).isEqualTo("Wrapped Ether");
+    }
+
+    // ---- 与树里的 web3j abi 对拍：把「作者按规范手推」升级成「与库互证」；库不进主代码，因为它对畸形返回更宽松
+
+    @Test
+    @DisplayName("★ 对拍：balanceOf(address) 与 transfer(address,uint256) 的 calldata 与 web3j FunctionEncoder 逐字相同")
+    void callEncodingMatchesWeb3j() {
+        String holder = "0x4281eCF07378Ee595C564a59048FFcA20fb9c8BA";
+        String viaLibrary = FunctionEncoder.encode(new Function("balanceOf", List.of(new Address(holder)), List.of()));
+        assertThat(Abi.encodeCall(Abi.BALANCE_OF, holder)).isEqualToIgnoringCase(viaLibrary);
+
+        BigInteger oneLink = BigInteger.TEN.pow(18);
+        String transferViaLibrary = FunctionEncoder.encode(new Function("transfer", List.of(new Address(holder), new Uint256(oneLink)), List.of()));
+        assertThat(Abi.transfer(holder, oneLink)).isEqualToIgnoringCase(transferViaLibrary);
+    }
+
+    @Test
+    @DisplayName("★ 对拍：uint256 与 string 的返回值解码与 web3j FunctionReturnDecoder 一致；uint 编码与 TypeEncoder 一致")
+    void returnDecodingMatchesWeb3j() {
+        String uintHex = Abi.encodeUint(new BigInteger("123456789012345678901234567890"));
+        List<Type> viaLibrary = FunctionReturnDecoder.decode(uintHex, Utils.convert(List.of(new TypeReference<Uint256>() { })));
+        assertThat(Abi.decodeUint(uintHex)).isEqualTo(viaLibrary.get(0).getValue());
+        assertThat(uintHex.substring(2)).isEqualTo(TypeEncoder.encode(new Uint256(new BigInteger("123456789012345678901234567890"))));
+
+        String stringHex = Abi.encodeString("ChainLink Token");
+        List<Type> decodedString = FunctionReturnDecoder.decode(stringHex, Utils.convert(List.of(new TypeReference<Utf8String>() { })));
+        assertThat(Abi.decodeString(stringHex)).isEqualTo(decodedString.get(0).getValue());
     }
 }

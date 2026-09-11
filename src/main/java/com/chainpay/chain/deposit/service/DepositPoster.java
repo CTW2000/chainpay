@@ -14,6 +14,7 @@ import com.chainpay.chain.rpc.JsonRpcException;
 import com.chainpay.ledger.service.LedgerService.TransferCode;
 import com.chainpay.ledger.service.LedgerService.TransferCommand;
 import com.chainpay.ledger.system.SystemLedger;
+import com.chainpay.ledger.system.TransientDbFailure;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.time.Instant;
@@ -25,7 +26,6 @@ import java.util.Optional;
 import java.util.function.Function;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.dao.TransientDataAccessException;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
 /**
@@ -96,15 +96,19 @@ public final class DepositPoster {
                 verdict = c.isApproved() ? judgeApproved(c, cache) : judge(c, cache);
             } catch (JsonRpcException e) {
                 return k.retryLater("核对块 " + c.blockNumber() + " 时节点失败：" + e.getMessage());
-            } catch (TransientDataAccessException e) {
+            } catch (RuntimeException e) {
+                if (!TransientDbFailure.isTransient(e)) {
+                    throw e;
+                }
                 return k.retryLater("核对块 " + c.blockNumber() + " 时数据库瞬时失败：" + e.getMessage());
             }
             Outcome outcome;
             try {
                 outcome = system.inTransaction(s -> apply(repositories.apply(s.jdbc()), s, c, verdict));
-            } catch (TransientDataAccessException e) {
-                return k.retryLater("记块 " + c.blockNumber() + " 时数据库瞬时失败：" + e.getMessage());
             } catch (RuntimeException e) {
+                if (TransientDbFailure.isTransient(e)) {             // 锁等超时、拿不到连接、事务开不出来：下一轮再来，不进 HELD
+                    return k.retryLater("记块 " + c.blockNumber() + " 时数据库瞬时失败：" + e.getMessage());
+                }
                 String reason = "入账时异常：" + e;
                 log.error("入账 HELD_ERROR：块 {} 日志 {} —— {}", c.blockNumber(), c.logIndex(), reason);
                 outcome = system.inTransaction(s -> holdWithError(repositories.apply(s.jdbc()), c, verdict, reason));

@@ -529,4 +529,41 @@ class ApiContractTest extends AbstractPostgresTest {
             throw new IllegalStateException("HTTP 请求失败", e);
         }
     }
+
+    @Test
+    @DisplayName("★ 签过名却用错方法（PUT）：405 + 2001，不是 500 + 9001「可重试」")
+    void wrongMethodIsMethodNotAllowedNotServerError() {
+        String path = "/api/v1/transfers";
+        long ts = System.currentTimeMillis();
+        String nonce = SignedRequests.newNonce();
+        var response = sendSignedWithMethod(path, "PUT", "{}", ts, nonce, SignedRequests.sign(secret, ts, nonce, "PUT", path, "{}"));
+
+        assertThat(response.statusCode()).isEqualTo(405);
+        assertThat(response.body()).contains("\"code\":\"2001\"").doesNotContain("9001");
+    }
+
+    @Test
+    @DisplayName("★ 签过名的未知路径：404 + 2001，不是 500 + 9001")
+    void unknownPathIsNotFoundNotServerError() {
+        String path = "/api/v1/no-such-thing";
+        long ts = System.currentTimeMillis();
+        String nonce = SignedRequests.newNonce();
+        var response = sendSignedWithMethod(path, "GET", "", ts, nonce, SignedRequests.sign(secret, ts, nonce, "GET", path, ""));
+
+        assertThat(response.statusCode()).isEqualTo(404);
+        assertThat(response.body()).contains("\"code\":\"2001\"").doesNotContain("9001");
+    }
+
+    private HttpResponse<String> sendSignedWithMethod(String path, String method, String body,
+                                                      long ts, String nonce, String sign) {
+        var builder = HttpRequest.newBuilder()
+                .uri(URI.create("http://localhost:" + port + path))
+                .header("Content-Type", "application/json")
+                .header("X-CP-API-KEY", "ak_acme")
+                .header("X-CP-API-TIMESTAMP", String.valueOf(ts))
+                .header("X-CP-API-NONCE", nonce)
+                .header("X-CP-API-SIGN", sign)
+                .method(method, "GET".equals(method) ? HttpRequest.BodyPublishers.noBody() : HttpRequest.BodyPublishers.ofString(body));
+        return send(builder);
+    }
 }

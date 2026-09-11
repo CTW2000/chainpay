@@ -1,6 +1,10 @@
 package com.chainpay.chain.indexer.config;
 
+import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Pattern;
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.validation.annotation.Validated;
 
 /**
  * 索引器的配置，前缀 {@code chainpay.chain}。
@@ -20,13 +24,14 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * @param degradedAfterFailures 连续几次瞬时失败（或审计节点连续几次答不出）后把状态标成 DEGRADED
  */
 @ConfigurationProperties(prefix = "chainpay.chain")
+@Validated   // 合法范围由校验器在绑定时守，不靠各个构造器手写 if-throw；漏配的 int 是 0，0 对下面三个数都不是合法值
 public record ChainIndexerProperties(
         String rpcUrl,
         String auditRpcUrl,
-        String chainName,
-        String tokenAddress,
-        String cursorName,
-        int batchBlocks,
+        @NotBlank String chainName,
+        @NotBlank @Pattern(regexp = "0x[0-9a-fA-F]{40}", message = "必须是 0x 开头的 40 位十六进制地址") String tokenAddress,
+        @NotBlank String cursorName,
+        @Min(1) int batchBlocks,
         Long startBlock,
-        int reconcileSamples,
-        int degradedAfterFailures) {}
+        @Min(0) int reconcileSamples,
+        @Min(1) int degradedAfterFailures) {}

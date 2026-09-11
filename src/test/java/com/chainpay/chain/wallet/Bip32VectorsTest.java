@@ -31,6 +31,19 @@ class Bip32VectorsTest {
             "fffcf9f6f3f0edeae7e4e1dedbd8d5d2cfccc9c6c3c0bdbab7b4b1aeaba8a5a29f9c999693908d8a8784817e7b7875726f6c696663605d5a5754514e4b484542");
     static final String V2_M_XPUB = "xpub661MyMwAqRbcFW31YEwpkMuc5THy2PSt5bDMsktWQcFF8syAmRUapSCGu8ED9W6oDMSgv6Zz8idoc4a6mr8BDzTJY47LJhkJ8UB7WEGuduB";
     static final String V2_M_XPRV = "xprv9s21ZrQH143K31xYSDQpPDxsXRTUcvj2iNHm5NUtrGiGG5e2DtALGdso3pGz6ssrdK4PFmM8NSpSBHNqPqm55Qn3LqFtT2emdEXVYsCzC2U";
+    // 向量 3：专门测 ser256 的前导零——I_L 算出的私钥高位是 0 时，序列化必须补满 32 字节，否则 xprv 整串就错
+    static final byte[] SEED_3 = HexFormat.of().parseHex(
+            "4b381541583be4423346c643850da4b320e46a87ae3d2a4e6da11eba819cd4acba45d239319ac14f863b8d5ab5a0d0c64d2e8a1e7d1457df2e5a3c51c73235be");
+    static final String V3_M_XPUB = "xpub661MyMwAqRbcEZVB4dScxMAdx6d4nFc9nvyvH3v4gJL378CSRZiYmhRoP7mBy6gSPSCYk6SzXPTf3ND1cZAceL7SfJ1Z3GC8vBgp2epUt13";
+    static final String V3_M_XPRV = "xprv9s21ZrQH143K25QhxbucbDDuQ4naNntJRi4KUfWT7xo4EKsHt2QJDu7KXp1A3u7Bi1j8ph3EGsZ9Xvz9dGuVrtHHs7pXeTzjuxBrCmmhgC6";
+    static final String V3_M0H_XPUB = "xpub68NZiKmJWnxxS6aaHmn81bvJeTESw724CRDs6HbuccFQN9Ku14VQrADWgqbhhTHBaohPX4CjNLf9fq9MYo6oDaPPLPxSb7gwQN3ih19Zm4Y";
+    static final String V3_M0H_XPRV = "xprv9uPDJpEQgRQfDcW7BkF7eTya6RPxXeJCqCJGHuCJ4GiRVLzkTXBAJMu2qaMWPrS7AANYqdq6vcBcBUdJCVVFceUvJFjaPdGZ2y9WACViL4L";
+    // 向量 4：同样是前导零，多一级硬化
+    static final byte[] SEED_4 = HexFormat.of().parseHex("3ddd5602285899a946114506157c7997e5444528f3003f6134712147db19b678");
+    static final String V4_M_XPUB = "xpub661MyMwAqRbcGczjuMoRm6dXaLDEhW1u34gKenbeYqAix21mdUKJyuyu5F1rzYGVxyL6tmgBUAEPrEz92mBXjByMRiJdba9wpnN37RLLAXa";
+    static final String V4_M_XPRV = "xprv9s21ZrQH143K48vGoLGRPxgo2JNkJ3J3fqkirQC2zVdk5Dgd5w14S7fRDyHH4dWNHUgkvsvNDCkvAwcSHNAQwhwgNMgZhLtQC63zxwhQmRv";
+    static final String V4_M0H_1H_XPUB = "xpub6BJA1jSqiukeaesWfxe6sNK9CCGaujFFSJLomWHprUL9DePQ4JDkM5d88n49sMGJxrhpjazuXYWdMf17C9T5XnxkopaeS7jGk1GyyVziaMt";
+    static final String V4_M0H_1H_XPRV = "xprv9xJocDuwtYCMNAo3Zw76WENQeAS6WGXQ55RCy7tDJ8oALr4FWkuVoHJeHVAcAqiZLE7Je3vZJHxspZdFHfnBEjHqU5hG1Jaj32dVoS6XLT1";
     static final String V2_M0_XPUB = "xpub69H7F5d8KSRgmmdJg2KhpAK8SR3DjMwAdkxj3ZuxV27CprR9LgpeyGmXUbC6wb7ERfvrnKZjXoUmmDznezpbZb7ap6r1D3tgFxHmwMkQTPH";
     static final String V2_M0_XPRV = "xprv9vHkqa6EV4sPZHYqZznhT2NPtPCjKuDKGY38FBWLvgaDx45zo9WQRUT3dKYnjwih2yJD9mkrocEZXo1ex8G81dwSM1fwqWpWkeS3v86pgKt";
 
@@ -103,5 +116,23 @@ class Bip32VectorsTest {
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> ExtendedPublicKey.parse(V1_M_XPUB).deriveChild(ExtendedPublicKey.HARDENED))
                 .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("硬化");
+    }
+
+    @Test
+    @DisplayName("★ 向量 3 / 4：私钥高位为零的种子，xprv 与 xpub 仍与规范逐字相同（ser256 必须补满 32 字节）")
+    void leadingZeroVectorsSerializeCorrectly() {
+        ExtendedPrivateKey m3 = ExtendedPrivateKey.fromSeed(SEED_3);
+        assertThat(m3.serialize()).isEqualTo(V3_M_XPRV);
+        assertThat(m3.neuter().serialize()).isEqualTo(V3_M_XPUB);
+        ExtendedPrivateKey m3h = m3.deriveChild(ExtendedPrivateKey.HARDENED);
+        assertThat(m3h.serialize()).isEqualTo(V3_M0H_XPRV);
+        assertThat(m3h.neuter().serialize()).isEqualTo(V3_M0H_XPUB);
+
+        ExtendedPrivateKey m4 = ExtendedPrivateKey.fromSeed(SEED_4);
+        assertThat(m4.serialize()).isEqualTo(V4_M_XPRV);
+        assertThat(m4.neuter().serialize()).isEqualTo(V4_M_XPUB);
+        ExtendedPrivateKey m4h1h = m4.derivePath("m/0'/1'");
+        assertThat(m4h1h.serialize()).isEqualTo(V4_M0H_1H_XPRV);
+        assertThat(m4h1h.neuter().serialize()).isEqualTo(V4_M0H_1H_XPUB);
     }
 }

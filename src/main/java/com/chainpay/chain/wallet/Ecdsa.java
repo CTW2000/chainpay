@@ -37,7 +37,11 @@ public final class Ecdsa {
         return new Signature(new BigInteger(1, data.getR()), new BigInteger(1, data.getS()), v - 27);
     }
 
-    /** 恢复出的地址，EIP-55 写法。 */
+    /**
+     * 恢复出的地址，EIP-55 写法。公钥 → 地址这一步走 web3j 的 {@code Keys.getAddress}，而 {@link EthAddress#fromPublicKey}
+     * 是我们自己的实现：两套并存是有意的——测试（Eip155VectorTest、HotWalletSignerTest）把两条路的结果互相比对，
+     * 一份实现错了另一份会揭发它。合成一份就失去这层对拍。
+     */
     public static String recoverAddress(byte[] hash32, Signature signature) {
         requireHash(hash32);
         BigInteger publicKey = Sign.recoverFromSignature(signature.yParity(),
@@ -62,10 +66,6 @@ public final class Ecdsa {
 
     /** 32 字节定长的大端写法：web3j 的 SignatureData 要 r、s 各 32 字节。 */
     static byte[] toFixed32(BigInteger value) {
-        byte[] be = value.toByteArray();
-        int start = be[0] == 0 ? 1 : 0;
-        byte[] out = new byte[32];
-        System.arraycopy(be, start, out, 32 - (be.length - start), be.length - start);
-        return out;
+        return Bip32Math.ser256(value);      // 与 BIP-32 的 ser256 是同一件事，只写一遍
     }
 }

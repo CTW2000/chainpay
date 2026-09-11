@@ -10,6 +10,7 @@ import com.chainpay.chain.indexer.domain.TickOutcome;
 import com.chainpay.chain.indexer.domain.TickResult;
 import com.chainpay.chain.indexer.repository.IndexerStateRepository;
 import com.chainpay.chain.rpc.JsonRpcException;
+import com.chainpay.ledger.system.TransientDbFailure;
 import com.chainpay.chain.rpc.RpcAuthException;
 import java.time.Instant;
 import java.util.List;
@@ -112,9 +113,12 @@ public final class ChainIndexerScheduler {
             return remember(result);
         } catch (RpcAuthException e) {
             return remember(halt("节点拒绝了我们的凭证（" + e.getMessage() + "）：key 失效或被撤销不会自己好，换 key 后重启"));
-        } catch (JsonRpcException | TransientDataAccessException e) {
+        } catch (JsonRpcException e) {
             return remember(retryLater(e.getMessage()));
         } catch (RuntimeException e) {
+            if (TransientDbFailure.isTransient(e)) {                 // 库抖一下不是停机的理由
+                return remember(retryLater(e.getMessage()));
+            }
             return remember(halt(e.getMessage()));
         }
     }
@@ -169,7 +173,10 @@ public final class ChainIndexerScheduler {
     private ReconcileResult reconcileSafely() {
         try {
             return reconciler.reconcile();
-        } catch (JsonRpcException | TransientDataAccessException e) {
+        } catch (RuntimeException e) {
+            if (!(e instanceof JsonRpcException) && !TransientDbFailure.isTransient(e)) {
+                throw e;
+            }
             log.warn("对账这次跳过：{}", e.getMessage());
             return new ReconcileResult(List.of(), 0);
         }

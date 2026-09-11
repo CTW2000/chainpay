@@ -42,6 +42,7 @@ curl -s -H "X-CP-ADMIN-TOKEN: $CHAINPAY_ADMIN_TOKEN" http://127.0.0.1:8095/admin
 | 单块 N 的日志也取不到 | 提供商在这个高度答不出（归档范围、套餐限制）。**链头两块以内**的单块失败不算——那是负载均衡的各后端头不一致（"block range extends beyond current head block"），2026-09-09 起按瞬时处理、自动下一轮再来，不会走到这一行 | 换提供商；改回 RUNNING、重启 |
 | 节点返回了错误的区块 / …缺少字段… / 不是数组 | 节点返回的形状不对 | 换节点，或向提供商报障；改回 RUNNING、重启 |
 | 日志块 N 的哈希与区块头不符 / 答非所问 | 节点前后不一致或塞入了不属于这批的日志 | 一次是瞬时（自动重试）；反复出现就换节点 |
+| 数据库连不上、连接池耗尽、事务开不出来 | 库抖一下、主从切换、Hikari 池满。2026-09-10 起按瞬时处理（`TransientDbFailure`）：这一轮 RETRY_LATER，连续 N 次才 DEGRADED，**不会 HALTED** | 看库与连接池；恢复后自动回 RUNNING |
 | 连续 N 次瞬时失败（DEGRADED） | 网络、限流、提供商故障 | 看 `lastTick` 的 detail 与 `consecutiveFailures`；不用改状态，恢复后自动回 RUNNING |
 | 审计节点连续 N 次答不出（DEGRADED） | 审计节点挂了或落后 | 检查 `CHAINPAY_CHAIN_AUDIT_RPC_URL`；恢复后自动回 RUNNING |
 | `disputedBlocks > 0` | 两个节点对某块的日志意见不同（有无或内容）；或某个节点的回执里有一条解不了的日志（2026-09-09 起记 disputed 而不是停机，原因在 WARN 日志里） | `SELECT * FROM chain_reconcile WHERE disputed > 0`，用区块浏览器裁决；解不了的日志看该轮 WARN「回执里有一条解不了的日志」并核对节点 |

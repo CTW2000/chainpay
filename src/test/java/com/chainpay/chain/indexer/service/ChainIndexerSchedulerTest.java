@@ -27,6 +27,11 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
+import java.sql.Connection;
+import java.sql.SQLException;
+import javax.sql.DataSource;
+import org.springframework.jdbc.datasource.AbstractDataSource;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -510,5 +515,38 @@ class ChainIndexerSchedulerTest extends AbstractPostgresTest {
     private String levelOf(long block) {
         return jdbc.sql("SELECT level FROM chain_transfer_confirmation WHERE block_number = :b")
                 .param("b", block).query(String.class).single();
+    }
+
+    @Test
+    @DisplayName("★ 数据库连不上（连接池拿不到连接）：这一轮 RETRY_LATER，不是 HALTED——库抖一下不该要人来恢复")
+    void databaseOutageIsTransientNotAHalt() {
+        chain.withBlocks(10);
+        chain.reportSafe(5);
+        chain.reportFinalized(2);
+        DataSource refusing = new AbstractDataSource() {
+            @Override
+            public Connection getConnection() throws SQLException {
+                throw new SQLException("模拟：connection refused", "08001");
+            }
+
+            @Override
+            public Connection getConnection(String username, String password) throws SQLException {
+                return getConnection();
+            }
+        };
+        TransactionTemplate brokenTx = new TransactionTemplate(new DataSourceTransactionManager(refusing));
+        BlockIndexer indexer = new BlockIndexer(chain, cursors, transferLogs, brokenTx, CURSOR, LINK, 100);
+        ChainHeadTracker tracker = new ChainHeadTracker(chain, null, heads, brokenTx, "test");
+        ReorgRecovery recovery = new ReorgRecovery(chain, cursors, transferLogs, heads, reorgs, brokenTx, CURSOR);
+        LogReconciler reconciler = new LogReconciler(chain, chain, cursors, transferLogs, heads, reconciles, brokenTx,
+                CURSOR, LINK, 2, new Random(1));
+        TokenRegistry registry = new TokenRegistry(new Erc20Calls(chain), tokens);
+        ChainIndexerScheduler scheduler = new ChainIndexerScheduler(tracker, indexer, recovery, reconciler, registry, states,
+                CURSOR, LINK, 0L, 30);
+
+        TickResult result = scheduler.tick();
+
+        assertThat(result.outcome()).as(result.detail()).isEqualTo(RETRY_LATER);
+        assertThat(stateOf(CURSOR)).isNotEqualTo("HALTED");
     }
 }

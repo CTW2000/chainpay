@@ -24,6 +24,7 @@ import java.util.Locale;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
+import org.springframework.jdbc.CannotGetJdbcConnectionException;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -273,4 +274,24 @@ class DepositPosterTest extends AbstractDepositPostingTest {
         assertThat(appJdbc.sql("SELECT count(*) FROM deposit").query(Long.class).single()).isZero();
     }
 
+    @Test
+    @DisplayName("★ 记账时连接池拿不到连接：这一轮退避、下一轮再来；不能把这一笔记成 HELD_ERROR 等人")
+    void databaseOutageMakesTheRoundRetryLaterNotHeld() {
+        pay(5, TEN_LINK);
+        indexUpTo(100, 90, 50);
+        DepositPoster outage = new DepositPoster(systemLedger, chain, audit, 50, jdbcClient -> new DepositRepository(jdbcClient) {
+            @Override
+            public void credit(long depositId, long transferId) {
+                throw new CannotGetJdbcConnectionException("模拟：连接池拿不到连接");
+            }
+        });
+
+        PostingResult first = outage.postOnce();
+
+        assertThat(first.retryLater()).as(first.detail()).isTrue();
+        assertThat(first.held()).isZero();
+        assertThat(jdbc.sql("SELECT count(*) FROM deposit").query(Long.class).single()).as("占坑随事务一起回滚").isZero();
+        assertThat(poster().postOnce().credited()).isEqualTo(1);
+        assertThat(depositStatus(5)).startsWith("CREDITED");
+    }
 }

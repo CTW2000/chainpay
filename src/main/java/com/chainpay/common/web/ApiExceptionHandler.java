@@ -1,9 +1,5 @@
 package com.chainpay.common.web;
 
-import org.springframework.http.converter.HttpMessageNotReadableException;
-import org.springframework.web.bind.MethodArgumentNotValidException;
-import org.springframework.web.bind.MissingServletRequestParameterException;
-import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import com.chainpay.merchant.service.AdminService;
 import com.chainpay.security.service.AccountAccessService;
 
@@ -14,10 +10,14 @@ import com.chainpay.ledger.service.LedgerException;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.HttpStatusCode;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.context.request.WebRequest;
+import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExceptionHandler;
 
 /**
  * 把内部异常翻译成对调用方有意义的 HTTP 响应。
@@ -35,7 +35,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
  * <b>状态码不是装饰，它是给机器读的指令。</b>
  */
 @RestControllerAdvice
-public class ApiExceptionHandler {
+public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(ApiExceptionHandler.class);
 
@@ -161,18 +161,27 @@ public class ApiExceptionHandler {
     }
 
     /**
-     * 请求的形状不对 → 400 / 2001：校验注解不过（字段缺失、null、空白）、请求体不是 JSON、
-     * 查询参数缺失或类型不匹配。
+     * 框架自己认得的那 20 来种异常（校验不过、JSON 坏了、参数缺失或类型不对、方法不允许、媒体类型不支持、路径不存在……）
+     * 由父类 {@link ResponseEntityExceptionHandler} 判状态码，全部汇到这里套信封。
      *
-     * <p>2026-09-09 扫描补丁：这四类此前都落进下面的兜底，回 500。500 对客户端的含义是「稍后重试」，
-     * 而这些请求原样重试永远一样——正是 M1 为余额不足修过一次的重试风暴。不回显框架给的细节。
+     * <p>2026-09-09 的补丁只手写了其中四种；2026-09-10 扫描发现漏掉的（405 / 415 / 404）落进下面的兜底回 500 + 9001，
+     * 而 9xxx 对客户端的含义是「稍后重试」——这些请求原样重试永远一样。状态码交给框架判，信封与「不回显框架细节」的规矩在这一处守。
      */
-    @ExceptionHandler({MethodArgumentNotValidException.class, HttpMessageNotReadableException.class,
-            MissingServletRequestParameterException.class, MethodArgumentTypeMismatchException.class})
-    public ResponseEntity<ApiResponse<Void>> handleMalformedRequest(Exception e) {
-        log.warn("请求形状无效: {}", e.getClass().getSimpleName());
-        return ResponseEntity.badRequest()
-                .body(ApiResponse.error(ErrorCode.INVALID_REQUEST, "请求参数无效"));
+    @Override
+    protected ResponseEntity<Object> handleExceptionInternal(Exception ex, Object body, HttpHeaders headers,
+                                                             HttpStatusCode status, WebRequest request) {
+        if (status.is5xxServerError()) {
+            log.error("框架层异常 → {}", status.value(), ex);
+            return ResponseEntity.status(status).headers(headers).body(ApiResponse.error(ErrorCode.INTERNAL_ERROR, "服务内部错误"));
+        }
+        log.warn("请求形状无效 → {}: {}", status.value(), ex.getClass().getSimpleName());
+        String message = switch (status.value()) {
+            case 404 -> "路径不存在";
+            case 405 -> "方法不允许";
+            case 415 -> "媒体类型不支持";
+            default -> "请求参数无效";
+        };
+        return ResponseEntity.status(status).headers(headers).body(ApiResponse.error(ErrorCode.INVALID_REQUEST, message));
     }
 
     /**

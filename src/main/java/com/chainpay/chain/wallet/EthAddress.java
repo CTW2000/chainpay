@@ -10,6 +10,10 @@ import org.bouncycastle.math.ec.ECPoint;
  * 以太坊地址 = Keccak-256(公钥的 64 字节 x‖y) 的最后 20 字节。大小写是 EIP-55 校验和：
  * 把小写十六进制地址当 ASCII 再做一次 Keccak-256，第 i 个字符对应哈希的第 i 个半字节，半字节 ≥ 8 就大写。
  * 抄错一位，校验和大概率对不上，钱包会拒绝——所以对外一律给带校验和的写法，存库一律小写。
+ *
+ * <p>web3j 的 {@code Keys.getAddress / toChecksumAddress} 是同一算法的另一份实现（2026-09-10 扫描核实逐步相同）。
+ * 保留自写版而不委托库：{@link Ecdsa#recoverAddress} 走库、这里走自写，测试让两条路互相对拍；
+ * 证据是 EIP-55 正文 8 例、ethereum/tests 的 keyaddrtest 与两条路的一致性断言。
  */
 public final class EthAddress {
 

@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.chainpay.chain.rpc.RawLog;
 import java.math.BigInteger;
 import java.util.List;
+import org.web3j.abi.EventEncoder;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -120,5 +121,11 @@ class TransferLogDecoderTest {
         assertThatThrownBy(() -> TransferLogDecoder.decode(shortData))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("data");
+    }
+
+    @Test
+    @DisplayName("★ 对拍：Transfer 的 topic0 等于 web3j 按事件签名算出的哈希")
+    void topic0MatchesWeb3jEventSignature() {
+        assertThat(TransferLogDecoder.TRANSFER_TOPIC0).isEqualToIgnoringCase(EventEncoder.buildEventSignature("Transfer(address,address,uint256)"));
     }
 }

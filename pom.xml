@@ -97,16 +97,16 @@
         </dependency>
 
         <!-- M3-①：收款地址派生。只用它的曲线运算（secp256k1）、Keccak-256、RIPEMD-160；
-             BIP-32 / BIP-39 / EIP-55 的逻辑自己写、用规范向量钉住。不引 web3j：为三种类型拖二十个依赖不值。
-             1.78.1 是本机 m2 已缓存的版本，离线可装。 -->
+             BIP-32 / BIP-39 / EIP-55 的逻辑自己写、用规范向量钉住（理由见 CLAUDE.md §7）。
+             版本 1.80 = web3j utils 6.0.0 自己声明的版本（2026-09-10 扫描发现之前钉的 1.78.1 靠 Maven 就近优先把库压到了它编译时更旧的 BC 上）。 -->
         <dependency>
             <groupId>org.bouncycastle</groupId>
             <artifactId>bcprov-jdk18on</artifactId>
-            <version>1.78.1</version>
+            <version>1.80</version>
         </dependency>
         <!-- M4-①（2026-09-09 改判）：协议层编码用库，不自己写。web3j 只拿 crypto 模块（RLP、EIP-1559 编码、签名与恢复、地址），
              不拿 core（JSON-RPC 客户端我们自己写，那里面全是策略）。排除 jc-kzg-4844：那是 EIP-4844 blob 交易的原生库，我们永远不发那种交易，
-             付款系统里不该带一个用不上的原生库。BouncyCastle 仍显式保留：M3 的 BIP-32/39 与 xpub 解析用它，web3j 也依赖它。 -->
+             付款系统里不该带一个用不上的原生库（前提：Eip1559Transaction.decode 只放行首字节 0x02）。BouncyCastle 仍显式保留：M3 的 BIP-32/39 与 xpub 解析用它，web3j 也依赖它。 -->
         <dependency>
             <groupId>org.web3j</groupId>
             <artifactId>crypto</artifactId>
@@ -115,6 +115,13 @@
                 <exclusion>
                     <groupId>io.consensys.protocols</groupId>
                     <artifactId>jc-kzg-4844</artifactId>
+                </exclusion>
+                <!-- 2026-09-10 扫描：crypto 经 tuweni-bytes 把 vert.x、五个 netty http 编解码器、connid、kotlin-stdlib、Jackson 2 拖进运行时类路径，
+                     合计 5.7 MB、仓里 0 引用。排除整个 tuweni 后 89 条零网络签名与解码测试全绿（受控实验）。
+                     前提：我们只调 TransactionEncoder / TransactionDecoder / Sign / Keys，不碰任何以 tuweni Bytes 为参数的方法。复查：下次升 web3j 时 -->
+                <exclusion>
+                    <groupId>io.consensys.tuweni</groupId>
+                    <artifactId>*</artifactId>
                 </exclusion>
             </exclusions>
         </dependency>

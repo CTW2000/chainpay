@@ -19,6 +19,7 @@ public final class Abi {
     public static final String SYMBOL = "0x95d89b41";        // symbol()
     public static final String NAME = "0x06fdde03";          // name()
     public static final String BALANCE_OF = "0x70a08231";    // balanceOf(address)
+    public static final String TRANSFER = "0xa9059cbb";      // transfer(address,uint256)
 
     private static final int WORD_HEX = 64;                  // 32 字节 = 64 个十六进制字符
     private static final String ADDRESS_PADDING = "000000000000000000000000";   // 12 字节的零
@@ -44,6 +45,11 @@ public final class Abi {
             throw new IllegalArgumentException("uint 返回值应恰好 32 字节，收到 " + body.length() / 2 + " 字节：" + preview(hex));
         }
         return new BigInteger(body, 16);
+    }
+
+    /** transfer(address,uint256) 的 calldata：选择子 + 左补零的地址 + 左补零的金额。M4-② 出金唯一的写合约调用。 */
+    public static String transfer(String to, BigInteger rawValue) {
+        return encodeCall(TRANSFER, to) + encodeUint(rawValue).substring(2);
     }
 
     /**

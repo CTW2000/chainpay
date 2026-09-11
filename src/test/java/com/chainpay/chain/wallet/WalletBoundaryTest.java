@@ -22,7 +22,7 @@ class WalletBoundaryTest {
      * HotWalletDerivation / HotWalletTool（从助记词算热钱包私钥）。payout 包可以用的是 HotWalletSigner——它只暴露地址与签名，不暴露密钥。
      */
     static final List<String> PRIVATE_KEY_SYMBOLS = List.of("ExtendedPrivateKey", "Bip39", "Ecdsa", "HotWalletDerivation", "HotWalletTool",
-            "org.web3j.crypto.ECKeyPair", "org.web3j.crypto.Credentials", "org.web3j.crypto.Sign", "org.web3j.crypto.Bip32ECKeyPair", "org.web3j.crypto.WalletUtils");
+            "org.web3j.", "org.bouncycastle.");   // 第三方密码学类型只许 wallet 包碰：按包前缀挡，不按类名点名（点名表会写出库里不存在的类）
 
     @Test
     @DisplayName("★ wallet 包之外的主代码不出现私钥数学、助记词、裸签名的符号；且扫描到的文件不少于三十个")

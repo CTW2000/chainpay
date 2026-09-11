@@ -1,5 +1,6 @@
 package com.chainpay.chain.payout.service;
 
+import com.chainpay.chain.erc20.Abi;
 import com.chainpay.chain.payout.domain.HotWallet;
 import com.chainpay.chain.payout.domain.PayoutAttempt;
 import com.chainpay.chain.payout.domain.PayoutStatus;
@@ -14,6 +15,7 @@ import com.chainpay.chain.rpc.JsonRpcException;
 import com.chainpay.chain.wallet.Eip1559Transaction;
 import com.chainpay.chain.wallet.HotWalletSigner;
 import com.chainpay.ledger.system.SystemLedger;
+import com.chainpay.ledger.system.TransientDbFailure;
 import java.math.BigInteger;
 import java.time.Instant;
 import java.util.HexFormat;
@@ -21,7 +23,6 @@ import java.util.List;
 import java.util.Locale;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.dao.TransientDataAccessException;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
 /**
@@ -39,7 +40,6 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 public final class PayoutSender {
 
     private static final Logger log = LoggerFactory.getLogger(PayoutSender.class);
-    private static final String TRANSFER_SELECTOR = "a9059cbb";
 
     private final SystemLedger system;
     private final ChainReader primary;
@@ -133,12 +133,15 @@ public final class PayoutSender {
             try {
                 FeePolicy.Fees f = quoted;
                 record = system.inTransaction(s -> signAndRecord(s.jdbc(), wallet, payout, data, f));
-            } catch (TransientDataAccessException e) {
-                return k.retryLater("分配编号时数据库瞬时失败：" + e.getMessage());
             } catch (TakenByAnotherInstance e) {
                 continue;
             } catch (WalletHalted e) {
                 return k.halted(e.getMessage());
+            } catch (RuntimeException e) {
+                if (!TransientDbFailure.isTransient(e)) {
+                    throw e;
+                }
+                return k.retryLater("分配编号时数据库瞬时失败：" + e.getMessage());
             }
             k.signed++;
 
@@ -304,15 +307,9 @@ public final class PayoutSender {
         });
     }
 
-    /** transfer(address,uint256)：4 字节选择子 + 左补零的 32 字节地址 + 32 字节金额。 */
+    /** transfer(address,uint256) 的 calldata，编码在 {@link Abi#transfer}（M2 起的 ABI 编码只有那一处）。 */
     static byte[] transferCalldata(String to, BigInteger rawValue) {
-        byte[] out = new byte[68];
-        System.arraycopy(HexFormat.of().parseHex(TRANSFER_SELECTOR), 0, out, 0, 4);
-        System.arraycopy(HexFormat.of().parseHex(to.substring(2)), 0, out, 16, 20);
-        byte[] amount = rawValue.toByteArray();
-        int start = amount[0] == 0 ? 1 : 0;
-        System.arraycopy(amount, start, out, 68 - (amount.length - start), amount.length - start);
-        return out;
+        return HexFormat.of().parseHex(Abi.transfer(to, rawValue).substring(2));
     }
 
     private static final class Counters {
