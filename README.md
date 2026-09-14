@@ -110,6 +110,12 @@ tools/hotwallet.sh                                       # 按提示输入助记
 
 把打印的 `CHAINPAY_PAYOUT_HOT_WALLET_KEY=…` 粘进 `env/local.env` 后清屏。给它打印的地址领 Sepolia ETH（付 gas）并转入 LINK。绝不能用收款树的普通子密钥：xpub 加任意一个子私钥 = 父私钥 = 全部收款地址。
 
+**它活着吗、能干活吗**（M6-⓪）：探针在只绑回环的管理端口 8096 上，不要令牌；三个组分别答「进程在不在」「能不能接请求」「能不能干活」，怎么读见 `docs/runbook/ops.md`：
+
+```bash
+curl -s http://127.0.0.1:8096/actuator/health/readiness
+```
+
 **私钥检查**：提交前、打镜像后、导出日志时跑一遍，命中就退出 1 且只打印值的前 6 位：
 
 ```bash

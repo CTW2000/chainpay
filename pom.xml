@@ -49,6 +49,16 @@
         </dependency>
 
         <!--
+          M6-⓪：健康检查与指标。分组、探针（liveness / readiness）、HTTP 状态映射、连接池与 Redis 的指示器
+          都是「协议编码」，引库；每个指示器判「什么算能干活」是业务，自己写（com.chainpay.ops.health）。
+          端点只在回环的管理端口上答（application.yml 的 management 段），主端口上没有 /actuator。
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+
+        <!--
           Redis：限流计数需要在所有实例之间共享。
           进程内的 AtomicLong 在单实例下是对的，扩容到两个实例的那一刻就不对了
           （各自允许 120，商户实际能打 240）。

@@ -33,3 +33,8 @@ logging:
   level:
     # 主配置对 com.chainpay 开了 DEBUG；测试里降回 INFO，否则 Surefire 输出会被淹没
     com.chainpay: INFO
+
+# M6-⓪：管理端口随机。主配置把它钉在 8096；测试里多个 RANDOM_PORT 的容器并存，固定端口会互相撞
+management:
+  server:
+    port: 0

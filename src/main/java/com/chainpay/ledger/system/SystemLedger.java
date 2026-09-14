@@ -7,6 +7,9 @@ import com.chainpay.ledger.service.LedgerService;
 import com.chainpay.ledger.service.LedgerServiceImpl;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
+import com.zaxxer.hikari.HikariPoolMXBean;
+import com.zaxxer.hikari.metrics.micrometer.MicrometerMetricsTrackerFactory;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Duration;
 import java.util.function.Function;
 import org.springframework.dao.CannotAcquireLockException;
@@ -92,6 +95,22 @@ public final class SystemLedger implements AutoCloseable {
     /** 在系统身份的一个事务里做一件事。回调抛出 = 整体回滚。 */
     public <T> T inTransaction(Function<Session, T> work) {
         return tx.execute(status -> work.apply(session));
+    }
+
+    /** 池子的一眼快照（M6-⓪ 健康检查用）。 */
+    public record PoolStats(String pool, int active, int idle, int total, int waiting) {}
+
+    /** 借一条连接问一句 SELECT 1，再报池子的四个数。连不上、池满等超时都从这里抛。 */
+    public PoolStats ping() {
+        inTransaction(s -> s.jdbc().sql("SELECT 1").query(Integer.class).single());
+        HikariPoolMXBean mx = pool.getHikariPoolMXBean();
+        return new PoolStats(pool.getPoolName(), mx.getActiveConnections(), mx.getIdleConnections(), mx.getTotalConnections(),
+                mx.getThreadsAwaitingConnection());
+    }
+
+    /** 把这个池的指标挂到 Micrometer（hikaricp.* 带 pool=chainpay-system 标签）。主池由 Boot 自动挂；这个池不是 bean，只能手工。 */
+    public void bindMetrics(MeterRegistry registry) {
+        pool.setMetricsTrackerFactory(new MicrometerMetricsTrackerFactory(registry));
     }
 
     private void requireSystemIdentity() {

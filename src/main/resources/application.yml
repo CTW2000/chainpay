@@ -156,6 +156,42 @@ chainpay:
     # 「FINAL 的收款日志应该已经入账」的宽限块数：给入账任务几轮时间，不把刚 FINAL 的报成漏账
     lag-blocks: 10
 
+# M6-⓪ · 健康检查与指标：只在回环的管理端口上答，主端口上没有 /actuator。
+# 探针不能带令牌（进程管理器、容器 HEALTHCHECK 都不会带），放主端口就等于对公网开一个无认证接口。
+# 三个组回答三个不同的问题：
+#   liveness  进程在不在（在就 UP；进程管理器据此决定要不要重启）
+#   readiness 能不能接请求（两个连接池都通、迁移对得上；容器 HEALTHCHECK 打这个）
+#   work      能不能干活（索引器 / 热钱包 / 判官 / Redis；给告警和人看，不影响进程去留：索引器停了要叫人，不是下线整个进程）
+management:
+  server:
+    port: ${CHAINPAY_MANAGEMENT_PORT:8096}
+    address: 127.0.0.1
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics
+  endpoint:
+    health:
+      # 管理端口只有本机到得了，细节可以给；细节里没有密钥（HealthProbesTest 守）
+      show-details: always
+      show-components: always
+      probes:
+        enabled: true
+      status:
+        # 多出来的一档 DEGRADED（还在跑，但有人该来看看）：排在 DOWN 后、UP 前；HTTP 仍是 200，容器不重启
+        order: DOWN,OUT_OF_SERVICE,DEGRADED,UP,UNKNOWN
+        http-mapping:
+          down: 503
+          out-of-service: 503
+          degraded: 200
+      group:
+        liveness:
+          include: livenessState
+        readiness:
+          include: readinessState,db,systemDb
+        work:
+          include: indexer,hotWallet,audit,redis
+
 logging:
   level:
     # 想看每条 SQL 时把这行打开 —— 账本层的一个核心目的就是"SQL 看得见"
