@@ -131,7 +131,7 @@ public class PayoutSendRepository {
 
     /** FINAL 且结算了：MINED → CONFIRMED，带结算转账。CHECK 约束要求 CONFIRMED ⇔ 有结算。 */
     public boolean markConfirmed(long payoutId, long settleTransferId) {
-        return jdbc.sql("UPDATE payout SET status = 'CONFIRMED', settle_transfer_id = :t, updated_at = now() WHERE id = :id AND status = 'MINED'")
+        return jdbc.sql("UPDATE payout SET status = 'CONFIRMED', settle_transfer_id = :t, confirmed_at = now(), updated_at = now() WHERE id = :id AND status = 'MINED'")
                 .param("id", payoutId).param("t", settleTransferId).update() == 1;
     }
 

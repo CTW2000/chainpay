@@ -49,11 +49,11 @@ SELECT * FROM ledger_judge();     -- 以 chainpay_system 身份；必须 0 行
 
 ## 三、故障演练（每个做完先恢复再做下一个）
 
-**A. 估 gas 就 revert（热钱包 LINK 不够）**：申请 `amount` 大于 HOT 的 LINK 余额但不超过商户余额与限额（先把限额调大）。期望：几秒内 FAILED，`failure_reason` 含「估 gas 失败」，frozen 回到 0，`payout_tx` 没有新行，`next_nonce` 不动。
+**A. 估 gas 就 revert（热钱包 LINK 不够）**（2026-09-13 造不出：商户余额 ≤ 热钱包余额时账本先拒；要造它得先让商户余额大于热钱包余额）：申请 `amount` 大于 HOT 的 LINK 余额但不超过商户余额与限额（先把限额调大）。期望：几秒内 FAILED，`failure_reason` 含「估 gas 失败」，frozen 回到 0，`payout_tx` 没有新行，`next_nonce` 不动。
 
 **B. 并发三笔编号连续**：连发三个申请（三个不同 idempotencyKey）。期望：一轮内签三笔，`payout_tx` 的 nonce 连续（N、N+1、N+2），三笔各自 CONFIRMED。
 
-**C. 有人在别处用了这把钥匙**：把热钱包私钥导入 MetaMask（演练完删掉），从 HOT 直接转 0.001 ETH 给 DEST。下一轮发送任务对账：链上计数 C 比库里的 N 大 → 整把钱包 HALTED，日志 ERROR「有人在别处用了这把私钥」，之后的申请留在 QUEUED。
+**C. 有人在别处用了这把钥匙**（2026-09-13 跳过：用户不想把私钥导进 MetaMask；由 `PayoutSenderTest.chainAheadOfTheDatabaseHaltsTheWallet` 守）：把热钱包私钥导入 MetaMask（演练完删掉），从 HOT 直接转 0.001 ETH 给 DEST。下一轮发送任务对账：链上计数 C 比库里的 N 大 → 整把钱包 HALTED，日志 ERROR「有人在别处用了这把私钥」，之后的申请留在 QUEUED。
 恢复（见 `payout.md` 第三节）：`UPDATE hot_wallet SET next_nonce = <链上计数>, status = 'ACTIVE', halt_reason = NULL WHERE address = '<HOT>'`，下一轮继续。
 
 **D. 转人工核准**：申请 3 LINK（超单笔上限 2）。期望：状态 PENDING_APPROVAL，frozen +3；`GET /admin/v1/payouts/pending` 看到它；`POST /admin/v1/payouts/{id}/approve` 后进队列走到底；或 `POST …/reject {"reason":"…"}` 后 REJECTED、frozen 回退。

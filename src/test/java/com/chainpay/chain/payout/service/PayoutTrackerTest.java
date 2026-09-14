@@ -74,6 +74,7 @@ class PayoutTrackerTest extends AbstractPayoutSendingTest {
         assertThat(balance("user:acme:LINK")).isEqualByComparingTo("24");
         assertThat(transfersWithKey("withdrawal:" + payoutId() + ":settle")).isEqualTo(1);
         assertThat(jdbc.sql("SELECT settle_transfer_id FROM payout").query(Long.class).single()).isPositive();
+        assertThat(jdbc.sql("SELECT confirmed_at FROM payout").query(java.time.OffsetDateTime.class).single()).as("结算时刻要写上（⑤ 演练发现漏了）").isNotNull();
         assertThat(tracker(audit).trackOnce().confirmed()).as("再跑一轮什么都不做").isZero();
     }
 

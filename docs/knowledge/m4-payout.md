@@ -173,11 +173,11 @@ M3 的入账是「链上先发生，账本后承认」。出账反过来：**账
 - `POST /api/v1/withdrawals {token, toAddress, amount, idempotencyKey}`：同商户同幂等键重发返回同一笔；余额不足 → 4xx；`GET /api/v1/withdrawals?…` 列表带链上状态与哈希；余额接口加 `frozen`。
 - 错误码新增段；`ControllerBoundaryTest` 继续守 `SystemLedger` 不进控制器。
 
-### M4-⑤ 真环境演练
+### M4-⑤ 真环境演练 —— 2026-09-13 完成
 
 - 准备：热钱包（独立助记词或 hardened 账户 1'）的私钥进 env；用 Sepolia 水龙头给它 ETH（付 gas）；把 M3 演练里 Account 1 收到的 25 LINK 转一部分到热钱包——这是「人工归集」，v1 就这么做。
 - 流程：登记白名单（MetaMask 的另一个账户）→ 申请提现 1 LINK → 看 QUEUED → SIGNED → BROADCAST → MINED → CONFIRMED，余额 frozen → 0、链上收到。
-- 演练：提交与广播之间 `kill -9`（重启后恰好一笔上链）；并发 10 笔（nonce 连续）；用 MetaMask 直接从热钱包发一笔制造「有人在别处用了这把钥匙」（系统停发叫人）；故意把费率上限压到基础费以下制造卡单，再放开看加速。
+- 实测（2026-09-13，热钱包 `0xf7c0…bC1E`，另一句助记词）：首笔 1 LINK 19:34:38 申请 → 19:34:44 签编号 0 广播 → 19:34:51 回执 MINED（块 11700015，gas 51658，实付 2.04 gwei）→ 19:48:13 两节点 finalized 一致，结算 CONFIRMED，13 分 35 秒。并发：三笔 1 LINK + 一笔 3 LINK（超单笔上限进待核准，管理接口核准），一轮签四笔，编号 1–4 连续，20 秒内全部上链，20:07 全部 CONFIRMED。拒绝路径：3 LINK 进待核准 → 拒绝 → REJECTED、解冻、再核准 409。终态：acme 可用 18、托管镜像 −18、热钱包链上 18 LINK，判官 0 行。**没做的**：热钱包 LINK 不够的 revert（商户余额 ≤ 热钱包余额，账本先拒，造不出）；别处用钥匙停发（要把私钥导进 MetaMask，用户选择跳过，由 `PayoutSenderTest` 守）；kill -9 与卡单加价（真机造不出窗口，由测试守）。**演练里的意外**：领 LINK 时贴错地址（平台没有那把钥匙的 `0xAD12…`，25 LINK 留在那里）；Chainlink 水龙头领 ETH 要主网持有 1 LINK，改用不看主网的水龙头；`confirmed_at` 结算时没写（M5 修）。
 
 ### M4-⑥（可选，推迟）webhook
 

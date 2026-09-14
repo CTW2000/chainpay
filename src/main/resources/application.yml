@@ -9,7 +9,7 @@ spring:
       # 入账事务等锁时 chain_head 也停了更新，确认数冻结、降级检测不跑、一条 ERROR 都没有。
       # 现在两个任务、留有余量；加定时任务时同步加大，ChainIndexerBootSmokeTest 断言「线程数 ≥ 注册的任务数」。
       pool:
-        size: 5
+        size: 6
 
   datasource:
     # 对应 docker-compose.yml 里绑在 127.0.0.1:5433 的 Postgres 18。
@@ -145,6 +145,16 @@ chainpay:
     track-interval: 15s
     # 广播后多久还没上链算卡住：同编号加价 25% 再发一笔。Sepolia 12 秒一块，3 分钟约 15 块；太短会白白多付小费
     stuck-after: 3m
+
+  # M5 · 对账：站在两个节点都认的 finalized 块上，把链上事实和库内记录逐项比对；结论落 audit_run，差异落 audit_finding。
+  # 设了主节点才装配（同索引器）。
+  audit:
+    # 多久对一次账。上次 OK / DIFF 距今超过两个周期，GET /admin/v1/audit 报 stale：「没跑」和「跑了没事」必须分得开
+    interval: 1h
+    # 启动后多久跑第一轮：给索引器和入账任务追平的时间
+    initial-delay: 2m
+    # 「FINAL 的收款日志应该已经入账」的宽限块数：给入账任务几轮时间，不把刚 FINAL 的报成漏账
+    lag-blocks: 10
 
 logging:
   level:
