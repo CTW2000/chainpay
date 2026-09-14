@@ -128,6 +128,17 @@ tools/check-secrets.sh /path/to/logs /path/to/unpacked-image-layer   # 扫任意
 
 公开的测试密钥逐值列在 `tools/check-secrets.allow` 里并注明来源；新加一把要说清楚它为什么可以公开。
 
+### 3b. 用容器跑（M6-① 起的标准跑法）
+
+应用和中间件一起在 compose 里跑；密钥仍只在 `env/local.env`，镜像里 grep 不到：
+
+```bash
+set -a; source env/local.env; set +a
+docker compose build app && tools/image-check.sh && docker compose up -d app
+```
+
+管理接口从宿主打发布端口会 401（源地址不是回环），用 `tools/admin.sh GET /admin/v1/indexer`；细节见 `docs/runbook/ops.md`。
+
 ### 4. 想手工连数据库看看（可选）
 
 ```bash

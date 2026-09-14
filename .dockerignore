@@ -3,16 +3,30 @@
 #
 # 关键：镜像的层是不可变的。COPY 进去再 RUN rm 删掉，
 # 密钥仍然留在前一层里，任何人 docker save 都能扒出来。
-
+# M6-①：Dockerfile 只 COPY pom.xml 与 src（ContainerGuardTest 禁 COPY . .），这里是第二道墙；第三道是打完镜像跑 tools/image-check.sh。
+#
+# 构建上下文里不该有的东西。第一条是密钥：env/ 整个目录不进镜像，样板也不需要
+env/
+*.env
+*.key
+*.pem
+secrets/
+# 宿主的构建产物：镜像在自己的阶段里构建，宿主的 target/ 带进去只会污染缓存
+target/
+# 与镜像无关
 .git
 .gitignore
-target
-docs
-env/*.env
-*.md
-!README.md
-.idea
-.vscode
+.idea/
+.vscode/
+*.iml
 .DS_Store
-logs
+docs/
+docs/retro/
+tools/
+db/
+README.md
+CLAUDE.md
+LEARNING-PATH.md
+logs/
 *.log
+.claude/

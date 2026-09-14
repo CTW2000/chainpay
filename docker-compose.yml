@@ -1,4 +1,4 @@
-# 本地开发用的中间件。应用本身不在这里跑（M6 再说）。
+# 本地开发用的中间件，M6-① 起应用也在这里跑（app 服务）。
 #
 # 端口一律绑 127.0.0.1 —— 不要写成 "5433:5432"。
 # 那样会绑到 0.0.0.0，而且 Docker 直接写 iptables 的 DOCKER 链，
@@ -53,6 +53,49 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+    restart: unless-stopped
+
+  # M6-①：应用本身。密钥只从 env_file 来；environment 里只放拓扑（容器网络里中间件叫 postgres / redis，不再是 localhost）。
+  app:
+    build:
+      context: .
+    image: chainpay:local
+    container_name: chainpay-app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - env/local.env
+    environment:
+      CHAINPAY_DB_URL: jdbc:postgresql://postgres:5432/chainpay
+      CHAINPAY_REDIS_HOST: redis
+      CHAINPAY_REDIS_PORT: "6379"
+      CHAINPAY_PORT: "8095"
+      CHAINPAY_MANAGEMENT_PORT: "8096"
+    ports:
+      # 和中间件一样只绑回环（RULE #5a）。管理端口 8096 不发布：它只在容器内回环上，HEALTHCHECK 在容器里打
+      - "127.0.0.1:8095:8095"
+    # RULE #3 去掉全部 Linux 能力（一个 Java 进程一项都不需要）；RULE #4 禁止提权；RULE #8 根文件系统只读，只给 /tmp 一块内存盘
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+    # RULE #7 限资源：JVM 堆按这个上限的 75% 算（Dockerfile 的 ENTRYPOINT）；进程数上限防 fork 炸弹
+    mem_limit: 1g
+    pids_limit: 256
+    healthcheck:
+      # 打 readiness（能不能接请求），不打 liveness：库连不上时不给流量，连着不行才重启
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8096/actuator/health/readiness"]
+      interval: 15s
+      timeout: 3s
+      start_period: 60s
+      retries: 3
+    # 容器运行时就是进程管理器：崩了拉起来，人手停的不拉（M6 取舍 5）
     restart: unless-stopped
 
 volumes:

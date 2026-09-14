@@ -36,3 +36,25 @@ HTTP：UP / DEGRADED / UNKNOWN = 200；DOWN = 503。`DEGRADED` 是本项目多�
 ## 细节里为什么没有更多
 
 细节只到「状态 + 原因 + 几个数」。密码、连接串、节点地址、私钥永远不进来（`HealthProbesTest.detailsLeakNoSecrets` 守着）。管理端口虽然只绑回环，但本机上任何进程都到得了；细节越少，泄露面越小。
+
+# 运维手册 · 容器里跑（M6-①）
+
+```bash
+set -a; source env/local.env; set +a          # 密钥只从这里来；compose 的 environment 只覆盖主机名与端口
+docker compose build app                      # 两阶段构建；首次约 6 分钟（拉 Maven 镜像 + 依赖），之后 ~2 分钟
+tools/image-check.sh                          # 打完必跑：非 root、HEALTHCHECK、无私钥形态、env 里每个密钥值 grep 不到
+docker compose up -d app                      # 等中间件 healthy 才起；~10 秒后自己变 healthy
+docker inspect --format '{{.State.Health.Status}}' chainpay-app
+docker logs -f chainpay-app
+```
+
+| 想做 | 命令 | 说明 |
+|---|---|---|
+| 看探针 | `docker exec chainpay-app curl -s http://127.0.0.1:8096/actuator/health/work` | 8096 只在容器内回环，宿主到不了 |
+| 调管理接口 | `tools/admin.sh GET /admin/v1/indexer` | 从宿主打 `127.0.0.1:8095/admin/...` 会 401：源地址是 Docker 网桥网关不是回环。脚本在容器里发 curl |
+| 调商户接口 | `tools/api.py ...` | 数据面走发布端口，和以前一样 |
+| 停 / 起 | `docker compose stop app` / `docker compose start app` | 人手 stop 的不会被自动拉起（`unless-stopped`） |
+| 崩了 | 什么都不用做 | 进程退出（含 OOM）Docker 自动拉起；`docker inspect --format '{{.RestartCount}}' chainpay-app` 看拉起过几次 |
+| 换版本 | `docker compose build app && tools/image-check.sh && docker compose up -d app` | M6-④ 会把它变成脚本并加回滚 |
+
+**这台 Mac 上的怪事**：出网走本机代理的隧道，容器内 TLS 偶发「Remote host terminated the handshake」（apt 或 Maven 都可能撞上），构建失败先重跑一次再查别的。
