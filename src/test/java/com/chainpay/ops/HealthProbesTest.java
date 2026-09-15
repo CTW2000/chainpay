@@ -97,6 +97,17 @@ class HealthProbesTest extends AbstractPostgresTest {
                 .doesNotContainIgnoringCase("password");
     }
 
+    @Autowired
+    private com.chainpay.ops.alert.AlertScheduler alerts;
+
+    @Test
+    @DisplayName("★ 告警任务真的装配了、读的是 work 组：这里没配节点，四个部件 UNKNOWN / UP，一轮零告警；调度线程够用")
+    void alertSchedulerWatchesTheWorkGroup() {
+        assertThat(alerts.tick()).isEmpty();
+        assertThat(alerts.lastObserved().keySet()).containsExactlyInAnyOrder("indexer", "hotWallet", "audit", "redis");
+        assertThat(alerts.lastObserved().get("redis").status()).isEqualTo("UP");
+    }
+
     @Test
     @DisplayName("两个池的指标都在：hikaricp.connections 带 pool 标签能分出主池与系统池")
     void bothPoolsAreMetered() throws Exception {

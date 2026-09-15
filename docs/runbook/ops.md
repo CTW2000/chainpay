@@ -58,3 +58,19 @@ docker logs -f chainpay-app
 | 换版本 | `docker compose build app && tools/image-check.sh && docker compose up -d app` | M6-④ 会把它变成脚本并加回滚 |
 
 **这台 Mac 上的怪事**：出网走本机代理的隧道，容器内 TLS 偶发「Remote host terminated the handshake」（apt 或 Maven 都可能撞上），构建失败先重跑一次再查别的。
+
+# 运维手册 · 告警（M6-③）
+
+告警看的就是上面的 `work` 组，每 30 秒一眼，**只在变化时叫**：不是 UP 叫一次 🔴，回到 UP 叫一次 🟢；没送到的下一轮再叫；一直坏着不重复。
+出口是一个 HTTP webhook（`CHAINPAY_ALERT_WEBHOOK_URL`，按密码对待，日志里只出主机名），形状 `CHAINPAY_ALERT_FORMAT`：
+
+| 值 | 给谁 | 载荷 |
+|---|---|---|
+| `generic` | 自己的接收端 | `{service, component, from, to, recovered, details, at, text}` |
+| `slack` | Slack incoming webhook | `{text}` |
+| `dingtalk` | 钉钉群机器人 | `{msgtype:"text", text:{content}}` |
+| `feishu` | 飞书群机器人 | `{msg_type:"text", content:{text}}` |
+
+不设地址 = 变化只打 ERROR 日志（`grep 告警 日志`）。收到一条 🔴 之后按上面「work 里每个部件不是 UP 时怎么办」处理；🟢 是它自己好了或人修好了。
+
+**本机演练的接收端**：`python3 <scratchpad>/hook.py <日志文件>` 在 127.0.0.1:9911 收 POST 并逐行落文件；容器里地址写 `http://host.docker.internal:9911/hook`。接收端没起、地址又配着，每轮会 ERROR「没送到，下一轮再叫」——要么起接收端，要么把 `env/local.env` 里那两行删掉。

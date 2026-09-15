@@ -9,7 +9,7 @@ spring:
       # 入账事务等锁时 chain_head 也停了更新，确认数冻结、降级检测不跑、一条 ERROR 都没有。
       # 现在两个任务、留有余量；加定时任务时同步加大，ChainIndexerBootSmokeTest 断言「线程数 ≥ 注册的任务数」。
       pool:
-        size: 6
+        size: 8   # 六个任务（索引 / 入账 / 发送 / 追踪 / 对账 / 告警）+ 余量
 
   datasource:
     # 对应 docker-compose.yml 里绑在 127.0.0.1:5433 的 Postgres 18。
@@ -194,6 +194,16 @@ management:
           include: readinessState,db,systemDb
         work:
           include: indexer,hotWallet,audit,redis
+
+# M6-③ · 告警：定时看 work 组（索引器 / 热钱包 / 判官 / Redis），只在变化时叫：不是 UP 叫一次，恢复再叫一次；没送到下一轮再叫。
+# 出口是一个 HTTP webhook，地址只从环境变量来、按密码对待（入站 webhook 的令牌常在 URL 里）；不设 = 只打 ERROR 日志
+chainpay.alert:
+  webhook-url: ${CHAINPAY_ALERT_WEBHOOK_URL:}
+  # generic（自己的接收端，结构化 JSON）/ slack / dingtalk / feishu
+  format: ${CHAINPAY_ALERT_FORMAT:generic}
+  interval: 30s
+  # 启动后先等一分钟：刚起来时 Redis、索引器还没就位，那不是事故
+  initial-delay: 1m
 
 logging:
   level:
