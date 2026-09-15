@@ -12,6 +12,11 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 public class ChainpayApplication {
 
     public static void main(String[] args) {
+        for (String a : args) {
+            if ("--migrate-only".equals(a)) {                       // M6-④：部署脚本在切换之前单独跑迁移，成功 0、失败非 0
+                System.exit(com.chainpay.ops.Migrate.run(args).exitCode());
+            }
+        }
         SpringApplication.run(ChainpayApplication.class, args);
     }
 }

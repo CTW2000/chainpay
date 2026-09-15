@@ -134,7 +134,8 @@ tools/check-secrets.sh /path/to/logs /path/to/unpacked-image-layer   # 扫任意
 
 ```bash
 set -a; source env/local.env; set +a
-docker compose build app && tools/image-check.sh && docker compose up -d app
+deploy/deploy.sh                       # 八环节：构建 → 配置 → 密钥 → 迁移 → 打标签 → 切换 → 验证 → 不过就回滚
+deploy/rollback.sh                     # 退回上一版
 ```
 
 管理接口从宿主打发布端口会 401（源地址不是回环），用 `tools/admin.sh GET /admin/v1/indexer`；细节见 `docs/runbook/ops.md`。

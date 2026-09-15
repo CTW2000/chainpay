@@ -59,7 +59,8 @@ services:
   app:
     build:
       context: .
-    image: chainpay:local
+    # 永远跑 chainpay:current：部署脚本把新镜像打成 current、旧的打成 previous，回滚只是换标签（deploy/）。开发直接 build 也打到 current
+    image: ${CHAINPAY_IMAGE:-chainpay:current}
     container_name: chainpay-app
     depends_on:
       postgres:

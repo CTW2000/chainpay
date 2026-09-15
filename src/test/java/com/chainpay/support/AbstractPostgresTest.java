@@ -54,7 +54,7 @@ public abstract class AbstractPostgresTest {
      * <p>手工 {@code start()} 之后不需要也不应该手工 {@code stop()} ——
      * Testcontainers 的 Ryuk 伴生容器会在 JVM 退出后回收。
      */
-    static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:18")
+    protected static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:18")
             // 和 docker-compose 用同一份初始化脚本建 chainpay_app——一处定义，两处使用
             .withCopyFileToContainer(
                     MountableFile.forHostPath("db/init/01-roles.sql"),

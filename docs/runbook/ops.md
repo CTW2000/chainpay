@@ -74,3 +74,24 @@ docker logs -f chainpay-app
 不设地址 = 变化只打 ERROR 日志（`grep 告警 日志`）。收到一条 🔴 之后按上面「work 里每个部件不是 UP 时怎么办」处理；🟢 是它自己好了或人修好了。
 
 **本机演练的接收端**：`python3 <scratchpad>/hook.py <日志文件>` 在 127.0.0.1:9911 收 POST 并逐行落文件；容器里地址写 `http://host.docker.internal:9911/hook`。接收端没起、地址又配着，每轮会 ERROR「没送到，下一轮再叫」——要么起接收端，要么把 `env/local.env` 里那两行删掉。
+
+# 运维手册 · 发布与回滚（M6-④）
+
+```bash
+set -a; source env/local.env; set +a
+deploy/deploy.sh            # 八环节：构建 → 配置 → 密钥 → 迁移 → 打标签 → 切换 → 验证 → 不过就回滚
+deploy/rollback.sh          # 人手回滚：previous 换回 current、up、再验；数据库不动
+docker images chainpay      # 标签就是发布记录
+```
+
+| 标签 | 意思 |
+|---|---|
+| `chainpay:<sha>` | 某个提交打出来的镜像；工作区脏时是 `<sha>-dirty`，日后按提交号找不回来源 |
+| `chainpay:current` | compose 在跑的那个；部署脚本换它，人不手动换 |
+| `chainpay:previous` | 上一版；回滚退到它 |
+| `chainpay:failed` | 上一次被换下的（回滚时打的），留着查 |
+
+**迁移失败**：脚本在 ④ 停，什么都没切换，旧版本继续跑。看脚本打印的 Flyway 错误，改迁移，再跑 `deploy/deploy.sh`（同一个提交的镜像已存在就不重打；改了迁移就是新提交或 `-dirty`）。
+**验证不过**（120 秒没 healthy）：脚本自己回滚到 previous 并退出 1；看 `docker logs chainpay-app` 里新版本为什么起不来。
+**回滚后数据库怎么办**：不动。规矩是「迁移只前进，上一版代码要能跑在新 schema 上」——每条迁移只加不删（先加后删，删要等到没有代码再用它的下一版）。回滚后的旧代码对库里它不认识的更高版本视而不见（`ignore-migration-patterns: *:future`）。
+**只想跑迁移不发布**：`docker compose run --rm --no-deps app --migrate-only`。
