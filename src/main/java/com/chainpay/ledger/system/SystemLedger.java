@@ -1,17 +1,13 @@
 package com.chainpay.ledger.system;
 
-import java.util.List;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import com.chainpay.ledger.service.LedgerService;
 import com.chainpay.ledger.service.LedgerServiceImpl;
-import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
-import com.zaxxer.hikari.HikariPoolMXBean;
-import com.zaxxer.hikari.metrics.micrometer.MicrometerMetricsTrackerFactory;
-import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Duration;
+import java.util.List;
 import java.util.function.Function;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.dao.CannotAcquireLockException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -23,25 +19,29 @@ import org.springframework.transaction.support.TransactionTemplate;
  * 系统身份的账本入口：以 {@code chainpay_system}（BYPASSRLS、非超级用户）连库的<b>独立连接池</b>，
  * 加一份绑在这条连接上的账本实现。入账、结算、M4 出账都从这里走。
  *
- * <p><b>为什么是一个对象，而不是第二个 {@code DataSource} / {@code JdbcClient} bean：</b>
- * Spring Boot 的自动配置是「容器里没有这个类型的 bean 我才配一个」。多注册一个同类型的 bean，
- * 主连接的自动配置整体退让，全项目的 {@code JdbcClient} 注入要么二义、要么拿到错的那个。
- * 把池、事务模板、账本三样东西装进一个自定义类型里，主连接的一切原样不动，
- * 而「拿到 {@code SystemLedger} 就拿到了全库」这条边界由 {@code ControllerBoundaryTest} 守着。
+ * <p><b>池与事务管理器是容器里的 bean，账本不是</b>（2026-09-15 由用户决定，从「全部藏在本类里」换成官方双数据源的形状，见 CLAUDE.md）。
+ * {@code systemDataSource} 与 {@code systemTransactionManager} 由 {@link SystemLedgerConfig} 声明为限定名 {@value #QUALIFIER}、
+ * <b>非默认候选</b>的 bean：Boot 的 db 健康检查与 hikaricp.* 指标自动覆盖它们；按类型注入的地方拿不到它们，主连接的自动配置不退让。
+ * 绑在系统连接上的 {@code JdbcClient} 与账本仍只在 {@link #inTransaction} 的回调里可见、不是 bean：
+ * 「拿到 {@link Session} 才拿得到账本」这条边界照旧由类型守着，{@code ControllerBoundaryTest} 另外扫限定名。
  *
- * <p><b>为什么只有 {@link #inTransaction} 一个入口：</b>
+ * <p><b>为什么账本只在回调里可见：</b>
  * {@link LedgerServiceImpl#transfer} 上的 {@code @Transactional} 是代理魔法，只对容器创建的 bean 生效。
  * 这里的账本是手工 {@code new} 出来的，注解形同虚设——若把它直接暴露出去，调用方在事务外调 transfer，
  * 一条 transfer、两条 entry、两次余额更新各自提交，账本的原子性契约就悄悄没了。
- * 所以事务边界由本类的模板给，账本只在回调里可见；账本的 SQL 走同一个数据源，自动加入这个事务。
+ * 所以事务边界由本类的模板给（模板用的就是容器里那个 system 事务管理器），账本的 SQL 走同一个数据源，自动加入这个事务；
+ * 外层若已经有 {@code @Transactional("system")} 开的事务，回调直接加入它（SystemPoolBeansTest 钉住）。
  *
- * <p><b>建池即自检：</b>连上后问一次 {@code pg_roles}，不是 BYPASSRLS（RLS 会让它一行都看不到，
+ * <p><b>启动即自检：</b>第一次借连接时问一次 {@code pg_roles}，不是 BYPASSRLS（RLS 会让它一行都看不到，
  * 入账任务将静默地无事可做）或者是超级用户（权限没有边界），直接拒绝启动。
  * 配错了就起不来，远好过看起来正常。
  */
 public final class SystemLedger implements AutoCloseable {
 
     private static final Logger log = LoggerFactory.getLogger(SystemLedger.class);
+
+    /** 系统池与系统事务管理器的限定名：{@code @Qualifier("system")}、{@code @Transactional("system")}。 */
+    public static final String QUALIFIER = "system";
 
     /** 一次系统事务里能用的两样东西：系统连接上的 SQL 客户端，和绑在同一连接上的账本。 */
     public record Session(JdbcClient jdbc, LedgerService ledger) {}
@@ -50,18 +50,27 @@ public final class SystemLedger implements AutoCloseable {
     private final TransactionTemplate tx;
     private final Session session;
 
-    private SystemLedger(HikariDataSource pool) {
+    /** 池是不是本实例自己建的：容器装配的实例池是 systemDataSource 这个 bean，由容器关，本实例的 close 不能碰它。 */
+    private final boolean ownsPool;
+
+    private SystemLedger(HikariDataSource pool, JdbcTransactionManager transactionManager, boolean ownsPool) {
+        this.ownsPool = ownsPool;
+        if (transactionManager.getDataSource() != pool) {
+            throw new IllegalArgumentException("系统事务管理器必须管着系统池：否则 inTransaction 开的事务管不住账本的 SQL，每条各自提交");
+        }
         this.pool = pool;
-        this.tx = new TransactionTemplate(new JdbcTransactionManager(pool));
+        this.tx = new TransactionTemplate(transactionManager);
         JdbcTemplate template = new JdbcTemplate(pool);
         template.setExceptionTranslator(lockTimeoutAsTransient(template.getExceptionTranslator()));
         JdbcClient jdbc = JdbcClient.create(template);
         this.session = new Session(jdbc, new LedgerServiceImpl(jdbc));
     }
 
-    /** 建池、连一次、核对身份。任何一步不满足都抛出，池随之关闭。 */
-    public static SystemLedger connect(String jdbcUrl, String username, String password, int maximumPoolSize,
-                                       Duration lockTimeout) {
+    /**
+     * 系统池的配置：池名 chainpay-system、借连接最多等 3 秒、每条物理连接带 lock_timeout。
+     * 只建对象、不连库，和 Boot 自己建的数据源一样：第一次借连接（启动自检）时才起池。密码没设、lockTimeout 不合法，这里就抛。
+     */
+    public static HikariDataSource pool(String jdbcUrl, String username, String password, int maximumPoolSize, Duration lockTimeout) {
         if (lockTimeout == null || lockTimeout.isZero() || lockTimeout.isNegative()) {
             throw new IllegalArgumentException("lockTimeout 必须大于 0：PostgreSQL 里 0 表示无限等待，那正是要去掉的行为");
         }
@@ -69,48 +78,46 @@ public final class SystemLedger implements AutoCloseable {
             throw new IllegalStateException("系统连接没有密码：设 CHAINPAY_SYSTEM_DB_PASSWORD"
                     + "（角色 chainpay_system 由 db/init/01-roles.sql 创建）");
         }
-        HikariConfig config = new HikariConfig();
-        config.setJdbcUrl(jdbcUrl);
-        config.setUsername(username);
-        config.setPassword(password);
-        config.setMaximumPoolSize(maximumPoolSize);
-        config.setPoolName("chainpay-system");
-        config.setConnectionTimeout(3_000);
+        HikariDataSource pool = new HikariDataSource();
+        pool.setJdbcUrl(jdbcUrl);
+        pool.setUsername(username);
+        pool.setPassword(password);
+        pool.setMaximumPoolSize(maximumPoolSize);
+        pool.setPoolName("chainpay-system");
+        pool.setConnectionTimeout(3_000);
         // 等锁的上限（M3-⑤ 演练实测）：没有它，一个被别的事务握着的账本表能让入账事务无限期等下去，
         // 而且拖住的是调度线程。超时时 PostgreSQL 抛 SQLSTATE 55P03，被翻译成瞬时异常，入账任务下一轮再来。
         // 会话级 SET：池里每条物理连接建立时执行一次、之后一直带着；值来自 Duration，不是外部字符串。
-        config.setConnectionInitSql("SET lock_timeout = '" + lockTimeout.toMillis() + "ms'");
-        HikariDataSource pool = new HikariDataSource(config);        // 建池即连一次：连不上、密码错，这里就抛
-        SystemLedger ledger = new SystemLedger(pool);
+        pool.setConnectionInitSql("SET lock_timeout = '" + lockTimeout.toMillis() + "ms'");
+        return pool;
+    }
+
+    /** 用容器里的系统池与系统事务管理器建账本，并做启动自检（身份、判官）。任何一步不满足都抛出；池是容器的 bean，由容器关。 */
+    public static SystemLedger start(HikariDataSource pool, JdbcTransactionManager transactionManager) {
+        SystemLedger ledger = new SystemLedger(pool, transactionManager, false);
+        ledger.requireSystemIdentity();
+        ledger.judgeAtBoot();
+        return ledger;
+    }
+
+    /** 不经容器、自己建池（测试用：拿错误的身份验证自检会拒绝）。自检失败时池随之关闭；成功时用完要 {@link #close}。 */
+    public static SystemLedger connect(String jdbcUrl, String username, String password, int maximumPoolSize,
+                                       Duration lockTimeout) {
+        HikariDataSource pool = pool(jdbcUrl, username, password, maximumPoolSize, lockTimeout);
         try {
+            SystemLedger ledger = new SystemLedger(pool, new JdbcTransactionManager(pool), true);
             ledger.requireSystemIdentity();
             ledger.judgeAtBoot();
+            return ledger;
         } catch (RuntimeException e) {
             pool.close();
             throw e;
         }
-        return ledger;
     }
 
-    /** 在系统身份的一个事务里做一件事。回调抛出 = 整体回滚。 */
+    /** 在系统身份的一个事务里做一件事。回调抛出 = 整体回滚。外层已有 system 事务时加入它。 */
     public <T> T inTransaction(Function<Session, T> work) {
         return tx.execute(status -> work.apply(session));
-    }
-
-    /** 池子的一眼快照（M6-⓪ 健康检查用）。 */
-    public record PoolStats(String pool, int active, int idle, int total, int waiting) {}
-
-    /** 借一条连接问一句 SELECT 1，再报池子的四个数。连不上、池满等超时都从这里抛。 */
-    public PoolStats ping() {
-        inTransaction(s -> s.jdbc().sql("SELECT 1").query(Integer.class).single());
-        HikariPoolMXBean mx = pool.getHikariPoolMXBean();
-        return new PoolStats(pool.getPoolName(), mx.getActiveConnections(), mx.getIdleConnections(), mx.getTotalConnections(),
-                mx.getThreadsAwaitingConnection());
-    }
-
-    /** 把这个池的指标挂到 Micrometer（hikaricp.* 带 pool=chainpay-system 标签）。主池由 Boot 自动挂；这个池不是 bean，只能手工。 */
-    public void bindMetrics(MeterRegistry registry) {
-        pool.setMetricsTrackerFactory(new MicrometerMetricsTrackerFactory(registry));
     }
 
     private void requireSystemIdentity() {
@@ -162,8 +169,12 @@ public final class SystemLedger implements AutoCloseable {
         }
     }
 
+    /** 关掉池。只给 {@link #connect} 建的实例用：容器装配的实例，池是 systemDataSource 这个 bean，由容器自己关。 */
     @Override
     public void close() {
-        pool.close();
+        if (ownsPool) {
+            pool.close();
+        }
+        // 容器装配的实例：池是容器的 bean，手动 close 一次也不能把 Boot 名下的池关掉，否则之后每次借连接都失败
     }
 }

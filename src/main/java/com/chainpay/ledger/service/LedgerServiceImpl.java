@@ -1,5 +1,4 @@
 package com.chainpay.ledger.service;
-
 import com.chainpay.ledger.service.LedgerException.Reason;
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;

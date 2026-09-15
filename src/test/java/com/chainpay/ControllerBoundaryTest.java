@@ -39,6 +39,12 @@ class ControllerBoundaryTest {
             assertThat(source).as(controller.toString()).doesNotContain("asSystem(");
             // M3-⓪ 起系统权限是连接身份：拿到 SystemLedger 就拿到了全库，HTTP 层永远不该持有它
             assertThat(source).as(controller.toString()).doesNotContain("SystemLedger");
+            // 2026-09-15 起系统池与系统事务管理器是容器里的 bean（限定名 system）：注入它们或在事务上点它们的名字，同样等于拿到全库
+            assertThat(source).as(controller.toString())
+                    .doesNotContain("Qualifier(\"system\")")
+                    .doesNotContain("Transactional(\"system\")")
+                    .doesNotContain("systemDataSource")
+                    .doesNotContain("systemTransactionManager");
         }
     }
 

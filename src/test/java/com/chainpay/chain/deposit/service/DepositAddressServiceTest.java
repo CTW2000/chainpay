@@ -8,6 +8,8 @@ import com.chainpay.chain.deposit.repository.DepositAddressRepository;
 import com.chainpay.chain.indexer.repository.ChainTokenRepository;
 import com.chainpay.chain.wallet.DepositAddressDeriver;
 import com.chainpay.support.AbstractPostgresTest;
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -20,13 +22,15 @@ import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.aop.support.AopUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.dao.DataAccessException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.simple.JdbcClient;
-import org.springframework.transaction.PlatformTransactionManager;
-import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.annotation.AnnotationTransactionAttributeSource;
+import org.springframework.transaction.interceptor.TransactionAttribute;
 
 /**
  * 分配收款地址：一户一币一址，序号来自序列，唯一性由约束裁决，地址表是租户边界。
@@ -54,9 +58,6 @@ class DepositAddressServiceTest extends AbstractPostgresTest {
 
     @Autowired
     private ChainTokenRepository tokens;
-
-    @Autowired
-    private PlatformTransactionManager txManager;
 
     private long acmeId;
     private long evilcoId;
@@ -138,7 +139,8 @@ class DepositAddressServiceTest extends AbstractPostgresTest {
                 return index;
             }
         };
-        DepositAddressService slowService = new DepositAddressService(deriver, pausingAfterNextIndex, tokens, new TransactionTemplate(txManager));
+        // 自己 new 的实例没有代理，也就没有自己的事务：它的事务来自下面包着它的 asMerchant（这正是 @Transactional 的代价）
+        DepositAddressService slowService = new DepositAddressService(deriver, pausingAfterNextIndex, tokens);
         ExecutorService pool = Executors.newSingleThreadExecutor();
         try {
             Future<DepositAddress> a = pool.submit(() -> tenantScope.asMerchant(acmeId, () -> slowService.allocate(acmeId, LINK)));
@@ -224,6 +226,19 @@ class DepositAddressServiceTest extends AbstractPostgresTest {
 
         assertThatThrownBy(() -> tenantScope.asMerchant(acmeId, () -> service.allocate(acmeId, LINK)))
                 .isInstanceOf(IllegalStateException.class).hasMessageContaining("xpub");
+    }
+
+    @Test
+    @DisplayName("★ 事务靠代理生效：容器给的是代理、allocate 带 REQUIRED、类与方法都不是 final（删掉注解时其余测试全绿，只有这条会红）")
+    void allocateIsTransactionalThroughTheContainerProxy() throws Exception {
+        Method allocate = DepositAddressService.class.getMethod("allocate", long.class, String.class);
+
+        assertThat(AopUtils.isCglibProxy(service)).as("容器注入的必须是代理：不是代理，注解形同虚设").isTrue();
+        TransactionAttribute attribute = new AnnotationTransactionAttributeSource().getTransactionAttribute(allocate, DepositAddressService.class);
+        assertThat(attribute).as("allocate 必须带 @Transactional").isNotNull();
+        assertThat(attribute.getPropagationBehavior()).as("加入调用方 asMerchant 已经开好的事务").isEqualTo(TransactionDefinition.PROPAGATION_REQUIRED);
+        assertThat(Modifier.isFinal(DepositAddressService.class.getModifiers())).as("final 类生成不了代理：启动就失败").isFalse();
+        assertThat(Modifier.isFinal(allocate.getModifiers())).as("final 方法代理拦不住：启动只打一行 WARN，调用时字段全是 null、不在事务里").isFalse();
     }
 
     @Test

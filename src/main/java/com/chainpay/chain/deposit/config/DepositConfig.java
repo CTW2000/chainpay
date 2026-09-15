@@ -14,8 +14,6 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.transaction.PlatformTransactionManager;
-import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * 装配收款地址模块：设了 CHAINPAY_DEPOSIT_XPUB 才装配，不设时应用照常启动（同索引器）。
@@ -42,9 +40,10 @@ class DepositConfig {
         return new DepositQueryService(repository);
     }
 
+    /** 从这里返回的对象会被容器套上事务代理（allocate 上的 @Transactional 靠它生效），所以不需要再传事务模板。 */
     @Bean
     DepositAddressService depositAddressService(DepositAddressDeriver deriver, DepositAddressRepository addresses,
-                                                ChainTokenRepository tokens, PlatformTransactionManager txManager) {
-        return new DepositAddressService(deriver, addresses, tokens, new TransactionTemplate(txManager));
+                                                ChainTokenRepository tokens) {
+        return new DepositAddressService(deriver, addresses, tokens);
     }
 }

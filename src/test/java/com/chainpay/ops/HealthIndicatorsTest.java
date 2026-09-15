@@ -7,12 +7,10 @@ import com.chainpay.audit.service.AuditService;
 import com.chainpay.chain.indexer.domain.IndexerState;
 import com.chainpay.chain.indexer.domain.IndexerStatus;
 import com.chainpay.chain.payout.domain.HotWallet;
-import com.chainpay.ledger.system.SystemLedger;
 import com.chainpay.ops.health.AuditHealthIndicator;
 import com.chainpay.ops.health.HotWalletHealthIndicator;
 import com.chainpay.ops.health.IndexerHealthIndicator;
 import com.chainpay.ops.health.Statuses;
-import com.chainpay.ops.health.SystemDbHealthIndicator;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -138,28 +136,6 @@ class HealthIndicatorsTest {
             List<com.chainpay.audit.domain.AuditFinding> f = java.util.Collections.nCopies(findings,
                     new com.chainpay.audit.domain.AuditFinding("CUSTODY_TOTAL", com.chainpay.audit.domain.AuditKind.MISSING_IN_LEDGER, "币 LINK", "1", "2", "x"));
             return new AuditResult(7L, status, 11700301L, Instant.now(), Instant.now(), f, "d");
-        }
-    }
-
-    @Nested
-    @DisplayName("系统连接池")
-    class SystemDb {
-
-        @Test
-        @DisplayName("ping 通：UP 且报池子的四个数")
-        void pingOkIsUp() {
-            Health h = new SystemDbHealthIndicator(() -> new SystemLedger.PoolStats("chainpay-system", 1, 1, 2, 0)).health();
-            assertThat(h.getStatus()).isEqualTo(Status.UP);
-            assertThat(h.getDetails()).containsEntry("pool", "chainpay-system").containsEntry("active", 1).containsEntry("idle", 1)
-                    .containsEntry("total", 2).containsEntry("waiting", 0);
-        }
-
-        @Test
-        @DisplayName("ping 抛异常：DOWN，细节只有异常的类名与消息，没有连接串")
-        void pingFailureIsDown() {
-            Health h = new SystemDbHealthIndicator(() -> { throw new IllegalStateException("连不上"); }).health();
-            assertThat(h.getStatus()).isEqualTo(Status.DOWN);
-            assertThat(h.getDetails().get("error").toString()).contains("连不上").doesNotContain("jdbc:");
         }
     }
 }
