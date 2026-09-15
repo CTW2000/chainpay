@@ -29,6 +29,14 @@ class MigrateOnlyTest extends AbstractPostgresTest {
         return all;
     }
 
+    /** 从迁移目录算最高版本，不写死：下一条迁移进来这条测试不该红。 */
+    private static int highestMigration() throws IOException {
+        try (var files = Files.list(Path.of("src/main/resources/db/migration"))) {
+            return files.map(f -> f.getFileName().toString()).filter(n -> n.matches("V\\d+__.*\\.sql"))
+                    .mapToInt(n -> Integer.parseInt(n.substring(1, n.indexOf("__")))).max().orElseThrow();
+        }
+    }
+
     @AfterEach
     void cleanFakeHistory() {
         jdbc.sql("DELETE FROM flyway_schema_history WHERE version = '9999'").update();
@@ -36,11 +44,11 @@ class MigrateOnlyTest extends AbstractPostgresTest {
 
     @Test
     @DisplayName("★ 已迁移的库：校验通过、没有新迁移、退出码 0；进程里没有装配任何调度任务")
-    void migratedDatabaseValidatesAndExitsZero() {
+    void migratedDatabaseValidatesAndExitsZero() throws IOException {
         Migrate.Outcome o = Migrate.run(args());
         assertThat(o.exitCode()).as(o.detail()).isEqualTo(0);
         assertThat(o.scheduledTasks()).as("只迁移，不该有任何 @Scheduled 任务被注册").isZero();
-        assertThat(o.detail()).contains("V26");
+        assertThat(o.detail()).contains("V" + highestMigration());
     }
 
     @Test

@@ -37,7 +37,6 @@ import org.springframework.boot.test.web.server.LocalServerPort;
 class AdminCredentialTest extends AbstractPostgresTest {
 
     /** 与 src/test/resources/application.yml 里的测试令牌一致。 */
-    private static final String ADMIN_TOKEN = "chainpay-test-admin-token-not-for-prod";
 
     @LocalServerPort
     private int port;
@@ -91,7 +90,7 @@ class AdminCredentialTest extends AbstractPostgresTest {
         var response = send(HttpRequest.newBuilder()
                 .uri(URI.create("http://localhost:" + port + "/admin/v1/merchants"))
                 .header("Content-Type", "application/json")
-                .header(AdminAuthFilter.HEADER_ADMIN_TOKEN, ADMIN_TOKEN)
+                .header(AdminAuthFilter.HEADER_ADMIN_SESSION, adminSessionToken())
                 .header("X-Forwarded-For", "203.0.113.7")
                 .POST(HttpRequest.BodyPublishers.ofString("""
                         {"code":"acme","name":"Acme"}""")));
@@ -137,10 +136,10 @@ class AdminCredentialTest extends AbstractPostgresTest {
     @DisplayName("重复的商户 code —— 409，不是 500")
     void duplicateMerchantCodeReturns409() {
         assertThat(post("/admin/v1/merchants", """
-                {"code":"acme","name":"Acme"}""", ADMIN_TOKEN).statusCode()).isEqualTo(201);
+                {"code":"acme","name":"Acme"}""", adminSessionToken()).statusCode()).isEqualTo(201);
 
         var duplicate = post("/admin/v1/merchants", """
-                {"code":"acme","name":"Acme Again"}""", ADMIN_TOKEN);
+                {"code":"acme","name":"Acme Again"}""", adminSessionToken());
 
         // 500 会把 Postgres 的原始报错(含表名、约束名)吐给调用方。
         // 409 是「你要建的东西已经存在」的标准答案。
@@ -176,7 +175,7 @@ class AdminCredentialTest extends AbstractPostgresTest {
 
         assertThat(issued.secret()).as("发放时必须返回明文").isNotBlank();
 
-        var listed = get("/admin/v1/merchants/" + merchantId + "/credentials", ADMIN_TOKEN);
+        var listed = get("/admin/v1/merchants/" + merchantId + "/credentials", adminSessionToken());
 
         assertThat(listed.statusCode()).isEqualTo(200);
         assertThat(listed.body())
@@ -215,7 +214,7 @@ class AdminCredentialTest extends AbstractPostgresTest {
         var newKey = issueCredential(merchantId, "new");
 
         var revoke = post("/admin/v1/credentials/" + oldKey.credentialId() + "/revoke",
-                "", ADMIN_TOKEN);
+                "", adminSessionToken());
         assertThat(revoke.statusCode()).isEqualTo(204);
 
         assertThat(signedBalanceGet(accountId, oldKey).statusCode())
@@ -234,7 +233,7 @@ class AdminCredentialTest extends AbstractPostgresTest {
         var first = issueCredential(merchantId, "first");
         var second = issueCredential(merchantId, "second");
 
-        var suspend = post("/admin/v1/merchants/" + merchantId + "/suspend", "", ADMIN_TOKEN);
+        var suspend = post("/admin/v1/merchants/" + merchantId + "/suspend", "", adminSessionToken());
         assertThat(suspend.statusCode()).isEqualTo(204);
 
         assertThat(signedBalanceGet(accountId, first).statusCode()).isEqualTo(401);
@@ -270,7 +269,7 @@ class AdminCredentialTest extends AbstractPostgresTest {
 
     private long createMerchant(String code, String name) {
         var response = post("/admin/v1/merchants",
-                "{\"code\":\"" + code + "\",\"name\":\"" + name + "\"}", ADMIN_TOKEN);
+                "{\"code\":\"" + code + "\",\"name\":\"" + name + "\"}", adminSessionToken());
         assertThat(response.statusCode()).isEqualTo(201);
         return jdbc.sql("SELECT id FROM merchant WHERE code = :c")
                 .param("c", code).query(Long.class).single();
@@ -278,7 +277,7 @@ class AdminCredentialTest extends AbstractPostgresTest {
 
     private IssuedCredential issueCredential(long merchantId, String label) {
         var response = post("/admin/v1/merchants/" + merchantId + "/credentials",
-                "{\"label\":\"" + label + "\"}", ADMIN_TOKEN);
+                "{\"label\":\"" + label + "\"}", adminSessionToken());
         assertThat(response.statusCode()).isEqualTo(201);
         return new IssuedCredential(
                 Long.parseLong(jsonField(response.body(), "credentialId")),
@@ -338,7 +337,7 @@ class AdminCredentialTest extends AbstractPostgresTest {
                 .header("Content-Type", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(body));
         if (adminToken != null) {
-            builder.header(AdminAuthFilter.HEADER_ADMIN_TOKEN, adminToken);
+            builder.header(AdminAuthFilter.HEADER_ADMIN_SESSION, adminToken);
         }
         return send(builder);
     }
@@ -348,7 +347,7 @@ class AdminCredentialTest extends AbstractPostgresTest {
                 .uri(URI.create("http://localhost:" + port + path))
                 .GET();
         if (adminToken != null) {
-            builder.header(AdminAuthFilter.HEADER_ADMIN_TOKEN, adminToken);
+            builder.header(AdminAuthFilter.HEADER_ADMIN_SESSION, adminToken);
         }
         return send(builder);
     }

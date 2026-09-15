@@ -53,6 +53,7 @@ public class AdminController {
 
     // ==================================================================
 
+    @com.chainpay.admin.web.Sensitive
     @PostMapping("/merchants")
     public ResponseEntity<ApiResponse<CreateMerchantResponse>> createMerchant(
             @Valid @RequestBody CreateMerchantRequest request) {
@@ -68,6 +69,7 @@ public class AdminController {
      * <p>响应里的 {@code secret} 是<b>这辈子唯一一次</b>出现明文的地方 ——
      * 没有任何接口能再把它查出来。丢了只能换一把新的。
      */
+    @com.chainpay.admin.web.Sensitive
     @PostMapping("/merchants/{merchantId}/credentials")
     public ResponseEntity<ApiResponse<IssuedCredential>> issueCredential(
             @PathVariable long merchantId,

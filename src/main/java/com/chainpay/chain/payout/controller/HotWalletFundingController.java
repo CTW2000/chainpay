@@ -28,6 +28,7 @@ public class HotWalletFundingController {
         this.fundings = fundings;
     }
 
+    @com.chainpay.admin.web.Sensitive
     @PostMapping("/fundings")
     public ApiResponse<FundingView> register(@Valid @RequestBody RegisterRequest request) {
         return ApiResponse.ok(view(fundings.register(request.txHash(), request.logIndex(), request.note())));

@@ -16,7 +16,7 @@
 **只读接口** `GET /admin/v1/indexer`，和其它管理接口同一道门（本机 + 管理员令牌）：
 
 ```bash
-curl -s -H "X-CP-ADMIN-TOKEN: $CHAINPAY_ADMIN_TOKEN" http://127.0.0.1:8095/admin/v1/indexer
+tools/admin.sh GET /admin/v1/indexer          # 先 eval "$(tools/admin.sh login <用户名>)"
 ```
 
 | 字段 | 含义 |

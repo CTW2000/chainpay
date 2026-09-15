@@ -76,17 +76,15 @@ chainpay:
   # 测试用的固定密钥在 src/test/resources/application.yml，只对测试生效。
   secret-key: ${CHAINPAY_SECRET_KEY}
 
-  # 控制面（/admin/**）的管理员令牌。
-  # 生成：openssl rand -hex 32
-  #
-  # 同样故意不给默认值 —— 理由和上面那把密钥一样，而且更强：
-  # 这是一把能给任意商户发钥匙的**万能令牌**，一个人人都知道的默认值
-  # 等于把开户接口直接开放给所有人。
-  #
-  # 它不是唯一的防线：AdminAuthFilter 还要求请求来自本机、且未经代理转发。
-  # 两层都要有 —— 令牌会出现在部署脚本、CI 变量、终端历史里；
-  # 而回环检查在「nginx 与应用同机」的部署下会静默失效。
-  admin-token: ${CHAINPAY_ADMIN_TOKEN}
+  # M6-⑤ · 控制面（/admin/**）的门：管理员会话，不再有静态令牌（能配钥匙的钥匙吊销不掉）。
+  # 第一个管理员用 --create-admin 建（口令只从环境变量 CHAINPAY_ADMIN_PASSWORD 来）；登录拿短期会话令牌；敏感操作要最近再认证。
+  # 另一层「只认本机回环、无代理头」仍在（AdminAuthFilter）。
+  admin:
+    session-ttl: 12h        # 会话绝对寿命：一直在动也到点失效
+    idle-timeout: 30m       # 闲置多久失效
+    reauth-window: 5m       # 敏感操作（发凭证、建商户、核准 / 拒绝提现、改限额、登记注资）要在这么久之内用口令再认证过
+    max-failures: 5         # 连续错几次锁
+    lock-for: 15m           # 锁多久
 
   # M3 · 系统连接：入账、结算这类无人值守、跨所有商户动钱的操作，以独立角色 chainpay_system 连库。
   # 它带 BYPASSRLS：系统权限是连接身份，不再是 Java 里一个谁都能调的开关（TenantScope.asSystem 只剩测试注资在用，M4 删）。
@@ -194,7 +192,7 @@ management:
         liveness:
           include: livenessState
         readiness:
-          include: readinessState,db,systemDb
+          include: readinessState,db
         work:
           include: indexer,hotWallet,audit,redis
 

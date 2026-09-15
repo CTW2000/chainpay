@@ -37,7 +37,6 @@ import org.springframework.boot.test.web.server.LocalServerPort;
 class WithdrawalApiTest extends AbstractDepositPostingTest {
 
     static final String DEST = "0x90f79bf6eb2c4f870365e785982e1f101e93b906";       // Hardhat #3：白名单里的收款人
-    static final String ADMIN_TOKEN = "chainpay-test-admin-token-not-for-prod";
     static final String HOT_KEY = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
 
     @LocalServerPort
@@ -283,16 +282,16 @@ class WithdrawalApiTest extends AbstractDepositPostingTest {
 
     private HttpResponse<String> adminPost(String path, String body) {
         return send(HttpRequest.newBuilder().uri(url(path)).header("Content-Type", "application/json")
-                .header(AdminAuthFilter.HEADER_ADMIN_TOKEN, ADMIN_TOKEN).POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8)));
+                .header(AdminAuthFilter.HEADER_ADMIN_SESSION, adminSessionToken()).POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8)));
     }
 
     private HttpResponse<String> adminPut(String path, String body) {
         return send(HttpRequest.newBuilder().uri(url(path)).header("Content-Type", "application/json")
-                .header(AdminAuthFilter.HEADER_ADMIN_TOKEN, ADMIN_TOKEN).PUT(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8)));
+                .header(AdminAuthFilter.HEADER_ADMIN_SESSION, adminSessionToken()).PUT(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8)));
     }
 
     private HttpResponse<String> adminGet(String path) {
-        return send(HttpRequest.newBuilder().uri(url(path)).header(AdminAuthFilter.HEADER_ADMIN_TOKEN, ADMIN_TOKEN).GET());
+        return send(HttpRequest.newBuilder().uri(url(path)).header(AdminAuthFilter.HEADER_ADMIN_SESSION, adminSessionToken()).GET());
     }
 
     private HttpResponse<String> send(HttpRequest.Builder builder) {

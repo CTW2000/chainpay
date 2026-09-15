@@ -113,6 +113,12 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
         return ResponseEntity.status(e.status()).body(ApiResponse.error(e.code(), e.getMessage()));
     }
 
+    /** 管理员认证的拒绝（M6-⑤）：登录失败 401、再认证失败 401、重名 409、口令不合规 400。 */
+    @ExceptionHandler(com.chainpay.admin.service.AdminAuthException.class)
+    public ResponseEntity<ApiResponse<Void>> handleAdminAuth(com.chainpay.admin.service.AdminAuthException e) {
+        return ResponseEntity.status(e.status()).body(ApiResponse.error(e.code(), e.getMessage()));
+    }
+
     /** 注资登记的拒绝（M6-②）：状态码与错误码由业务定。 */
     @ExceptionHandler(com.chainpay.chain.payout.service.FundingRejectedException.class)
     public ResponseEntity<ApiResponse<Void>> handleFundingRejected(com.chainpay.chain.payout.service.FundingRejectedException e) {

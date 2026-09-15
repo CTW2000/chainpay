@@ -47,8 +47,6 @@ class AuditApiTest extends AbstractDepositPostingTest {
         }
     }
 
-    static final String ADMIN_TOKEN = "chainpay-test-admin-token-not-for-prod";
-
     @LocalServerPort
     private int port;
     private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
@@ -83,11 +81,11 @@ class AuditApiTest extends AbstractDepositPostingTest {
     }
 
     private HttpResponse<String> adminGet(String path) {
-        return send(HttpRequest.newBuilder().uri(url(path)).header(AdminAuthFilter.HEADER_ADMIN_TOKEN, ADMIN_TOKEN).GET());
+        return send(HttpRequest.newBuilder().uri(url(path)).header(AdminAuthFilter.HEADER_ADMIN_SESSION, adminSessionToken()).GET());
     }
 
     private HttpResponse<String> adminPost(String path) {
-        return send(HttpRequest.newBuilder().uri(url(path)).header(AdminAuthFilter.HEADER_ADMIN_TOKEN, ADMIN_TOKEN).POST(HttpRequest.BodyPublishers.noBody()));
+        return send(HttpRequest.newBuilder().uri(url(path)).header(AdminAuthFilter.HEADER_ADMIN_SESSION, adminSessionToken()).POST(HttpRequest.BodyPublishers.noBody()));
     }
 
     private HttpResponse<String> send(HttpRequest.Builder builder) {

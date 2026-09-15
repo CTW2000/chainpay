@@ -49,8 +49,6 @@ import tools.jackson.databind.ObjectMapper;
 @DirtiesContext
 @DisplayName("M2-⑥ 补丁 3 · 启动冒烟：索引器真的被容器装配并调度")
 class ChainIndexerBootSmokeTest extends AbstractPostgresTest {
-
-    private static final String ADMIN_TOKEN = "chainpay-test-admin-token-not-for-prod";
     private static final HttpServer STUB;
 
     static {
@@ -107,7 +105,7 @@ class ChainIndexerBootSmokeTest extends AbstractPostgresTest {
 
         HttpResponse<String> response = HttpClient.newHttpClient().send(HttpRequest.newBuilder(
                         URI.create("http://localhost:" + port + "/admin/v1/indexer"))
-                .header(AdminAuthFilter.HEADER_ADMIN_TOKEN, ADMIN_TOKEN)
+                .header(AdminAuthFilter.HEADER_ADMIN_SESSION, adminSessionToken())
                 .timeout(Duration.ofSeconds(10)).GET().build(),
                 HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
         assertThat(response.statusCode()).isEqualTo(200);

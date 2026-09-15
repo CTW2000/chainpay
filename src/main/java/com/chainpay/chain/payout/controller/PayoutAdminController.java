@@ -37,18 +37,21 @@ public class PayoutAdminController {
         return ApiResponse.ok(approvals.pending());
     }
 
+    @com.chainpay.admin.web.Sensitive
     @PostMapping("/payouts/{id}/approve")
     public ApiResponse<Void> approve(@PathVariable long id) {
         approvals.approve(id);
         return ApiResponse.ok(null);
     }
 
+    @com.chainpay.admin.web.Sensitive
     @PostMapping("/payouts/{id}/reject")
     public ApiResponse<Void> reject(@PathVariable long id, @Valid @RequestBody RejectRequest request) {
         approvals.reject(id, request.reason());
         return ApiResponse.ok(null);
     }
 
+    @com.chainpay.admin.web.Sensitive
     @PutMapping("/payout-limits/{token}")
     public ApiResponse<Void> setLimit(@PathVariable @Pattern(regexp = WithdrawalController.ADDRESS) String token, @Valid @RequestBody LimitRequest request) {
         approvals.setLimit(token, new BigDecimal(request.perTxMax()), new BigDecimal(request.dailyMax()));

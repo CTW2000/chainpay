@@ -5,8 +5,8 @@
 ## 一、先看哪里
 
 ```bash
-curl -s -H "X-CP-ADMIN-TOKEN: $CHAINPAY_ADMIN_TOKEN" http://localhost:8095/admin/v1/audit          # 上次结论、stale、差异清单
-curl -s -X POST -H "X-CP-ADMIN-TOKEN: $CHAINPAY_ADMIN_TOKEN" http://localhost:8095/admin/v1/audit/run   # 立刻跑一轮
+tools/admin.sh GET  /admin/v1/audit              # 上次结论、stale、差异清单
+tools/admin.sh POST /admin/v1/audit/run   # 立刻跑一轮
 ```
 
 ```sql

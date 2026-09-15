@@ -1,5 +1,7 @@
 package com.chainpay.security.filter;
 
+import com.chainpay.admin.domain.AdminSession;
+import com.chainpay.admin.service.AdminAuthService;
 import com.chainpay.common.web.ErrorCode;
 import com.chainpay.common.web.ErrorResponseWriter;
 import jakarta.servlet.FilterChain;
@@ -9,11 +11,9 @@ import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import org.springframework.beans.factory.annotation.Value;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
-import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
@@ -34,14 +34,13 @@ import org.springframework.web.filter.OncePerRequestFilter;
  * <p><b>两层限制，缺一不可：</b>
  *
  * <pre>
- *   (1) 管理员令牌   知道秘密的人才能调
+ *   (1) 管理员会话   登录过的人才能调（口令 Argon2id、闲置 30 分钟失效、12 小时到点失效）
  *   (2) 本机地址     只有能登上这台服务器的人才能调
  * </pre>
  *
  * <p>为什么两层都要：
  * <ul>
- *   <li>只有令牌 —— 它是一把万能钥匙，泄露一次全平台沦陷，
- *       而且它会出现在部署脚本、CI 变量、运维的终端历史里</li>
+ *   <li>只有会话 —— 令牌短期，但泄露的那半小时里仍是万能的</li>
  *   <li>只有本机 —— 见下面 {@link #cameThroughProxy} 那段，
  *       同机反代会让这层保护<b>完全失效而且看不出来</b></li>
  * </ul>
@@ -49,83 +48,77 @@ import org.springframework.web.filter.OncePerRequestFilter;
 @Component
 public class AdminAuthFilter extends OncePerRequestFilter {
 
-    public static final String HEADER_ADMIN_TOKEN = "X-CP-ADMIN-TOKEN";
+    private static final Logger log = LoggerFactory.getLogger(AdminAuthFilter.class);
 
-    /**
-     * 表明「这个请求是被转发过来的」的请求头。
-     *
-     * <p>同一批请求头，在数据面是<b>身份信息</b>（用来按真实 IP 限流），
-     * 在控制面是<b>拒绝的理由</b>。同一个东西两种用法，取决于你在问什么问题：
-     * 「客户端是谁」还是「这个请求有没有经过第三方」。
-     */
+    /** 会话令牌的请求头（M6-⑤）。旧的 X-CP-ADMIN-TOKEN 一律不认。 */
+    public static final String HEADER_ADMIN_SESSION = "X-CP-ADMIN-SESSION";
+    /** 过滤器认完人之后把会话放在请求属性里，控制器与再认证拦截器从这里拿。 */
+    public static final String SESSION_ATTRIBUTE = AdminSession.class.getName();
+    static final String LOGIN_PATH = "/admin/v1/auth/login";
+
     private static final String[] PROXY_HEADERS = {
             "X-Forwarded-For", "X-Real-IP", "Forwarded", "X-Forwarded-Host"
     };
 
-    private final byte[] expectedToken;
+    private final AdminAuthService auth;
     private final ErrorResponseWriter errors;
 
-    public AdminAuthFilter(@Value("${chainpay.admin-token}") String adminToken,
-                           ErrorResponseWriter errors) {
+    public AdminAuthFilter(AdminAuthService auth, ErrorResponseWriter errors) {
+        this.auth = auth;
         this.errors = errors;
-        // 启动即校验：令牌太短等于没有。
-        // 让「配错了就起不来」，而不是「配错了但看起来正常」。
-        if (adminToken == null || adminToken.length() < 32) {
-            throw new IllegalStateException(
-                    "chainpay.admin-token 必须至少 32 个字符。生成：openssl rand -hex 32");
-        }
-        this.expectedToken = adminToken.getBytes(StandardCharsets.UTF_8);
     }
 
-    /**
-     * 只管 {@code /admin/} 开头的路径。
-     *
-     * <p>和 {@code ApiKeyAuthFilter} 一样是<b>默认拦截</b>：
-     * 新加的管理接口自动被保护，忘了配的后果是「接口打不开」，会立刻被发现。
-     */
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
         return !request.getRequestURI().startsWith("/admin/");
     }
 
+    /**
+     * 三步：① 不经代理且来自回环——登录接口也要；② 除登录外要一个活着的会话；③ 无论结果如何，每次调用都在 admin_action 留一行
+     * （登录由服务自己记，带用户名与成败）。三种失败给同一个回答：分别回答等于告诉探测者「只差哪一半」。
+     */
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
                                     FilterChain chain) throws ServletException, IOException {
-
-        if (cameThroughProxy(request) || !isLoopback(request) || !hasValidToken(request)) {
-            // 三种失败给同一个回答。
-            // 分别回答「令牌错了」和「你的 IP 不对」，等于告诉探测者
-            // 「令牌是对的，只差网络位置」—— 那正是他最想知道的一半答案。
-            unauthorized(response);
+        boolean login = LOGIN_PATH.equals(request.getRequestURI());
+        AdminSession session = null;
+        if (cameThroughProxy(request) || !isLoopback(request)) {
+            reject(request, response, login);
             return;
         }
-
-        chain.doFilter(request, response);
+        if (!login) {
+            session = auth.authenticate(request.getHeader(HEADER_ADMIN_SESSION)).orElse(null);
+            if (session == null) {
+                reject(request, response, false);
+                return;
+            }
+            request.setAttribute(SESSION_ATTRIBUTE, session);
+        }
+        try {
+            chain.doFilter(request, response);
+        } finally {
+            if (!login) {
+                record(request, response.getStatus(), session);
+            }
+        }
     }
 
-    /**
-     * 请求是否经过了反向代理。
-     *
-     * <p><b>这是本类里最容易被忽略、后果最严重的一处。</b>
-     *
-     * <p>「只允许本机调用」这层保护有一个默认前提：<b>远程请求的源地址不是回环地址</b>。
-     * 而典型部署恰恰打破这个前提 ——
-     *
-     * <pre>
-     *   公网用户 --&gt; nginx（同一台机器）--&gt; 应用
-     *                                       getRemoteAddr() 返回 127.0.0.1
-     * </pre>
-     *
-     * <p>于是<b>全世界的请求看起来都来自本机</b>，回环检查形同虚设，
-     * 而且不会有任何报错、任何日志、任何异常 —— 它只是悄悄地不再起作用。
-     *
-     * <p>代理转发时一定会加上 {@code X-Forwarded-For} 之类的头。
-     * 这些头在这里不是「客户端是谁」的答案，而是「这个请求不是本机发起的」的证据。
-     *
-     * <p><b>已知残留风险</b>：如果反代被配置成不加任何转发头，这层就失效了，
-     * 那时只剩管理员令牌在守。这正是为什么令牌和地址两层都要有 ——
-     * 任何一层被绕过，另一层还在。
-     */
+    private void reject(HttpServletRequest request, HttpServletResponse response, boolean login) throws IOException {
+        errors.write(response, HttpStatus.UNAUTHORIZED, ErrorCode.UNAUTHORIZED, "无权访问管理接口");
+        if (!login) {
+            record(request, HttpStatus.UNAUTHORIZED.value(), null);
+        }
+    }
+
+    private void record(HttpServletRequest request, int status, AdminSession session) {
+        try {
+            auth.recordAction(session, request.getMethod(), request.getRequestURI(), status, request.getRemoteAddr());
+        } catch (RuntimeException e) {
+            log.error("管理操作没能记进 admin_action（{} {} → {}）：{}", request.getMethod(), request.getRequestURI(), status, e.toString());
+        }
+    }
+
+    /** 请求是否经过了反向代理：转发头在这里不是「客户端是谁」的答案，而是「这个请求不是本机发起的」的证据（详见类注释）。 */
     private boolean cameThroughProxy(HttpServletRequest request) {
         for (String header : PROXY_HEADERS) {
             String value = request.getHeader(header);
@@ -136,33 +129,12 @@ public class AdminAuthFilter extends OncePerRequestFilter {
         return false;
     }
 
-    /** 源地址是否是回环地址（127.0.0.1 / ::1）。 */
+    /** 源地址是否是回环地址（127.0.0.1 / ::1）。解析不出来当作不可信：失败方向指向「拒绝」。 */
     private boolean isLoopback(HttpServletRequest request) {
         try {
             return InetAddress.getByName(request.getRemoteAddr()).isLoopbackAddress();
         } catch (UnknownHostException e) {
-            // 解析不出来就当作不可信。失败方向指向「拒绝」，不是「放行」。
             return false;
         }
-    }
-
-    /**
-     * 令牌比对。
-     *
-     * <p>用 {@link MessageDigest#isEqual} 而不是 {@code String.equals}：
-     * 后者一发现字符不同就返回，「前 1 个字符对」和「前 30 个字符对」耗时不同，
-     * 理论上可以被逐字符试探出来。和验签那里是同一个理由。
-     */
-    private boolean hasValidToken(HttpServletRequest request) {
-        String provided = request.getHeader(HEADER_ADMIN_TOKEN);
-        if (provided == null || provided.isBlank()) {
-            return false;
-        }
-        return MessageDigest.isEqual(expectedToken, provided.getBytes(StandardCharsets.UTF_8));
-    }
-
-    private void unauthorized(HttpServletResponse response) throws IOException {
-        errors.write(response, HttpStatus.UNAUTHORIZED,
-                ErrorCode.UNAUTHORIZED, "无权访问管理接口");
     }
 }

@@ -59,6 +59,16 @@
         </dependency>
 
         <!--
+          M6-⑤：管理员口令散列用 Argon2id（Spring Security 的 crypto 模块，不引整个 Security）。
+          口令散列是原语，引库；谁能登录、会话多久、什么算敏感操作是业务，自己写（com.chainpay.admin）。
+          Argon2 的实现来自 BouncyCastle（M3 已在树里）。
+        -->
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-crypto</artifactId>
+        </dependency>
+
+        <!--
           Redis：限流计数需要在所有实例之间共享。
           进程内的 AtomicLong 在单实例下是对的，扩容到两个实例的那一刻就不对了
           （各自允许 120，商户实际能打 240）。

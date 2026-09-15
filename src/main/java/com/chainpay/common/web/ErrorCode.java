@@ -77,6 +77,8 @@ public enum ErrorCode {
      * 只统一其中一个，另外两个照样泄露。
      */
     ACCESS_DENIED("3001", false),
+    /** 敏感的管理操作要最近再认证过（M6-⑤）：POST /admin/v1/auth/reauth 带口令后再来。 */
+    REAUTH_REQUIRED("3002", false),
 
     // ---- 4xxx 业务拒绝 -----------------------------------------------
     INSUFFICIENT_BALANCE("4001", false),

@@ -1,21 +1,43 @@
 #!/usr/bin/env bash
-# 管理接口（/admin/**）的调用器。控制面只认「本机回环 + 令牌」：应用在容器里跑时，宿主打到发布端口的请求源地址是
-# Docker 网桥网关，不是回环，会被 401——这是设计如此（能登上这台机器、能 docker exec 的人才算本机）。
-# 所以在容器里发请求：源地址是容器内回环。令牌只从环境变量 CHAINPAY_ADMIN_TOKEN 来，不进参数、不进 shell 历史。
+# 管理接口（/admin/**）的调用器（M6-⑤ 起是管理员会话，不再有静态令牌）。
+# 控制面只认「本机回环 + 会话」：应用在容器里跑时宿主打发布端口的源地址是网桥网关，会 401，所以在容器里发 curl。
 #
-# 用法：tools/admin.sh GET  /admin/v1/indexer
-#       tools/admin.sh POST /admin/v1/audit/run
-#       tools/admin.sh POST /admin/v1/payouts/7/reject '{"reason":"演练"}'
-#       CHAINPAY_APP_CONTAINER=chainpay-app（默认）；没有容器在跑时退而打宿主的 127.0.0.1:8095（nohup 起的 jar）。
+#   tools/admin.sh login <用户名>          提示输入口令（不回显），打印一行 export CHAINPAY_ADMIN_SESSION=…，eval 它
+#   tools/admin.sh reauth                  敏感操作（发凭证、建商户、核准 / 拒绝、改限额、登记注资）前用口令再认证，5 分钟有效
+#   tools/admin.sh logout
+#   tools/admin.sh GET  /admin/v1/indexer
+#   tools/admin.sh POST /admin/v1/audit/run
+#   tools/admin.sh POST /admin/v1/payouts/7/reject '{"reason":"演练"}'
+# 令牌只在环境变量 CHAINPAY_ADMIN_SESSION 里（eval 那一行之后），不进参数、不进文件、不进 shell 历史。
+# 第一个管理员：CHAINPAY_ADMIN_PASSWORD='…' docker compose run --rm --no-deps -e CHAINPAY_ADMIN_PASSWORD app --create-admin <用户名>
 set -euo pipefail
-method=${1:?GET|POST}; path=${2:?/admin/...}; body=${3:-}
-: "${CHAINPAY_ADMIN_TOKEN:?先 set -a; source env/local.env; set +a}"
 container=${CHAINPAY_APP_CONTAINER:-chainpay-app}
-args=(-s -S -X "$method" -H "X-CP-ADMIN-TOKEN: $CHAINPAY_ADMIN_TOKEN" -H 'Content-Type: application/json')
-[[ -n $body ]] && args+=(-d "$body")
-if docker inspect --format '{{.State.Running}}' "$container" 2>/dev/null | grep -q true; then
-  docker exec -e CHAINPAY_ADMIN_TOKEN "$container" curl "${args[@]}" "http://127.0.0.1:8095$path"
-else
-  curl "${args[@]}" "http://127.0.0.1:${CHAINPAY_PORT:-8095}$path"
-fi
-echo
+call() {   # method path [body] [extra curl args…]
+  local method=$1 path=$2 body=${3:-}; shift 2; [[ $# -gt 0 ]] && shift
+  local args=(-s -S -X "$method" -H 'Content-Type: application/json')
+  [[ -n ${CHAINPAY_ADMIN_SESSION:-} ]] && args+=(-H "X-CP-ADMIN-SESSION: $CHAINPAY_ADMIN_SESSION")
+  [[ -n $body ]] && args+=(-d "$body")
+  if docker inspect --format '{{.State.Running}}' "$container" 2>/dev/null | grep -q true; then
+    docker exec -e CHAINPAY_ADMIN_SESSION="${CHAINPAY_ADMIN_SESSION:-}" "$container" curl "${args[@]}" "http://127.0.0.1:8095$path"
+  else
+    curl "${args[@]}" "http://127.0.0.1:${CHAINPAY_PORT:-8095}$path"
+  fi
+}
+json_escape() { python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$1"; }
+case ${1:?login|reauth|logout|GET|POST|PUT} in
+  login)
+    user=${2:?用户名}; read -r -s -p "口令（不回显）: " pw; echo >&2
+    resp=$(call POST /admin/v1/auth/login "{\"username\":$(json_escape "$user"),\"password\":$(json_escape "$pw")}"); unset pw
+    token=$(printf '%s' "$resp" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["data"]["token"] if d.get("data") else "")')
+    [[ -n $token ]] || { echo "登录失败：$resp" >&2; exit 1; }
+    echo "export CHAINPAY_ADMIN_SESSION=$token" ;;
+  reauth)
+    : "${CHAINPAY_ADMIN_SESSION:?先 eval \"\$(tools/admin.sh login <用户名>)\"}"
+    read -r -s -p "口令（不回显）: " pw; echo >&2
+    call POST /admin/v1/auth/reauth "{\"password\":$(json_escape "$pw")}"; unset pw; echo ;;
+  logout) call POST /admin/v1/auth/logout; echo; echo "unset CHAINPAY_ADMIN_SESSION" ;;
+  GET|POST|PUT)
+    : "${CHAINPAY_ADMIN_SESSION:?先 eval \"\$(tools/admin.sh login <用户名>)\"}"
+    call "$1" "${2:?/admin/...}" "${3:-}"; echo ;;
+  *) echo "不认识：$1" >&2; exit 2 ;;
+esac

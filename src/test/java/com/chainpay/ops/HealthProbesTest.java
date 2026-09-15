@@ -51,15 +51,17 @@ class HealthProbesTest extends AbstractPostgresTest {
     }
 
     @Test
-    @DisplayName("readiness：两个连接池都通才 UP，能看到 db 与 systemDb 两个部件")
+    @DisplayName("readiness：两个连接池都通才 UP；db 是 Boot 的组合项，主池与系统池各一个子项（2026-09-15 起系统池是 bean，手写的 systemDb 退役）")
     void readinessListsBothPools() throws Exception {
         HttpResponse<String> r = get(managementPort(), "/actuator/health/readiness");
         assertThat(r.statusCode()).isEqualTo(200);
         JsonNode body = json.readTree(r.body());
         assertThat(body.get("status").asString()).isEqualTo("UP");
-        assertThat(body.get("components").get("db").get("status").asString()).isEqualTo("UP");
-        assertThat(body.get("components").get("systemDb").get("status").asString()).isEqualTo("UP");
-        assertThat(body.get("components").get("systemDb").get("details").get("pool").asString()).isEqualTo("chainpay-system");
+        JsonNode db = body.get("components").get("db");
+        assertThat(db.get("status").asString()).isEqualTo("UP");
+        assertThat(db.get("components").get("dataSource").get("status").asString()).isEqualTo("UP");
+        assertThat(db.get("components").get("systemDataSource").get("status").asString()).isEqualTo("UP");
+        assertThat(body.get("components").has("systemDb")).as("手写的 systemDb 指示器已由 Boot 的 db 取代，不该再出现").isFalse();
     }
 
     @Test

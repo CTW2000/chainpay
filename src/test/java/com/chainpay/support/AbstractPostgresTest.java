@@ -100,7 +100,6 @@ public abstract class AbstractPostgresTest {
         // CHAINPAY_CHAIN_RPC_URL……）在 Spring 里的优先级高于 application-test.yml：
         // 管理员令牌变成真的（AdminCredentialTest 7 条 401）、索引器被装配起来去打真节点。
         // 2026-09-03 实测。DynamicPropertySource 的优先级又高于环境变量，在这里把它们钉死。
-        r.add("chainpay.admin-token", () -> "chainpay-test-admin-token-not-for-prod");
         r.add("chainpay.secret-key", () -> "Y2hhaW5wYXktdGVzdC1rZXktbm90LWZvci1wcm9kISE=");
         // @ConditionalOnProperty 把 "false" 当作未开启：测试里永远不装配真节点的索引器。
         // 唯一的例外是启动冒烟测试：它在类加载时把这个系统属性指向本地假节点，让容器真的装配一次
@@ -190,6 +189,30 @@ public abstract class AbstractPostgresTest {
     /** 系统身份的账本入口（M3-⓪）：系统任务与 M0 的账本测试都从这里进。 */
     @Autowired
     protected SystemLedger systemLedger;
+
+    /** M6-⑤：控制面的门是管理员会话。测试里直接用服务建用户、登录拿令牌，不走 HTTP（HTTP 那条路由 AdminAuthApiTest 单独验）。 */
+    @Autowired
+    protected com.chainpay.admin.service.AdminAuthService adminAuth;
+
+    /** 测试专用管理员（不存在就建）登录一次，返回会话令牌。登录那一刻算再认证过，敏感操作 5 分钟内放行。 */
+    protected String adminSessionToken() {
+        return adminSessionToken("ops", "ops-test-password-123!");
+    }
+
+    protected String adminSessionToken(String username, String password) {
+        if (jdbc.sql("SELECT count(*) FROM admin_user WHERE username = :u").param("u", username).query(Long.class).single() == 0) {
+            adminAuth.createUser(username, password);
+        }
+        return adminAuth.login(username, password, "127.0.0.1").token();
+    }
+
+    /** 应用角色的 JdbcClient（RLS 生效的那条连接）：给要手工 new 服务的测试用。 */
+    protected org.springframework.jdbc.core.simple.JdbcClient jdbcOfApp() {
+        return appJdbc;
+    }
+
+    @Autowired
+    private org.springframework.jdbc.core.simple.JdbcClient appJdbc;
 
     @Autowired
     protected TenantScope tenantScope;

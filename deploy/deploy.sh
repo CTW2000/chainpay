@@ -25,10 +25,9 @@ step "② 配置检查"
 check_config() {
   set -a; source env/local.env; set +a
   local bad=0
-  for k in CHAINPAY_DB_PASSWORD CHAINPAY_FLYWAY_PASSWORD CHAINPAY_SYSTEM_DB_PASSWORD CHAINPAY_SECRET_KEY CHAINPAY_ADMIN_TOKEN; do
+  for k in CHAINPAY_DB_PASSWORD CHAINPAY_FLYWAY_PASSWORD CHAINPAY_SYSTEM_DB_PASSWORD CHAINPAY_SECRET_KEY; do
     if [[ -z ${!k:-} ]]; then echo "✗ $k 没设"; bad=1; else echo "✓ $k"; fi
   done
-  if [[ ${#CHAINPAY_ADMIN_TOKEN} -lt 32 ]]; then echo "✗ CHAINPAY_ADMIN_TOKEN 不足 32 字符"; bad=1; fi
   if [[ $(printf '%s' "$CHAINPAY_SECRET_KEY" | base64 -d 2>/dev/null | wc -c | tr -d ' ') != 32 ]]; then echo "✗ CHAINPAY_SECRET_KEY 不是 Base64 的 32 字节"; bad=1; fi
   for k in CHAINPAY_CHAIN_RPC_URL CHAINPAY_DEPOSIT_XPUB CHAINPAY_PAYOUT_HOT_WALLET_KEY CHAINPAY_ALERT_WEBHOOK_URL; do
     [[ -n ${!k:-} ]] && echo "✓ $k（已设）" || echo "· $k 未设：对应模块不装配"

@@ -20,8 +20,6 @@ import org.springframework.boot.test.web.server.LocalServerPort;
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @DisplayName("M6-② · 注资登记管理接口")
 class HotWalletFundingApiTest extends AbstractDepositPostingTest {
-
-    static final String ADMIN_TOKEN = "chainpay-test-admin-token-not-for-prod";
     static final String HOT = "0x3c44cdddb6a900fa2b585dd299e03d12fa4293bc";
     static final String TX = "0x" + "a".repeat(64);
 
@@ -59,11 +57,11 @@ class HotWalletFundingApiTest extends AbstractDepositPostingTest {
     }
 
     private HttpResponse<String> adminGet(String path) {
-        return send(HttpRequest.newBuilder().uri(url(path)).header(AdminAuthFilter.HEADER_ADMIN_TOKEN, ADMIN_TOKEN).GET());
+        return send(HttpRequest.newBuilder().uri(url(path)).header(AdminAuthFilter.HEADER_ADMIN_SESSION, adminSessionToken()).GET());
     }
 
     private HttpResponse<String> adminPost(String path, String json) {
-        return send(HttpRequest.newBuilder().uri(url(path)).header(AdminAuthFilter.HEADER_ADMIN_TOKEN, ADMIN_TOKEN)
+        return send(HttpRequest.newBuilder().uri(url(path)).header(AdminAuthFilter.HEADER_ADMIN_SESSION, adminSessionToken())
                 .header("Content-Type", "application/json").POST(HttpRequest.BodyPublishers.ofString(json)));
     }
 

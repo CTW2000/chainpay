@@ -88,7 +88,9 @@ tools/xpub.sh                                            # 按提示输入助记
 然后用签名客户端 `tools/api.py`（纯标准库，CP2 规范串的拼法与 `ApiCredentialService.prehash` / 测试里的 `SignedRequests` 一字不差，改协议要三处同改；CP2 = 版本标签、五段各占一行、请求体换成 SHA-256）：
 
 ```bash
-curl -s -X POST -H "X-CP-ADMIN-TOKEN: $CHAINPAY_ADMIN_TOKEN" -H 'Content-Type: application/json' -d '{"label":"drill"}' http://127.0.0.1:8095/admin/v1/merchants/1/credentials
+eval "$(tools/admin.sh login ops)"                       # M6-⑤：先登录（口令不回显）；发凭证是敏感操作，再认证
+tools/admin.sh reauth
+tools/admin.sh POST /admin/v1/merchants/1/credentials '{"label":"drill"}'
 ```
 
 把响应里的 `apiKey` / `secret` 写进 `env/drill.env`（`CHAINPAY_API_KEY`、`CHAINPAY_API_SECRET`，可选 `CHAINPAY_API_BASE`；被 `env/*.env` 挡在 git 外），

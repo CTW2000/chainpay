@@ -30,8 +30,6 @@ import tools.jackson.databind.ObjectMapper;
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @DisplayName("M2-⑥ 补丁 3 · 索引器状态接口")
 class IndexerStatusEndpointTest extends AbstractPostgresTest {
-
-    private static final String ADMIN_TOKEN = "chainpay-test-admin-token-not-for-prod";
     /** application.yml 里的 cursor-name 与 token-address。 */
     static final String CURSOR = "sepolia:link:transfer";
     static final String LINK = "0x779877a7b0d9e8603169ddbd7836e478b4624789";
@@ -69,7 +67,7 @@ class IndexerStatusEndpointTest extends AbstractPostgresTest {
         jdbc.sql("INSERT INTO indexer_state (name, status, reason) VALUES (:n, 'HALTED', '两个节点对 finalized 块 110 意见不同')")
                 .param("n", CURSOR).update();
 
-        HttpResponse<String> response = get(ADMIN_TOKEN);
+        HttpResponse<String> response = get(adminSessionToken());
 
         assertThat(response.statusCode()).isEqualTo(200);
         JsonNode data = json.readTree(response.body()).get("data");
@@ -88,7 +86,7 @@ class IndexerStatusEndpointTest extends AbstractPostgresTest {
     private HttpResponse<String> get(String token) {
         HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/admin/v1/indexer")).GET();
         if (token != null) {
-            builder.header(AdminAuthFilter.HEADER_ADMIN_TOKEN, token);
+            builder.header(AdminAuthFilter.HEADER_ADMIN_SESSION, token);
         }
         try {
             return http.send(builder.timeout(Duration.ofSeconds(10)).build(),

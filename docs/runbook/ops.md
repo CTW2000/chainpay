@@ -15,7 +15,7 @@ curl -s 'http://127.0.0.1:8096/actuator/metrics/hikaricp.connections?tag=pool:ch
 | 组 | 问题 | 里面有什么 | 谁看 | 不是 UP 时 |
 |---|---|---|---|---|
 | `liveness` | 进程在不在 | `livenessState` | 进程管理器 | 重启进程 |
-| `readiness` | 能不能接请求 | `db`（主池）、`systemDb`（系统池） | 容器 HEALTHCHECK、负载均衡 | 不给它流量；连着 DOWN 就重启 |
+| `readiness` | 能不能接请求 | `db`（Boot 的组合项：子项 `dataSource` 主池、`systemDataSource` 系统池） | 容器 HEALTHCHECK、负载均衡 | 不给它流量；连着 DOWN 就重启 |
 | `work` | 能不能干活 | `indexer`、`hotWallet`、`audit`、`redis` | 告警、人 | **叫人**，不重启（重启不会让 HALTED 变好） |
 
 HTTP：UP / DEGRADED / UNKNOWN = 200；DOWN = 503。`DEGRADED` 是本项目多出来的一档：还在跑，但有人该来看看。
@@ -95,3 +95,29 @@ docker images chainpay      # 标签就是发布记录
 **验证不过**（120 秒没 healthy）：脚本自己回滚到 previous 并退出 1；看 `docker logs chainpay-app` 里新版本为什么起不来。
 **回滚后数据库怎么办**：不动。规矩是「迁移只前进，上一版代码要能跑在新 schema 上」——每条迁移只加不删（先加后删，删要等到没有代码再用它的下一版）。回滚后的旧代码对库里它不认识的更高版本视而不见（`ignore-migration-patterns: *:future`）。
 **只想跑迁移不发布**：`docker compose run --rm --no-deps app --migrate-only`。
+
+# 运维手册 · 控制面（M6-⑤）
+
+控制面（`/admin/**`）认两样东西：**本机回环且无代理头**（容器里跑就在容器里发，`tools/admin.sh` 替你做）和**管理员会话**。静态令牌已经没有了。
+
+```bash
+# 第一个管理员（只做一次）。口令只在这一条命令的环境里；写进 env/admin.env（gitignore 挡着）方便日后登录，或记在密码管理器里
+CHAINPAY_ADMIN_PASSWORD='至少 12 位' docker compose run --rm --no-deps -e CHAINPAY_ADMIN_PASSWORD app --create-admin ops
+
+eval "$(tools/admin.sh login ops)"          # 提示输入口令（不回显）；令牌只在当前 shell 的环境变量里
+tools/admin.sh GET  /admin/v1/indexer        # 只读接口直接调
+tools/admin.sh reauth                        # 敏感操作前再认证（5 分钟有效）：建商户、发凭证、核准 / 拒绝提现、改限额、登记注资
+tools/admin.sh POST /admin/v1/payouts/7/approve
+tools/admin.sh logout
+```
+
+| 回应 | 意思 | 做什么 |
+|---|---|---|
+| 401「无权访问管理接口」 | 不是回环、带了代理头、没令牌、令牌过期或退出过、口令错、账户锁定 | 故意不区分。重新 `login`；连续错 5 次锁 15 分钟 |
+| 403 + 3002 | 敏感操作，最近 5 分钟没用口令再认证过 | `tools/admin.sh reauth` 再来 |
+| 409 + 4002 | `--create-admin` 的用户名已存在 | 换名字，或用现有的登录 |
+
+会话：闲置 30 分钟失效，12 小时到点失效（`chainpay.admin.*`）。改口令：`POST /admin/v1/auth/password {current, next}`，改完本人其它会话全部失效。
+**审计**：`admin_action` 每次调用一行（谁、方法、路径、状态、来源），登录成败也在；只追加。查最近的：
+`docker exec chainpay-postgres psql -U chainpay -d chainpay -c "SELECT at, username, method, path, status, remote_addr FROM admin_action ORDER BY id DESC LIMIT 50"`。
+**没做的**：TOTP 二次验证、提现冷却期、管理员的增删与停用接口（现在只有 `--create-admin`；停用改库 `status = 'DISABLED'`）。

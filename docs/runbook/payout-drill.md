@@ -22,8 +22,7 @@ set -a; source env/local.env; source env/drill.env; set +a
 LINK=0x779877A7B0D9E8603169DdbD7836e478b4624789
 
 # 1. 限额（管理令牌，回环）：单笔 2、当日 10。没定限额一律转人工
-curl -s -X PUT -H "X-CP-ADMIN-TOKEN: $CHAINPAY_ADMIN_TOKEN" -H "Content-Type: application/json" \
-  -d '{"perTxMax":"2","dailyMax":"10"}' http://localhost:8095/admin/v1/payout-limits/$LINK
+tools/admin.sh reauth && tools/admin.sh PUT /admin/v1/payout-limits/$LINK '{"perTxMax":"2","dailyMax":"10"}'   # M6-⑤：改限额是敏感操作，先再认证
 
 # 2. 登记白名单
 python3 tools/api.py POST /api/v1/withdrawal-addresses '{"address":"<DEST>","label":"Account 2"}'
