@@ -20,19 +20,19 @@ class ChainIndexerPropertiesTest {
     @Test
     @DisplayName("★ 合法配置零违规")
     void validConfigurationHasNoViolations() {
-        assertThat(VALIDATOR.validate(new ChainIndexerProperties("u", null, "sepolia", LINK, "sepolia:link", 100, null, 3, 30))).isEmpty();
+        assertThat(VALIDATOR.validate(new ChainIndexerProperties("u", null, "sepolia", LINK, "sepolia:link", 100, null, 3, 30, java.time.Duration.ofMinutes(5)))).isEmpty();
     }
 
     @Test
     @DisplayName("★ degraded-after-failures 漏配成 0、batch-blocks 为 0、地址不是 40 位十六进制：各被校验器拦住")
     void outOfRangeValuesAreRejected() {
-        assertThat(VALIDATOR.validate(new ChainIndexerProperties("u", null, "sepolia", LINK, "c", 100, null, 3, 0)))
+        assertThat(VALIDATOR.validate(new ChainIndexerProperties("u", null, "sepolia", LINK, "c", 100, null, 3, 0, java.time.Duration.ofMinutes(5))))
                 .extracting(v -> v.getPropertyPath().toString()).containsExactly("degradedAfterFailures");
-        assertThat(VALIDATOR.validate(new ChainIndexerProperties("u", null, "sepolia", LINK, "c", 0, null, 3, 30)))
+        assertThat(VALIDATOR.validate(new ChainIndexerProperties("u", null, "sepolia", LINK, "c", 0, null, 3, 30, java.time.Duration.ofMinutes(5))))
                 .extracting(v -> v.getPropertyPath().toString()).containsExactly("batchBlocks");
-        assertThat(VALIDATOR.validate(new ChainIndexerProperties("u", null, "sepolia", "0x12", "c", 100, null, 3, 30)))
+        assertThat(VALIDATOR.validate(new ChainIndexerProperties("u", null, "sepolia", "0x12", "c", 100, null, 3, 30, java.time.Duration.ofMinutes(5))))
                 .extracting(v -> v.getPropertyPath().toString()).containsExactly("tokenAddress");
-        assertThat(VALIDATOR.validate(new ChainIndexerProperties("u", null, " ", LINK, "c", 100, null, 3, 30)))
+        assertThat(VALIDATOR.validate(new ChainIndexerProperties("u", null, " ", LINK, "c", 100, null, 3, 30, java.time.Duration.ofMinutes(5))))
                 .extracting(v -> v.getPropertyPath().toString()).containsExactly("chainName");
     }
 

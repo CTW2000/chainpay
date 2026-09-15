@@ -67,6 +67,15 @@ class ContainerGuardTest {
         assertThat(app).contains("condition: service_healthy");
         assertThat(app).contains("/actuator/health/readiness");
         assertThat(app).contains("restart: unless-stopped");
+        assertThat(app).as("主端口默认只绑回环，容器里必须显式放开到 0.0.0.0，否则宿主发布的端口连不进去").contains("CHAINPAY_BIND_ADDRESS: \"0.0.0.0\"");
+    }
+
+    @Test
+    @DisplayName("application.yml：监听地址与日志级别由环境变量定，默认回环 + INFO（安全扫描第 15 条，M6-②）")
+    void bindAddressAndLogLevelComeFromTheEnvironment() throws IOException {
+        String yml = Files.readString(Path.of("src/main/resources/application.yml"));
+        assertThat(yml).contains("address: ${CHAINPAY_BIND_ADDRESS:127.0.0.1}");
+        assertThat(yml).contains("com.chainpay: ${CHAINPAY_LOG_LEVEL:INFO}");
     }
 
     /** 取 compose 里一个服务的整块（两个空格缩进的键到下一个同级键）。 */

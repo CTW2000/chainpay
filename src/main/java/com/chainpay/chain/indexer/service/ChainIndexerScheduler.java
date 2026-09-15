@@ -12,8 +12,10 @@ import com.chainpay.chain.indexer.repository.IndexerStateRepository;
 import com.chainpay.chain.rpc.JsonRpcException;
 import com.chainpay.ledger.system.TransientDbFailure;
 import com.chainpay.chain.rpc.RpcAuthException;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.function.LongSupplier;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -48,8 +50,8 @@ public final class ChainIndexerScheduler {
 
     private static final Logger log = LoggerFactory.getLogger(ChainIndexerScheduler.class);
 
-    /** 一次轮询最多推几批：追很远的块时也给别的事留出时间，下一次轮询接着追。 */
-    static final int MAX_BATCHES_PER_TICK = 10;
+    /** 追赶时每推这么多批打一行进度：落后几万块时人能看到它在动。 */
+    static final int PROGRESS_EVERY_BATCHES = 50;
 
     private final ChainHeadTracker heads;
     private final BlockIndexer indexer;
@@ -61,6 +63,10 @@ public final class ChainIndexerScheduler {
     private final String token;
     private final Long startBlock;
     private final int degradedAfterFailures;
+    /** 一次轮询最多花多久追赶（M6-②）。M3-⑤ 时是「每轮最多 10 批」，停两天后按 12 秒一轮追 4300 块要几十分钟；
+     *  调度线程池已经每个任务一条线程（M3-⑤ 补丁 2），一轮跑久了压不住别的任务，只压住自己的降级检测与状态更新——所以封顶的是时间不是批数。 */
+    private final Duration catchUpBudget;
+    private final LongSupplier nanoTime;
     private final AtomicBoolean halted = new AtomicBoolean(false);
     private final AtomicBoolean degraded = new AtomicBoolean(false);
     private final AtomicBoolean tokenVerified = new AtomicBoolean(false);
@@ -76,7 +82,19 @@ public final class ChainIndexerScheduler {
      */
     public ChainIndexerScheduler(ChainHeadTracker heads, BlockIndexer indexer, ReorgRecovery recovery,
                                  LogReconciler reconciler, TokenRegistry registry, IndexerStateRepository states,
-                                 String name, String token, Long startBlock, int degradedAfterFailures) {
+                                 String name, String token, Long startBlock, int degradedAfterFailures, Duration catchUpBudget) {
+        this(heads, indexer, recovery, reconciler, registry, states, name, token, startBlock, degradedAfterFailures, catchUpBudget, System::nanoTime);
+    }
+
+    /** 测试用：把表交出来，预算用完与否不靠真等。 */
+    ChainIndexerScheduler(ChainHeadTracker heads, BlockIndexer indexer, ReorgRecovery recovery,
+                          LogReconciler reconciler, TokenRegistry registry, IndexerStateRepository states,
+                          String name, String token, Long startBlock, int degradedAfterFailures, Duration catchUpBudget, LongSupplier nanoTime) {
+        if (catchUpBudget == null || catchUpBudget.isZero() || catchUpBudget.isNegative()) {
+            throw new IllegalArgumentException("catch-up-budget 必须大于 0：一轮至少推一批");
+        }
+        this.catchUpBudget = catchUpBudget;
+        this.nanoTime = nanoTime;
         this.heads = heads;
         this.indexer = indexer;
         this.recovery = recovery;
@@ -142,6 +160,7 @@ public final class ChainIndexerScheduler {
 
         int batches = 0;
         int inserted = 0;
+        long startedAt = nanoTime.getAsLong();
         try {
             BatchResult result;
             do {
@@ -149,8 +168,15 @@ public final class ChainIndexerScheduler {
                 if (result.outcome() == BatchOutcome.INDEXED) {
                     batches++;
                     inserted += result.logsInserted();
+                    if (batches % PROGRESS_EVERY_BATCHES == 0) {
+                        log.info("追赶中：已推 {} 批、记 {} 条日志，书签 {}", batches, inserted, result.toBlock());
+                    }
                 }
-            } while (result.outcome() == BatchOutcome.INDEXED && batches < MAX_BATCHES_PER_TICK);
+                // 追平（不是 INDEXED）就停；没追平但预算用完也停，下一轮接着追：一轮不能无限长
+            } while (result.outcome() == BatchOutcome.INDEXED && nanoTime.getAsLong() - startedAt < catchUpBudget.toNanos());
+            if (result.outcome() == BatchOutcome.INDEXED) {
+                log.warn("追赶预算 {} 用完，这一轮推了 {} 批到书签 {}，下一轮接着追", catchUpBudget, batches, result.toBlock());
+            }
             ReconcileResult reconciled = reconcileSafely();
             return new TickResult(TickOutcome.POLLED, batches, inserted,
                     reconciled.sampledBlocks().size(), reconciled.mismatches(), null);

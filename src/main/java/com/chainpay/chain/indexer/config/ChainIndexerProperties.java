@@ -1,6 +1,8 @@
 package com.chainpay.chain.indexer.config;
 
 import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotNull;
+import java.time.Duration;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
 import org.springframework.boot.context.properties.ConfigurationProperties;
@@ -18,6 +20,7 @@ import org.springframework.validation.annotation.Validated;
  * @param chainName        链名，只是记在 chain_head 里给人看
  * @param tokenAddress     只索引这一个合约的 Transfer
  * @param cursorName       书签名：一条链、一个币、一枚书签
+ * @param catchUpBudget    一次轮询最多花多久追赶（M6-②）：落后时连续推批到追平或预算用完；正常时一轮一批用不到它
  * @param batchBlocks      eth_getLogs 窗口的上限。撞上提供商的限制会减半，成功后翻倍回到这个值
  * @param startBlock       没有书签时从哪开始（该块视为已处理）。不配 = 没书签就停下，不猜
  * @param reconcileSamples 每次轮询抽几个已 finalized、已索引的块用回执对账
@@ -34,4 +37,5 @@ public record ChainIndexerProperties(
         @Min(1) int batchBlocks,
         Long startBlock,
         @Min(0) int reconcileSamples,
-        @Min(1) int degradedAfterFailures) {}
+        @Min(1) int degradedAfterFailures,
+        @NotNull Duration catchUpBudget) {}

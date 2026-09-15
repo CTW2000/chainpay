@@ -113,6 +113,12 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
         return ResponseEntity.status(e.status()).body(ApiResponse.error(e.code(), e.getMessage()));
     }
 
+    /** 注资登记的拒绝（M6-②）：状态码与错误码由业务定。 */
+    @ExceptionHandler(com.chainpay.chain.payout.service.FundingRejectedException.class)
+    public ResponseEntity<ApiResponse<Void>> handleFundingRejected(com.chainpay.chain.payout.service.FundingRejectedException e) {
+        return ResponseEntity.status(e.status()).body(ApiResponse.error(e.code(), e.getMessage()));
+    }
+
     @ExceptionHandler(AlreadyExistsException.class)
     public ResponseEntity<ApiResponse<Void>> handleAlreadyExists(AlreadyExistsException e) {
         return ResponseEntity.status(HttpStatus.CONFLICT)

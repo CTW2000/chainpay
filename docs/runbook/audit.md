@@ -38,10 +38,30 @@ SELECT check_name, kind, subject, expected, actual, detail FROM audit_finding WH
 | PAYOUT_LEDGER · MISSING_ON_CHAIN | CONFIRMED 的提现，链上找不到它的转账 | 假账；索引器漏了那一块 | 用交易哈希查浏览器：链上有就是索引器漏了，链上没有就是假账 |
 | PAYOUT_LEDGER · AMOUNT_MISMATCH | 链上转账的金额或收款人与提现不同 | 签名前后被改过 | 立刻停发（把热钱包 HALTED），查 `payout_tx.raw_tx` 与链上交易 |
 | PAYOUT_LEDGER · MISSING_IN_LEDGER | 热钱包发出了库里没有的转账 | 有人在别处用了这把钥匙；运营手工转账 | 当泄露处理（见 `payout.md` 第二节第一行），除非能对上一次运营的手工操作 |
-| CUSTODY_TOTAL · MISSING_IN_LEDGER | 链上托管比账本能解释的多 | 运营往热钱包充币（账本不登记）；漏账 | 能对上一次充币就没事（v1 不登记注资，差额会一直在，直到 M6 做注资登记）；对不上按漏账查 |
+| CUSTODY_TOTAL · MISSING_IN_LEDGER | 链上托管比账本能解释的多 | 运营往热钱包充币还没登记；漏账 | 能对上一次充币就**登记它**（下面「注资登记」），下一轮对账就平；对不上按漏账查 |
 | CUSTODY_TOTAL · MISSING_ON_CHAIN | 链上托管比账本能解释的少 | 假账；钥匙在别处被用 | 先看 PAYOUT_LEDGER 有没有同时报 MISSING_IN_LEDGER |
 | LEDGER_JUDGE | 账本自己的不变量破了 | 手工改库 | M0 起就不该发生；查改动来源 |
 
 ## 四、对账自己错了怎么办
 
 对账在库里没有链头、两节点对 F 意见不同、节点不可达时一律 FAILED，不猜。它错报的方式只有一种：把「在路上的钱」算错方向（已 FINAL 未入账、已上链未结算）。看到 CUSTODY_TOTAL 单独报而别的检查都不报时，先核那两个数。
+
+## 注资登记（M6-②）
+
+运营往热钱包充币后，对账会报 CUSTODY_TOTAL / MISSING_IN_LEDGER，直到有人登记它。登记只指认「是哪一笔」，金额从索引器记下的日志读：
+
+```bash
+set -a; source env/local.env; set +a
+tools/admin.sh POST /admin/v1/hot-wallet/fundings '{"txHash":"0x…","note":"谁、为什么充"}'
+tools/admin.sh GET  /admin/v1/hot-wallet/fundings
+```
+
+| 回应 | 意思 | 做什么 |
+|---|---|---|
+| 200，`rawValue` / `blockNumber` | 登记成功（同一笔再登记还是这一行） | 跑一轮对账核实 |
+| 404 + 2011 | 库里没有这笔转给热钱包的日志 | 哈希对不对；索引器索到那个块了没（`GET /admin/v1/indexer`）；收款方是不是热钱包 |
+| 400「指定 logIndex」 | 一笔交易里有多条转给热钱包的日志 | 按回应里列的 logIndex 各登记各的 |
+| 400 + 2010 | 发起方是平台自己的地址（收款地址或热钱包） | 那是归集，不是注资，不登记；等式里它是内部挪动 |
+| 409 + 4005 | 还没 finalized | 等十几分钟再来 |
+
+登记表只追加、没有改和删：登记错了不能撤，只能在对账里看到它被报成「登记的注资链上不认」（日志被翻掉）或把差额留在等式里；谁登记的要靠 M6-⑤ 的审计表。

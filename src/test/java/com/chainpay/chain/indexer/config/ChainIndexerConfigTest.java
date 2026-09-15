@@ -19,7 +19,7 @@ class ChainIndexerConfigTest {
     static final String TENDERLY = "https://sepolia.gateway.tenderly.co";
 
     private static ChainIndexerProperties props(String rpc, String audit) {
-        return new ChainIndexerProperties(rpc, audit, "sepolia", LINK, "sepolia:link:transfer", 100, null, 3, 30);
+        return new ChainIndexerProperties(rpc, audit, "sepolia", LINK, "sepolia:link:transfer", 100, null, 3, 30, java.time.Duration.ofMinutes(5));
     }
 
     @Test

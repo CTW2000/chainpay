@@ -39,7 +39,7 @@ import org.slf4j.LoggerFactory;
  *   <li>ADDRESS_BALANCE：每个收款地址与热钱包，链上 balanceOf(F)（两节点都问，不一致 = DISPUTED）vs 库里主分支日志的转入减转出。</li>
  *   <li>DEPOSIT_LEDGER：每笔 CREDITED 入账的日志必须在主分支且块 ≤ F、账本转账金额等于入账金额；每条 FINAL 够久的收款日志必须有入账行。</li>
  *   <li>PAYOUT_LEDGER：每笔 CONFIRMED 提现恰好一次 MINED 尝试、未 revert、链上有从热钱包到收款地址、金额相等的日志；每条热钱包发出的日志必须对应一次尝试。</li>
- *   <li>CUSTODY_TOTAL：链上托管 C = Σ 余额；等式 C = 镜像(截至 F) + 已 FINAL 未入账 − 已上链未结算 + E；镜像用入账减结算推到 F 时刻，与链上余额同刻；E ≠ 0 报出来。</li>
+ *   <li>CUSTODY_TOTAL：链上托管 C = Σ 余额；等式 C = 镜像(截至 F) + 已 FINAL 未入账 − 已上链未结算 + 已登记注资 + E；镜像用入账减结算推到 F 时刻，与链上余额同刻；E ≠ 0 报出来；登记过的注资日志不在主分支也报。</li>
  *   <li>LEDGER_JUDGE：ledger_judge()。</li>
  * </ol>
  * 每一轮都落一行 audit_run（OK / DIFF / FAILED）：「没跑」由上次结论距今判断。
@@ -88,6 +88,7 @@ public final class AuditService {
             depositLedger(head.number(), findings);
             payoutLedger(head.number(), findings);
             custodyTotal(head.number(), tokens, findings, onChain);
+            orphanedFundings(findings);
             judge(findings);
             String where = "站在" + head.basis() + "块 " + head.number() + ("书签".equals(head.basis()) ? "（索引器还没追到 finalized，证据只到书签）" : "");
             String summary = (findings.isEmpty() ? "账链一致" : findings.size() + " 处差异：" + findings.stream().map(f -> f.check() + "/" + f.kind()).distinct().toList()) + "；" + where;
@@ -217,13 +218,21 @@ public final class AuditService {
             BigInteger mirror = read(r -> r.mirrorAsOf(t.address(), f));                 // 截至 F：入账 − 结算，和链上余额同一时刻
             BigInteger uncredited = read(r -> r.uncreditedInflows(t.address(), f));
             BigInteger unsettled = read(r -> r.unsettledOutflows(t.address(), f));
-            BigInteger expected = mirror.add(uncredited).subtract(unsettled);
+            BigInteger fundings = read(r -> r.registeredFundings(t.address(), f));     // M6-②：运营签字认过的外部注资
+            BigInteger expected = mirror.add(uncredited).subtract(unsettled).add(fundings);
             BigInteger e = chainCustody.subtract(expected);
             if (e.signum() != 0) {
                 findings.add(new AuditFinding("CUSTODY_TOTAL", e.signum() > 0 ? AuditKind.MISSING_IN_LEDGER : AuditKind.MISSING_ON_CHAIN, "币 " + t.symbol(),
-                        expected + "（截至 F 的镜像 " + mirror + " + 已 FINAL 未入账 " + uncredited + " − 已上链未结算 " + unsettled + "）", chainCustody.toString(),
+                        expected + "（截至 F 的镜像 " + mirror + " + 已 FINAL 未入账 " + uncredited + " − 已上链未结算 " + unsettled + " + 已登记注资 " + fundings + "）", chainCustody.toString(),
                         e.signum() > 0 ? "链上托管比账本能解释的多 " + e + "（原始单位）：外部注资没登记，或漏账" : "链上托管比账本能解释的少 " + e.negate() + "（原始单位）：假账，或钥匙在别处被用了"));
             }
+        }
+    }
+
+    private void orphanedFundings(List<AuditFinding> findings) {
+        for (AuditRepository.OrphanedFunding o : read(AuditRepository::orphanedFundings)) {
+            findings.add(new AuditFinding("CUSTODY_TOTAL", AuditKind.MISSING_ON_CHAIN, "注资 " + o.id() + "（" + o.txHash() + "#" + o.logIndex() + "）",
+                    "CANONICAL", o.logStatus(), "登记的注资，它的日志已不在主分支：登记时它是 finalized 的，之后被翻掉只能是深重组或手工改库，" + o.rawValue() + "（原始单位）已从等式里剔除"));
         }
     }
 

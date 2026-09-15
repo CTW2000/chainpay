@@ -22,6 +22,7 @@ import com.chainpay.support.AbstractPostgresTest;
 import java.math.BigInteger;
 import java.util.List;
 import java.util.Map;
+import java.time.Duration;
 import java.util.Random;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
@@ -404,8 +405,8 @@ class ChainIndexerSchedulerTest extends AbstractPostgresTest {
     }
 
     @Test
-    @DisplayName("一次轮询最多推十批：追很远的块时也给别的事留出时间，下一次接着追")
-    void capsBatchesPerTick() {
+    @DisplayName("★ 落后很远：一次轮询连续推批直到追平，不再按批数封顶（M6-②；M3-⑤ 推到这里的题）")
+    void catchesUpInOneTickWhenFarBehind() {
         chain.withBlocks(1200);
         chain.reportSafe(1100);
         chain.reportFinalized(1000);
@@ -414,10 +415,28 @@ class ChainIndexerSchedulerTest extends AbstractPostgresTest {
         TickResult first = scheduler.tick();
 
         assertThat(first.outcome()).isEqualTo(POLLED);
-        assertThat(first.batches()).isEqualTo(ChainIndexerScheduler.MAX_BATCHES_PER_TICK);
-        assertThat(cursorBlock()).isEqualTo(1000);
-        assertThat(scheduler.tick().batches()).isEqualTo(2);
+        assertThat(first.batches()).as("1..100 … 1101..1200 十二批一口气推完").isEqualTo(12);
         assertThat(cursorBlock()).isEqualTo(1200);
+        assertThat(scheduler.tick().batches()).as("追平后一轮零批").isEqualTo(0);
+    }
+
+    @Test
+    @DisplayName("★ 追赶有时间预算：预算用完这一轮就收，下一轮接着追——一轮不能无限长，否则停机、降级、状态更新都被它压着")
+    void stopsAtTheCatchUpBudgetAndResumesNextTick() {
+        chain.withBlocks(1200);
+        chain.reportSafe(1100);
+        chain.reportFinalized(1000);
+        java.util.concurrent.atomic.AtomicLong fakeNanos = new java.util.concurrent.atomic.AtomicLong();
+        ChainIndexerScheduler scheduler = scheduler(chain, null, LINK, 0L, 100, 30,
+                Duration.ofMillis(2500), () -> fakeNanos.addAndGet(1_000_000_000L));   // 每看一次表过 1 秒
+
+        TickResult first = scheduler.tick();
+
+        assertThat(first.outcome()).isEqualTo(POLLED);
+        assertThat(first.batches()).as("起点看一次表；每批后看一次：第 3 批后 3 秒 ≥ 2.5 秒预算，收").isEqualTo(3);
+        assertThat(cursorBlock()).isEqualTo(300);
+        assertThat(scheduler.tick().batches()).as("下一轮接着追，同样 3 批").isEqualTo(3);
+        assertThat(cursorBlock()).isEqualTo(600);
     }
 
     @Test
@@ -471,8 +490,20 @@ class ChainIndexerSchedulerTest extends AbstractPostgresTest {
         LogReconciler reconciler = new LogReconciler(chain, reconcileAudit, cursors, transferLogs, heads, reconciles, tx,
                 CURSOR, token, 2, new Random(1));
         TokenRegistry registry = new TokenRegistry(new Erc20Calls(chain), tokens);
+        return scheduler(reconcileAudit, headAudit, token, startBlock, batchBlocks, degradedAfter, Duration.ofMinutes(5), System::nanoTime);
+    }
+
+    private ChainIndexerScheduler scheduler(FakeChain reconcileAudit, FakeChain headAudit, String token, Long startBlock, int batchBlocks,
+                                            int degradedAfter, Duration catchUpBudget, java.util.function.LongSupplier nanoTime) {
+        TransactionTemplate tx = new TransactionTemplate(txManager);
+        BlockIndexer indexer = new BlockIndexer(chain, cursors, transferLogs, tx, CURSOR, token, batchBlocks);
+        ChainHeadTracker tracker = new ChainHeadTracker(chain, headAudit, heads, tx, "test");
+        ReorgRecovery recovery = new ReorgRecovery(chain, cursors, transferLogs, heads, reorgs, tx, CURSOR);
+        LogReconciler reconciler = new LogReconciler(chain, reconcileAudit, cursors, transferLogs, heads, reconciles, tx,
+                CURSOR, token, 2, new Random(1));
+        TokenRegistry registry = new TokenRegistry(new Erc20Calls(chain), tokens);
         return new ChainIndexerScheduler(tracker, indexer, recovery, reconciler, registry, states,
-                CURSOR, token, startBlock, degradedAfter);
+                CURSOR, token, startBlock, degradedAfter, catchUpBudget, nanoTime);
     }
 
     private String stateOf(String name) {
@@ -542,7 +573,7 @@ class ChainIndexerSchedulerTest extends AbstractPostgresTest {
                 CURSOR, LINK, 2, new Random(1));
         TokenRegistry registry = new TokenRegistry(new Erc20Calls(chain), tokens);
         ChainIndexerScheduler scheduler = new ChainIndexerScheduler(tracker, indexer, recovery, reconciler, registry, states,
-                CURSOR, LINK, 0L, 30);
+                CURSOR, LINK, 0L, 30, Duration.ofMinutes(5));
 
         TickResult result = scheduler.tick();
 

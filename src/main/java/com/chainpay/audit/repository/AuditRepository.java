@@ -177,6 +177,27 @@ public class AuditRepository {
                 .param("t", token).param("b", upTo).query(BigDecimal.class).single().toBigIntegerExact();
     }
 
+    /** 已登记、日志仍在主分支、块 ≤ upTo 的注资合计（原始单位）：托管等式里「账本之外、但有人签字认了」的那一项。 */
+    public BigInteger registeredFundings(String token, long upTo) {
+        return jdbc.sql("""
+                        SELECT COALESCE(SUM(f.raw_value), 0) FROM hot_wallet_funding f JOIN chain_transfer_log l ON l.id = f.transfer_log_id
+                        WHERE f.token = :t AND l.status = 'CANONICAL' AND l.block_number <= :b
+                        """)
+                .param("t", token).param("b", upTo).query(BigDecimal.class).single().toBigIntegerExact();
+    }
+
+    /** 登记过、但日志已不在主分支的注资：登记时它是 finalized 的，之后被翻掉只能是深重组或手工改库——报出来。 */
+    public record OrphanedFunding(long id, String token, String txHash, int logIndex, BigInteger rawValue, String logStatus) {}
+
+    public List<OrphanedFunding> orphanedFundings() {
+        return jdbc.sql("""
+                        SELECT f.id, f.token, f.tx_hash, l.log_index, f.raw_value, l.status FROM hot_wallet_funding f
+                        JOIN chain_transfer_log l ON l.id = f.transfer_log_id WHERE l.status <> 'CANONICAL' ORDER BY f.id
+                        """)
+                .query((rs, i) -> new OrphanedFunding(rs.getLong("id"), rs.getString("token"), rs.getString("tx_hash"), rs.getInt("log_index"),
+                        rs.getBigDecimal("raw_value").toBigIntegerExact(), rs.getString("status"))).list();
+    }
+
     public List<Map<String, Object>> judge() {
         return jdbc.sql("SELECT check_name, subject, detail FROM ledger_judge()").query().listOfRows();
     }

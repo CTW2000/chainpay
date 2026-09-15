@@ -64,6 +64,8 @@ public enum ErrorCode {
     ADDRESS_NOT_WHITELISTED("2009", false),
     /** 提现目标是平台自己的收款地址（M4-④）：那是内部转账，不是提现，永远拒绝。 */
     INTERNAL_ADDRESS("2010", false),
+    /** 指认的链上日志库里没有（M6-② 注资登记）：哈希错了，或索引器还没索到那个块。 */
+    LOG_NOT_FOUND("2011", false),
 
     // ---- 3xxx 权限 ---------------------------------------------------
     /**
@@ -90,6 +92,8 @@ public enum ErrorCode {
     IDEMPOTENCY_CONFLICT("4003", false),
     /** 这笔提现不在等待核准的状态（已核准、已拒绝、或不存在）（M4-④）。 */
     PAYOUT_NOT_PENDING("4004", false),
+    /** 指认的日志还没 finalized（M6-② 注资登记）：会被重组翻掉的钱不进等式，等十几分钟再来。 */
+    NOT_FINALIZED("4005", false),
 
     // ---- 5xxx 限流 ---------------------------------------------------
     /** 唯一一个「等一会儿再试就能成功」的错误。响应必带 {@code Retry-After}。 */

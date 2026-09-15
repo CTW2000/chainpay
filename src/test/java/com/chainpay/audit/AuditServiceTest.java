@@ -53,6 +53,39 @@ class AuditServiceTest extends AbstractDepositPostingTest {
         }
     }
 
+    @Test
+    @DisplayName("★ 外部注资：登记前是 CUSTODY_TOTAL 的「链上多」；登记后等式平了 → OK（M6-②）")
+    void externalFundingIsAFindingUntilRegistered() {
+        chain.addTransfer(LINK, 30, ALICE, HOT, ONE_LINK, FUNDING_TX);            // 运营往热钱包充了 1
+        fundedAndPosted();
+        balancesAt(F, TEN_LINK, ONE_LINK);
+
+        AuditResult before = auditor().runOnce();
+        assertThat(kinds(before, "CUSTODY_TOTAL")).containsExactly(AuditKind.MISSING_IN_LEDGER);
+
+        new com.chainpay.chain.payout.service.HotWalletFundingService(systemLedger).register(FUNDING_TX, null, "演练充币");
+        AuditResult after = auditor().runOnce();
+        assertThat(after.status()).as(after.detail() + " " + after.findings()).isEqualTo("OK");
+    }
+
+    @Test
+    @DisplayName("★ 登记过的注资，日志后来被重组翻掉：CUSTODY_TOTAL 报「登记的注资链上不认」")
+    void registeredFundingWhoseLogWasOrphanedIsMissingOnChain() {
+        chain.addTransfer(LINK, 30, ALICE, HOT, ONE_LINK, FUNDING_TX);
+        fundedAndPosted();
+        balancesAt(F, TEN_LINK, BigInteger.ZERO);                                  // 链上热钱包其实是 0：那笔充币不在主分支
+        new com.chainpay.chain.payout.service.HotWalletFundingService(systemLedger).register(FUNDING_TX, null, null);
+        jdbc.sql("UPDATE chain_transfer_log SET status = 'ORPHANED' WHERE tx_hash = :h").param("h", FUNDING_TX).update();
+
+        AuditResult r = auditor().runOnce();
+
+        assertThat(r.findings()).filteredOn(f -> f.check().equals("CUSTODY_TOTAL")).extracting(AuditFinding::kind)
+                .contains(AuditKind.MISSING_ON_CHAIN);
+        assertThat(r.findings()).extracting(AuditFinding::detail).anyMatch(d -> d.contains("登记的注资"));
+    }
+
+    static final String FUNDING_TX = "0x" + "f".repeat(64);
+
     private AuditService auditor() {
         return new AuditService(systemLedger, chain, audit, 10);
     }

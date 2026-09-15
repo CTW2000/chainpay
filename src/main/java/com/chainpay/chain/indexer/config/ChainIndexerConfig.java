@@ -131,6 +131,6 @@ class ChainIndexerConfig {
                                                 ChainIndexerProperties properties) {
         return new ChainIndexerScheduler(tracker, indexer, recovery, reconciler, registry, states,
                 properties.cursorName(), properties.tokenAddress(), properties.startBlock(),
-                properties.degradedAfterFailures());
+                properties.degradedAfterFailures(), properties.catchUpBudget());
     }
 }

@@ -83,9 +83,10 @@ class HealthProbesTest extends AbstractPostgresTest {
     }
 
     @Test
-    @DisplayName("管理端口只绑回环地址")
+    @DisplayName("管理端口只绑回环地址；主端口默认也只绑回环（M6-②：容器里由 CHAINPAY_BIND_ADDRESS 放开）")
     void managementPortBindsLoopbackOnly() {
         assertThat(env.getProperty("management.server.address")).isEqualTo("127.0.0.1");
+        assertThat(env.getProperty("server.address")).as("宿主上直接跑 jar 时不该对所有网卡开放").isEqualTo("127.0.0.1");
     }
 
     @Test

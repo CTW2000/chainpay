@@ -116,6 +116,9 @@ chainpay:
     reconcile-samples: 3
     # 连续几次瞬时失败（或审计节点连续几次答不出）后把状态标成 DEGRADED、每轮报错。12 秒一轮，30 次约 6 分钟
     degraded-after-failures: 30
+    # 一次轮询最多花多久追赶（M6-②）。落后时连续推批到追平或预算用完，下一轮接着追；正常时一轮一批用不到它。
+    # 封顶的是时间不是批数：一轮跑太久压住的是自己的降级检测与状态更新。停两天约 14000 块，10 块一批半秒一批，5 分钟能追 6000 块
+    catch-up-budget: 5m
     # 审计节点同样只从环境变量来：CHAINPAY_CHAIN_AUDIT_RPC_URL，可不设
 
   # M3 · 收款。xpub 故意不在这里给：设了环境变量 CHAINPAY_DEPOSIT_XPUB 才装配收款地址模块；
@@ -196,10 +199,15 @@ logging:
   level:
     # 想看每条 SQL 时把这行打开 —— 账本层的一个核心目的就是"SQL 看得见"
     # org.springframework.jdbc.core: DEBUG
-    com.chainpay: DEBUG
+    # 默认 INFO；开发想看每一步（含 SQL 之外的调试行）时 CHAINPAY_LOG_LEVEL=DEBUG（env/local.env.example）。
+    # DEBUG 上生产会把请求细节、地址、金额全打进日志（安全扫描第 15 条，M6-②）
+    com.chainpay: ${CHAINPAY_LOG_LEVEL:INFO}
 
 server:
   # 8095 而不是 8090：flow-pay 后端占用 8090，两个项目同时开着会撞。
   # 用 ${VAR:默认值} 语法可被环境变量覆盖，换端口不用改代码也不用重新打包：
   #     CHAINPAY_PORT=9099 java -jar target/chainpay-0.1.0-SNAPSHOT.jar
   port: ${CHAINPAY_PORT:8095}
+  # 默认只绑回环：宿主上直接跑 jar 时不对所有网卡开放（安全扫描第 15 条，M6-②）。
+  # 容器里必须放开到 0.0.0.0（docker-compose.yml 的 app 服务给 CHAINPAY_BIND_ADDRESS），否则宿主发布的端口连不进去；对外只绑宿主回环由 compose 管
+  address: ${CHAINPAY_BIND_ADDRESS:127.0.0.1}

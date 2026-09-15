@@ -74,6 +74,8 @@ services:
       CHAINPAY_REDIS_PORT: "6379"
       CHAINPAY_PORT: "8095"
       CHAINPAY_MANAGEMENT_PORT: "8096"
+      # 主端口在容器内要对容器网络开放（宿主发布的是 127.0.0.1:8095 → 容器:8095）；宿主上直接跑 jar 时默认只绑回环
+      CHAINPAY_BIND_ADDRESS: "0.0.0.0"
     ports:
       # 和中间件一样只绑回环（RULE #5a）。管理端口 8096 不发布：它只在容器内回环上，HEALTHCHECK 在容器里打
       - "127.0.0.1:8095:8095"
