@@ -45,11 +45,17 @@ HTTP：UP / DEGRADED / UNKNOWN = 200；DOWN = 503。`DEGRADED` 是本项目多�
 ```bash
 set -a; source env/local.env; set +a          # 密钥只从这里来；compose 的 environment 只覆盖主机名与端口
 docker compose build app                      # 两阶段构建；首次约 6 分钟（拉 Maven 镜像 + 依赖），之后 ~2 分钟
-tools/image-check.sh                          # 打完必跑：非 root、HEALTHCHECK、无私钥形态、env 里每个密钥值 grep 不到
+tools/image-check.sh                          # 打完必跑：非 root、HEALTHCHECK、文件系统与镜像元数据里无私钥形态、env 里每个密钥值 grep 不到
 docker compose up -d app                      # 等中间件 healthy 才起；~10 秒后自己变 healthy
 docker inspect --format '{{.State.Health.Status}}' chainpay-app
 docker logs -f chainpay-app
 ```
+
+**扫描的前提不成立时，它报「这次扫描不可信」并退出 1，而不是打一排 ✓**（2026-09-15）：解包失败、
+镜像里没有 `/app`、取不到元数据、按值扫描用的 env 文件不在，都算前提不成立——「没找到密钥」和「根本没扫」
+不能长得一样。换 env 文件用 `CHAINPAY_ENV_FILE=…`；确实不需要按值扫描（比如在没有密钥的机器上）用
+`CHAINPAY_SKIP_VALUE_SCAN=1` 显式说明。形态检测覆盖 `/app` 与镜像的 Config（Env / Labels / Cmd / Entrypoint），
+构建历史只参与按值扫描——基础镜像的命令里遍地是 sha256 校验和，形态规则在那里必然误报。
 
 | 想做 | 命令 | 说明 |
 |---|---|---|

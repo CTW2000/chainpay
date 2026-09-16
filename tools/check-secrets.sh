@@ -19,8 +19,17 @@ if [ $# -eq 0 ]; then
   while IFS= read -r f; do targets+=("$f"); done < <(git ls-files -co --exclude-standard)
 else
   for d in "$@"; do
+    # 路径不在就停：「扫不到」和「没东西可扫」是两回事，不能让「没命中」冒充「没问题」（2026-09-15 补）
+    [ -e "$d" ] || { echo "✗ 要扫的路径不存在：$d，这次扫描不可信"; exit 1; }
     while IFS= read -r f; do targets+=("$f"); done < <(find "$d" -type f -not -path '*/.git/*')
   done
+fi
+
+# 一个文件都没有也停。在此之前这里会直接撞上 bash 的 `targets[@]: unbound variable`（3.2 下空数组 + set -u）：
+# 退出码确实是 1，但信息像脚本坏了，而调用方 image-check 还会把它解释成「有私钥形态」——结论是错的
+if [ "${#targets[@]}" -eq 0 ]; then
+  echo "✗ 没有可扫的文件（${*:-当前仓库}）：这次扫描不可信"
+  exit 1
 fi
 
 allowed_value() { grep -qixF "$1" "$ALLOW" 2>/dev/null; }
