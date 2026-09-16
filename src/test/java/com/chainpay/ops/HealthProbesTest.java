@@ -65,12 +65,13 @@ class HealthProbesTest extends AbstractPostgresTest {
     }
 
     @Test
-    @DisplayName("work：索引器、热钱包、判官（没配 = UNKNOWN）与 Redis（UP）并列，整组 UP")
+    @DisplayName("work：索引器、入账、热钱包、判官（没配 = UNKNOWN）与 Redis（UP）并列，整组 UP")
     void workGroupListsTheWorkers() throws Exception {
         HttpResponse<String> r = get(managementPort(), "/actuator/health/work");
         assertThat(r.statusCode()).isEqualTo(200);
         JsonNode c = json.readTree(r.body()).get("components");
         assertThat(c.get("indexer").get("status").asString()).isEqualTo("UNKNOWN");
+        assertThat(c.get("deposit").get("status").asString()).as("入账停了要有人知道").isEqualTo("UNKNOWN");
         assertThat(c.get("hotWallet").get("status").asString()).isEqualTo("UNKNOWN");
         assertThat(c.get("audit").get("status").asString()).isEqualTo("UNKNOWN");
         assertThat(c.get("redis").get("status").asString()).isEqualTo("UP");
@@ -103,10 +104,10 @@ class HealthProbesTest extends AbstractPostgresTest {
     private com.chainpay.ops.alert.AlertScheduler alerts;
 
     @Test
-    @DisplayName("★ 告警任务真的装配了、读的是 work 组：这里没配节点，四个部件 UNKNOWN / UP，一轮零告警；调度线程够用")
+    @DisplayName("★ 告警任务真的装配了、读的是 work 组：这里没配节点，五个部件 UNKNOWN / UP，一轮零告警；调度线程够用")
     void alertSchedulerWatchesTheWorkGroup() {
         assertThat(alerts.tick()).isEmpty();
-        assertThat(alerts.lastObserved().keySet()).containsExactlyInAnyOrder("indexer", "hotWallet", "audit", "redis");
+        assertThat(alerts.lastObserved().keySet()).containsExactlyInAnyOrder("indexer", "deposit", "hotWallet", "audit", "redis");
         assertThat(alerts.lastObserved().get("redis").status()).isEqualTo("UP");
     }
 

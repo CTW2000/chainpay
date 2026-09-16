@@ -4,10 +4,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.chainpay.audit.domain.AuditResult;
 import com.chainpay.audit.service.AuditService;
+import com.chainpay.chain.deposit.domain.PostingResult;
 import com.chainpay.chain.indexer.domain.IndexerState;
 import com.chainpay.chain.indexer.domain.IndexerStatus;
 import com.chainpay.chain.payout.domain.HotWallet;
 import com.chainpay.ops.health.AuditHealthIndicator;
+import com.chainpay.ops.health.DepositHealthIndicator;
 import com.chainpay.ops.health.HotWalletHealthIndicator;
 import com.chainpay.ops.health.IndexerHealthIndicator;
 import com.chainpay.ops.health.Statuses;
@@ -136,6 +138,53 @@ class HealthIndicatorsTest {
             List<com.chainpay.audit.domain.AuditFinding> f = java.util.Collections.nCopies(findings,
                     new com.chainpay.audit.domain.AuditFinding("CUSTODY_TOTAL", com.chainpay.audit.domain.AuditKind.MISSING_IN_LEDGER, "币 LINK", "1", "2", "x"));
             return new AuditResult(7L, status, 11700301L, Instant.now(), Instant.now(), f, "d");
+        }
+    }
+
+    @Nested
+    @DisplayName("入账")
+    class DepositPosting {
+
+        @Test
+        @DisplayName("没配 xpub 或节点：UNKNOWN，说明这个进程不入账")
+        void notAssembledIsUnknown() {
+            Health h = new DepositHealthIndicator(false, Optional::empty, () -> 0).health();
+            assertThat(h.getStatus()).isEqualTo(Status.UNKNOWN);
+            assertThat(h.getDetails().get("reason").toString()).contains("不入账");
+        }
+
+        @Test
+        @DisplayName("装配了、还没跑过一轮：UP")
+        void assembledBeforeTheFirstRoundIsUp() {
+            assertThat(new DepositHealthIndicator(true, Optional::empty, () -> 0).health().getStatus()).isEqualTo(Status.UP);
+        }
+
+        @Test
+        @DisplayName("★ 上一轮 HALTED（节点撤了我们的凭证）：DOWN 带原因——重试没用，必须有人来")
+        void haltedIsDown() {
+            Health h = indicator(PostingResult.halted(1, 0, 0, 0, 0, 0, "节点拒绝了我们的凭证：换 key 后重启"), 1).health();
+            assertThat(h.getStatus()).isEqualTo(Status.DOWN);
+            assertThat(h.getDetails().get("reason").toString()).contains("凭证");
+        }
+
+        @Test
+        @DisplayName("★ 连续几轮都没跑完：DEGRADED 有人该来看看；偶尔一轮没跑完不算")
+        void repeatedUnfinishedRoundsAreDegraded() {
+            PostingResult unfinished = PostingResult.retryLater(1, 0, 0, 0, 0, 0, "核对块 5 时节点失败");
+            assertThat(indicator(unfinished, 1).health().getStatus()).as("一轮不算").isEqualTo(Status.UP);
+            assertThat(indicator(unfinished, DepositHealthIndicator.DEGRADED_AFTER_ROUNDS).health().getStatus()).isEqualTo(Statuses.DEGRADED);
+        }
+
+        @Test
+        @DisplayName("上一轮正常跑完：UP，细节报这一轮记了几笔")
+        void completedRoundIsUp() {
+            Health h = indicator(new PostingResult(3, 2, 1, 0, 0, 0, PostingResult.Ending.COMPLETED, null), 0).health();
+            assertThat(h.getStatus()).isEqualTo(Status.UP);
+            assertThat(h.getDetails().get("credited")).isEqualTo(2);
+        }
+
+        private DepositHealthIndicator indicator(PostingResult last, int unfinishedRounds) {
+            return new DepositHealthIndicator(true, () -> Optional.of(last), () -> unfinishedRounds);
         }
     }
 }

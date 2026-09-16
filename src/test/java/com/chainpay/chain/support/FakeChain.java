@@ -58,6 +58,7 @@ public final class FakeChain implements ChainReader, ChainSender {
     private volatile Runnable beforeLogs = () -> { };
     private volatile Runnable beforeCall = () -> { };
     private volatile java.util.function.LongConsumer beforeBlock = n -> { };
+    private volatile Runnable beforeNonce = () -> { };
     /** 撒谎的节点塞进 getLogs 响应里的日志：不看范围、不看分支、不看地址。 */
     private final List<RawLog> injectedIntoGetLogs = new CopyOnWriteArrayList<>();
 
@@ -131,6 +132,7 @@ public final class FakeChain implements ChainReader, ChainSender {
 
     @Override
     public BigInteger transactionCount(String address, String tag) {
+        beforeNonce.run();
         long mined = minedCount.getOrDefault(address.toLowerCase(), 0L);
         if (!"pending".equals(tag)) {
             return BigInteger.valueOf(mined);
@@ -408,6 +410,11 @@ public final class FakeChain implements ChainReader, ChainSender {
     }
 
     /** 每次取某个区块头之前先跑它（参数是块号）：在里面重组，就是「取头和取日志之间链换了分支」。 */
+    /** 问链上计数时插一手：抛异常 = 这一步就失败（发送任务每轮的第一次问节点）。 */
+    public void beforeNonce(Runnable hook) {
+        this.beforeNonce = hook;
+    }
+
     public void beforeBlock(java.util.function.LongConsumer hook) {
         this.beforeBlock = hook;
     }

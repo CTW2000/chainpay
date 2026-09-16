@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.chainpay.chain.payout.domain.SendResult;
 import com.chainpay.chain.rpc.JsonRpcException;
+import com.chainpay.chain.rpc.RpcAuthException;
 import com.chainpay.chain.wallet.Eip1559Transaction;
 import java.math.BigInteger;
 import java.util.HexFormat;
@@ -285,5 +286,56 @@ class PayoutSenderTest extends AbstractPayoutSendingTest {
         } catch (Exception e) {
             throw new IllegalStateException("另一个实例没来", e);
         }
+    }
+
+    @Test
+    @DisplayName("★ 对账时节点撤销了我们的 key：停发并把热钱包标 HALTED 叫人，不是每轮默默重试")
+    void revokedCredentialsHaltTheWalletAtReconcile() {
+        queued("1");
+        assertThat(sender().sendOnce().broadcast()).as("先正常发一笔：热钱包那一行是这时建的").isEqualTo(1);
+        queued("2");
+        chain.beforeNonce(() -> {
+            throw new RpcAuthException(401, "eth_getTransactionCount");
+        });
+
+        SendResult result = sender().sendOnce();
+
+        assertThat(result.halted()).as(result.detail()).isTrue();
+        assertThat(result.retryLater()).as("被撤销的 key 不会自己好").isFalse();
+        assertThat(result.haltReason()).contains("凭证");
+        assertThat(wallet().get("status")).as("热钱包指示器据此变 DOWN，告警才看得见").isEqualTo("HALTED");
+        assertThat(attempts()).as("第二笔一个编号都没分出去").hasSize(1);
+    }
+
+    @Test
+    @DisplayName("一笔都没发过就撞上凭证被撤销：照样停这一轮；此时还没有钱包行可标，叫人的是索引器（它接住同一个异常并落 HALTED）")
+    void revokedCredentialsBeforeTheFirstPayoutStillStopTheRound() {
+        queued("1");
+        chain.beforeNonce(() -> {
+            throw new RpcAuthException(401, "eth_getTransactionCount");
+        });
+
+        SendResult result = sender().sendOnce();
+
+        assertThat(result.halted()).as(result.detail()).isTrue();
+        assertThat(attempts()).as("编号没分出去").isEmpty();
+        assertThat(jdbc.sql("SELECT count(*) FROM hot_wallet").query(Long.class).single())
+                .as("没有行可标：这一步靠索引器叫人").isZero();
+    }
+
+    @Test
+    @DisplayName("★ 广播时节点撤销了我们的 key：同样停发叫人；已签的原文留在库里，换 key 后原样重发")
+    void revokedCredentialsHaltTheWalletWhenBroadcasting() {
+        long id = queued("1");
+        chain.beforeSend(() -> {
+            throw new RpcAuthException(403, "eth_sendRawTransaction");
+        });
+
+        SendResult result = sender().sendOnce();
+
+        assertThat(result.halted()).as(result.detail()).isTrue();
+        assertThat(wallet().get("status")).isEqualTo("HALTED");
+        assertThat(payoutStatus(id)).as("原文已落库，编号已分出去：状态停在 SIGNED").isEqualTo("SIGNED");
+        assertThat(attempts().get(0).get("status")).isEqualTo("SIGNED");
     }
 }

@@ -16,7 +16,7 @@ curl -s 'http://127.0.0.1:8096/actuator/metrics/hikaricp.connections?tag=pool:ch
 |---|---|---|---|---|
 | `liveness` | 进程在不在 | `livenessState` | 进程管理器 | 重启进程 |
 | `readiness` | 能不能接请求 | `db`（Boot 的组合项：子项 `dataSource` 主池、`systemDataSource` 系统池） | 容器 HEALTHCHECK、负载均衡 | 不给它流量；连着 DOWN 就重启 |
-| `work` | 能不能干活 | `indexer`、`hotWallet`、`audit`、`redis` | 告警、人 | **叫人**，不重启（重启不会让 HALTED 变好） |
+| `work` | 能不能干活 | `indexer`、`deposit`、`hotWallet`、`audit`、`redis` | 告警、人 | **叫人**，不重启（重启不会让 HALTED 变好） |
 
 HTTP：UP / DEGRADED / UNKNOWN = 200；DOWN = 503。`DEGRADED` 是本项目多出来的一档：还在跑，但有人该来看看。
 
@@ -27,6 +27,9 @@ HTTP：UP / DEGRADED / UNKNOWN = 200；DOWN = 503。`DEGRADED` 是本项目多�
 | `indexer` | UNKNOWN | 这个进程没配主节点 | 没事，除非它本该索引 |
 | `indexer` | DEGRADED | 连续瞬时失败（节点在抖） | 看 `GET /admin/v1/indexer`；恢复后自己回 RUNNING |
 | `indexer` | DOWN | HALTED，`reason` 里是原因 | 按 `docs/runbook/chain-indexer.md` 处理，处理完才能复位 |
+| `deposit` | UNKNOWN | 这个进程没配 xpub 或主节点 | 没事，除非它本该入账 |
+| `deposit` | DEGRADED | 连续 5 轮没跑完（节点答不上来、库在抖） | 看 `reason`；节点恢复后自己回 UP |
+| `deposit` | DOWN | 上一轮 HALTED：节点拒绝了凭证，重试没用 | 换 RPC key 后重启，见 `docs/runbook/deposit.md` |
 | `hotWallet` | DOWN | HALTED，编号被别处用掉之类 | 按 `docs/runbook/payout.md`「钱包 HALTED」 |
 | `audit` | DOWN + `stale: true` | 判官沉默超过两个周期（含从没跑过） | 看日志里对账为什么没跑；`POST /admin/v1/audit/run` 手工跑一轮 |
 | `audit` | DOWN + `lastRun: run N DIFF` | 上一轮有差异 | `GET /admin/v1/audit` 看逐条差异，按 `docs/runbook/audit.md` |

@@ -22,8 +22,9 @@ class DepositPostingConfig {
 
     @Bean
     DepositPoster depositPoster(SystemLedger system, ChainReaders readers, DepositProperties properties) {
-        log.info("入账任务已装配：每轮最多 {} 笔，两个节点都点头才记（{}）", properties.batchSize(), readers.auditMode());
-        return new DepositPoster(system, readers.primary(), readers.audit(), properties.batchSize());
+        log.info("入账任务已装配：每轮最多 {} 笔，两个节点都点头才记（{}）；finalized 落后 {} 块以内算「还没跟上」，超出才叫人",
+                properties.batchSize(), readers.auditMode(), properties.finalityToleranceBlocks());
+        return new DepositPoster(system, readers.primary(), readers.audit(), properties.batchSize(), properties.finalityToleranceBlocks());
     }
 
     @Bean

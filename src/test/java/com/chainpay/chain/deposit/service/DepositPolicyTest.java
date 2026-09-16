@@ -117,7 +117,7 @@ class DepositPolicyTest extends AbstractDepositPostingTest {
         pay(6, TEN_LINK);
         indexUpTo(100, 90, 50);
         AtomicBoolean failOnce = new AtomicBoolean(true);
-        DepositPoster poster = new DepositPoster(systemLedger, chain, audit, 50, jdbcClient -> new DepositRepository(jdbcClient) {
+        DepositPoster poster = new DepositPoster(systemLedger, chain, audit, 50, 64, jdbcClient -> new DepositRepository(jdbcClient) {
             @Override
             public void credit(long depositId, long transferId) {
                 if (failOnce.getAndSet(false)) {
@@ -142,7 +142,7 @@ class DepositPolicyTest extends AbstractDepositPostingTest {
         pay(5, TEN_LINK);
         indexUpTo(100, 90, 50);
         AtomicBoolean failOnce = new AtomicBoolean(true);
-        DepositPoster poster = new DepositPoster(systemLedger, chain, audit, 50, jdbcClient -> new DepositRepository(jdbcClient) {
+        DepositPoster poster = new DepositPoster(systemLedger, chain, audit, 50, 64, jdbcClient -> new DepositRepository(jdbcClient) {
             @Override
             public long ensureCustodyAccount(String symbol) {
                 if (failOnce.getAndSet(false)) {

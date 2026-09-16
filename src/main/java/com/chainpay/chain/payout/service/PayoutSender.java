@@ -12,6 +12,7 @@ import com.chainpay.chain.payout.repository.PayoutSendRepository;
 import com.chainpay.chain.rpc.ChainReader;
 import com.chainpay.chain.rpc.ChainSender;
 import com.chainpay.chain.rpc.JsonRpcException;
+import com.chainpay.chain.rpc.RpcAuthException;
 import com.chainpay.chain.wallet.Eip1559Transaction;
 import com.chainpay.chain.wallet.HotWalletSigner;
 import com.chainpay.ledger.system.SystemLedger;
@@ -78,6 +79,8 @@ public final class PayoutSender {
         long onChain;
         try {
             onChain = primary.transactionCount(wallet, "latest").longValueExact();
+        } catch (RpcAuthException e) {                                   // 子类写在前面：被撤销的 key 不会自己好
+            return SendResult.halted(haltForRevokedCredentials(wallet, e));
         } catch (JsonRpcException e) {
             return k.retryLater("问链上计数时节点失败：" + e.getMessage());
         }
@@ -133,6 +136,8 @@ public final class PayoutSender {
             try {
                 BigInteger estimated = primary.estimateGas(wallet, payout.token(), "0x" + HexFormat.of().formatHex(data));
                 quoted = fees.quote(primary.feeQuote(), estimated);
+            } catch (RpcAuthException e) {
+                return k.halted(haltForRevokedCredentials(wallet, e));
             } catch (JsonRpcException e) {
                 if (e.code() == null) {
                     return k.retryLater("估 gas 或取费率时节点失败：" + e.getMessage());
@@ -264,6 +269,8 @@ public final class PayoutSender {
         try {
             sender.sendRawTransaction(raw);
             return new Outcome(Kind.OK, txHash);
+        } catch (RpcAuthException e) {
+            return new Outcome(Kind.HALT, credentialsReason(e));          // 调用方那一档会把钱包标 HALTED
         } catch (JsonRpcException e) {
             if (e.code() == null) {
                 return new Outcome(Kind.TRANSIENT, "广播编号 " + nonce + " 时节点失败，下一轮重发同一份原文：" + e.getMessage());
@@ -331,6 +338,8 @@ public final class PayoutSender {
                 if (primary.transactionReceipt(a.txHash()).isPresent() || !primary.transactionKnown(a.txHash())) {
                     continue;                                                               // 已上链 / 节点忘了：都是追踪任务的事
                 }
+            } catch (RpcAuthException e) {
+                return new Outcome(Kind.HALT, credentialsReason(e));
             } catch (JsonRpcException e) {
                 return new Outcome(Kind.TRANSIENT, "核对卡住的尝试时节点失败：" + e.getMessage());
             }
@@ -339,6 +348,8 @@ public final class PayoutSender {
                 f = fees.bump(primary.feeQuote(), a.maxFeePerGas(), a.maxPriorityFeePerGas(), a.gasLimit());
             } catch (FeePolicy.FeeTooHighException e) {
                 return new Outcome(Kind.TRANSIENT, e.getMessage());
+            } catch (RpcAuthException e) {
+                return new Outcome(Kind.HALT, credentialsReason(e));
             } catch (JsonRpcException e) {
                 return new Outcome(Kind.TRANSIENT, "取费率时节点失败：" + e.getMessage());
             }
@@ -385,6 +396,22 @@ public final class PayoutSender {
             repo.moveStatus(payoutId, PayoutStatus.SIGNED.name(), PayoutStatus.BROADCAST.name());   // 改不动 = 提现早已 BROADCAST（重发、替身）
             return null;
         });
+    }
+
+    /**
+     * 节点撤了我们的凭证（HTTP 401 / 403，2026-09-16 补）。它在传输层和网络抖动长得一模一样——都拿不到回答——
+     * 处置却相反：抖动下一轮就好，被撤销的 key 永远不会。留在瞬时那一桶里的后果是每 10 秒重试一次、永不停发、永不告警
+     * （{@link RpcAuthException} 的类注释早写过这件事，索引器接住了，发送任务一直没接）。
+     * 按 M6-③ 的约定，发送任务的停发走热钱包指示器：钱包标 HALTED → work 组里 hotWallet 变 DOWN → 告警。
+     */
+    private String haltForRevokedCredentials(String wallet, RpcAuthException e) {
+        String reason = credentialsReason(e);
+        haltWallet(wallet, reason);
+        return reason;
+    }
+
+    private static String credentialsReason(RpcAuthException e) {
+        return "节点拒绝了我们的凭证（" + e.getMessage() + "）：key 失效或被撤销，重试永远没用；换 key 重启后把钱包改回 ACTIVE";
     }
 
     private void haltWallet(String wallet, String reason) {

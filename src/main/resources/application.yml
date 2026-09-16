@@ -129,6 +129,10 @@ chainpay:
     post-interval: 30s
     # 每轮最多处理几条 FINAL 日志
     batch-size: 50
+    # 两个节点的 finalized 差多少块之内算「还没跟上」：这一轮延后、不占坑，下一轮再看，节点追上来就自己记上。
+    # 超出它（或库里的视图比两个节点都超前这么多）才判 HELD_NODE_DISAGREE 叫人。64 块 ≈ 两个 epoch，
+    # 正常的不同步（两家更新 finalized 的时刻差几秒）到不了这里。调大 = 卡住的节点更晚被发现。
+    finality-tolerance-blocks: 64
 
   # M4 · 付款。热钱包私钥故意不在这里给：设了环境变量 CHAINPAY_PAYOUT_HOT_WALLET_KEY 才装配付款模块；
   # 发送任务还要同时有主节点（chain.rpc-url），两者都有才装配。
@@ -194,7 +198,7 @@ management:
         readiness:
           include: readinessState,db
         work:
-          include: indexer,hotWallet,audit,redis
+          include: indexer,deposit,hotWallet,audit,redis
 
 # M6-③ · 告警：定时看 work 组（索引器 / 热钱包 / 判官 / Redis），只在变化时叫：不是 UP 叫一次，恢复再叫一次；没送到下一轮再叫。
 # 出口是一个 HTTP webhook，地址只从环境变量来、按密码对待（入站 webhook 的令牌常在 URL 里）；不设 = 只打 ERROR 日志

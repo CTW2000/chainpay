@@ -7,7 +7,9 @@ import com.chainpay.chain.indexer.service.ChainIndexerScheduler;
 import com.chainpay.chain.payout.repository.HotWalletRepository;
 import com.chainpay.chain.wallet.HotWalletSigner;
 import com.chainpay.ledger.system.SystemLedger;
+import com.chainpay.chain.deposit.service.DepositPostingScheduler;
 import com.chainpay.ops.health.AuditHealthIndicator;
+import com.chainpay.ops.health.DepositHealthIndicator;
 import com.chainpay.ops.health.HotWalletHealthIndicator;
 import com.chainpay.ops.health.IndexerHealthIndicator;
 import java.time.Duration;
@@ -29,6 +31,14 @@ class OpsHealthConfig {
     IndexerHealthIndicator indexerHealthIndicator(ObjectProvider<ChainIndexerScheduler> scheduler, IndexerStateRepository states,
                                                   @Value("${chainpay.chain.cursor-name}") String cursorName) {
         return new IndexerHealthIndicator(scheduler.getIfAvailable() != null, () -> states.find(cursorName));
+    }
+
+    @Bean
+    DepositHealthIndicator depositHealthIndicator(ObjectProvider<DepositPostingScheduler> scheduler) {
+        DepositPostingScheduler posting = scheduler.getIfAvailable();
+        return new DepositHealthIndicator(posting != null,
+                () -> posting == null ? Optional.empty() : posting.lastTick(),
+                () -> posting == null ? 0 : posting.consecutiveFailures());
     }
 
     @Bean
