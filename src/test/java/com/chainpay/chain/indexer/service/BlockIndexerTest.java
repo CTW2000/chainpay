@@ -19,6 +19,7 @@ import com.chainpay.chain.rpc.JsonRpcException;
 import com.chainpay.chain.rpc.RawLog;
 import com.chainpay.chain.support.FakeChain;
 import com.chainpay.support.AbstractPostgresTest;
+import com.chainpay.support.IndexerWriters;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.util.List;
@@ -34,7 +35,6 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.dao.DataAccessException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.transaction.PlatformTransactionManager;
-import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * M2-② 的契约：事件和书签同生同死、重复无害、书签只进不退、重组就停。
@@ -78,7 +78,7 @@ class BlockIndexerTest extends AbstractPostgresTest {
 
     private BlockIndexer indexer(int batchBlocks) {
         return new BlockIndexer(chain, cursors, transferLogs,
-                new TransactionTemplate(txManager), CURSOR, LINK, batchBlocks);
+                IndexerWriters.batch(cursors, transferLogs, txManager), CURSOR, LINK, batchBlocks);
     }
 
     // ------------------------------------------------------------------ 基本功
@@ -380,7 +380,7 @@ class BlockIndexerTest extends AbstractPostgresTest {
     @DisplayName("合约地址不成形（比如被 YAML 转成了十进制）：构造时就拒绝，不等到第一次 getLogs")
     void rejectsATokenAddressThatIsNotHex() {
         assertThatThrownBy(() -> new BlockIndexer(chain, cursors, transferLogs,
-                new TransactionTemplate(txManager), CURSOR, "682105340000000000000000000000000000000000000000", 100))
+                IndexerWriters.batch(cursors, transferLogs, txManager), CURSOR, "682105340000000000000000000000000000000000000000", 100))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("0x");
     }
@@ -519,7 +519,7 @@ class BlockIndexerTest extends AbstractPostgresTest {
         chain.withBlocks(10);
         indexer(5).start(0);                                                  // LINK 的书签
         BlockIndexer reconfigured = new BlockIndexer(chain, cursors, transferLogs,
-                new TransactionTemplate(txManager), CURSOR, OTHER, 5);        // 同一个书签名，换了代币
+                IndexerWriters.batch(cursors, transferLogs, txManager), CURSOR, OTHER, 5);        // 同一个书签名，换了代币
 
         assertThatThrownBy(reconfigured::indexNextBatch)
                 .isInstanceOf(IllegalStateException.class)

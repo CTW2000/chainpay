@@ -6,13 +6,13 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.chainpay.chain.indexer.repository.ChainHeadRepository;
 import com.chainpay.chain.support.FakeChain;
 import com.chainpay.support.AbstractPostgresTest;
+import com.chainpay.support.IndexerWriters;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.transaction.PlatformTransactionManager;
-import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * 自相矛盾的错：两个节点对同一高度给出不同的哈希。
@@ -71,7 +71,7 @@ class ChainHeadAuditTest extends AbstractPostgresTest {
     }
 
     private ChainHeadTracker tracker(FakeChain audit) {
-        return new ChainHeadTracker(primary, audit, heads, new TransactionTemplate(txManager), "test");
+        return new ChainHeadTracker(primary, audit, IndexerWriters.head(heads, txManager), "test");
     }
 
     private long rowCount() {

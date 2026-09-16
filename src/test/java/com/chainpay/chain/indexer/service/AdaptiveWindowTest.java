@@ -10,6 +10,7 @@ import com.chainpay.chain.indexer.repository.TransferLogRepository;
 import com.chainpay.chain.rpc.JsonRpcException;
 import com.chainpay.chain.support.FakeChain;
 import com.chainpay.support.AbstractPostgresTest;
+import com.chainpay.support.IndexerWriters;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.BeforeEach;
@@ -18,7 +19,6 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.transaction.PlatformTransactionManager;
-import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * 大声的错：提供商对 eth_getLogs 的范围设限并报带 code 的错，各家数字不同且不事先告诉你。
@@ -146,7 +146,7 @@ class AdaptiveWindowTest extends AbstractPostgresTest {
     }
 
     private BlockIndexer indexer(int batchBlocks) {
-        return new BlockIndexer(chain, cursors, transferLogs, new TransactionTemplate(txManager),
+        return new BlockIndexer(chain, cursors, transferLogs, IndexerWriters.batch(cursors, transferLogs, txManager),
                 CURSOR, LINK, batchBlocks);
     }
 }

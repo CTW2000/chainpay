@@ -2,15 +2,12 @@ package com.chainpay.chain.indexer.service;
 
 import com.chainpay.chain.indexer.domain.ChainHead;
 import com.chainpay.chain.indexer.domain.HeadRef;
-import com.chainpay.chain.indexer.repository.ChainHeadRepository;
 import com.chainpay.chain.rpc.BlockHeader;
 import com.chainpay.chain.rpc.ChainReader;
 import com.chainpay.chain.rpc.JsonRpcException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
-import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * 刷新链头：问节点三个头，按「只进不退」合并进 chain_head。
@@ -22,7 +19,7 @@ import org.springframework.transaction.support.TransactionTemplate;
  *   safe / latest  倒退 → 保留旧值。节点落后、负载均衡切到旧节点，都是日常
  * </pre>
  *
- * <p>和 {@link BlockIndexer} 同一个形状：网络在事务外，事务里只做锁、比较、写。
+ * <p>和 {@link BlockIndexer} 同一个形状：网络在事务外，事务里只做锁、比较、写。事务那一段在 {@link ChainHeadWriter}（注解的边界是一个方法，所以单独成类）。
  */
 public final class ChainHeadTracker {
 
@@ -30,23 +27,20 @@ public final class ChainHeadTracker {
 
     private final ChainReader chain;
     private final ChainReader audit;
-    private final ChainHeadRepository heads;
-    private final TransactionTemplate tx;
+    private final ChainHeadWriter writer;
     private final String chainName;
     /** 审计节点连续几次没能核对 finalized。只在跃迁瞬间 WARN 一次的跳过，会让双节点核对静默地名存实亡 */
     private final AtomicInteger consecutiveAuditSkips = new AtomicInteger(0);
 
-    public ChainHeadTracker(ChainReader chain, ChainHeadRepository heads, TransactionTemplate tx, String chainName) {
-        this(chain, null, heads, tx, chainName);
+    public ChainHeadTracker(ChainReader chain, ChainHeadWriter writer, String chainName) {
+        this(chain, null, writer, chainName);
     }
 
     /** @param audit 第二个节点，可为 null。只用来核对 finalized 那一块：头部的分歧是常态，finalized 的分歧不允许 */
-    public ChainHeadTracker(ChainReader chain, ChainReader audit, ChainHeadRepository heads,
-                            TransactionTemplate tx, String chainName) {
+    public ChainHeadTracker(ChainReader chain, ChainReader audit, ChainHeadWriter writer, String chainName) {
         this.chain = chain;
         this.audit = audit;
-        this.heads = heads;
-        this.tx = tx;
+        this.writer = writer;
         this.chainName = chainName;
     }
 
@@ -64,16 +58,7 @@ public final class ChainHeadTracker {
             requireAuditAgreesOnFinalized(observed.finalized());
         }
 
-        return tx.execute(status -> {
-            Optional<ChainHead> current = heads.lock();
-            if (current.isEmpty()) {
-                heads.insert(chainName, observed);
-                return observed;
-            }
-            ChainHead merged = merge(current.get(), observed);
-            heads.update(merged);
-            return merged;
-        });
+        return writer.store(chainName, observed);                     // 锁、合并、落库：ChainHeadWriter，经代理进事务
     }
 
     /**

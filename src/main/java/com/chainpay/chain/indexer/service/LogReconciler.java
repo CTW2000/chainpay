@@ -8,7 +8,6 @@ import com.chainpay.chain.indexer.domain.IndexerCursor;
 import com.chainpay.chain.indexer.domain.ReconcileResult;
 import com.chainpay.chain.indexer.repository.ChainHeadRepository;
 import com.chainpay.chain.indexer.repository.IndexerCursorRepository;
-import com.chainpay.chain.indexer.repository.ReconcileRepository;
 import com.chainpay.chain.indexer.repository.TransferLogRepository;
 import com.chainpay.chain.rpc.BlockHeader;
 import com.chainpay.chain.rpc.ChainReader;
@@ -21,7 +20,6 @@ import java.util.Optional;
 import java.util.random.RandomGenerator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * 抽样对账：用回执这条<b>事实源</b>路径重新数一遍，和库里比。
@@ -59,8 +57,7 @@ public final class LogReconciler {
     private final IndexerCursorRepository cursors;
     private final TransferLogRepository transferLogs;
     private final ChainHeadRepository heads;
-    private final ReconcileRepository reconciles;
-    private final TransactionTemplate tx;
+    private final ReconcileWriter writer;
     private final String cursorName;
     private final String token;
     private final int samplesPerRun;
@@ -71,8 +68,7 @@ public final class LogReconciler {
                          IndexerCursorRepository cursors,
                          TransferLogRepository transferLogs,
                          ChainHeadRepository heads,
-                         ReconcileRepository reconciles,
-                         TransactionTemplate tx,
+                         ReconcileWriter writer,
                          String cursorName,
                          String token,
                          int samplesPerRun,
@@ -82,8 +78,7 @@ public final class LogReconciler {
         this.cursors = cursors;
         this.transferLogs = transferLogs;
         this.heads = heads;
-        this.reconciles = reconciles;
-        this.tx = tx;
+        this.writer = writer;
         this.cursorName = cursorName;
         this.token = BlockIndexer.requireAddress(token);
         this.samplesPerRun = samplesPerRun;
@@ -169,18 +164,8 @@ public final class LogReconciler {
                     blockNumber, disputed, mismatched.size());
         }
 
-        // ⑤ 事务：补录、标废、记审计
-        return tx.execute(status -> {
-            int repaired = transferLogs.recordCanonical(toRepair);
-            int orphaned = 0;
-            for (Erc20Transfer t : toOrphan) {
-                orphaned += transferLogs.orphanOne(t.blockHash(), t.logIndex());
-            }
-            BlockReconciliation result = new BlockReconciliation(blockNumber, ours.hash(),
-                    expected.size(), found.size(), repaired, orphaned, disputed);
-            reconciles.record(result);
-            return result;
-        });
+        // ⑤ 事务：补录、标废、记审计（ReconcileWriter，经代理进事务）
+        return writer.apply(blockNumber, ours.hash(), expected.size(), found.size(), toRepair, toOrphan, disputed);
     }
 
     /**
@@ -191,11 +176,7 @@ public final class LogReconciler {
     private BlockReconciliation recordUndecodable(long blockNumber, String blockHash, String node, IllegalArgumentException e) {
         log.warn("对账块 {}：{} 的回执里有一条解不了的日志（{}），本块记为 disputed 等人看", blockNumber, node, e.getMessage());
         int found = transferLogs.canonicalLogsInBlock(blockNumber).size();
-        return tx.execute(status -> {
-            BlockReconciliation result = new BlockReconciliation(blockNumber, blockHash, 0, found, 0, 0, 1);
-            reconciles.record(result);
-            return result;
-        });
+        return writer.recordUndecodable(blockNumber, blockHash, found);
     }
 
     /** 回执里属于我们代币的 Transfer，按 (blockHash, logIndex) 索引。 */

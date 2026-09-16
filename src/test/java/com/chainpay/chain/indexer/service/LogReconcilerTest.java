@@ -16,6 +16,7 @@ import com.chainpay.chain.indexer.repository.TransferLogRepository;
 import com.chainpay.chain.rpc.RawLog;
 import com.chainpay.chain.support.FakeChain;
 import com.chainpay.support.AbstractPostgresTest;
+import com.chainpay.support.IndexerWriters;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.util.List;
@@ -28,7 +29,6 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.transaction.PlatformTransactionManager;
-import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * 抽样对账：回执是事实源，getLogs 是索引。差异要两个节点都点头才动。
@@ -311,11 +311,11 @@ class LogReconcilerTest extends AbstractPostgresTest {
     }
 
     private BlockIndexer indexer(int batchBlocks) {
-        return new BlockIndexer(chain, cursors, transferLogs, tx(), CURSOR, LINK, batchBlocks);
+        return new BlockIndexer(chain, cursors, transferLogs, IndexerWriters.batch(cursors, transferLogs, txManager), CURSOR, LINK, batchBlocks);
     }
 
     private ChainHeadTracker tracker() {
-        return new ChainHeadTracker(chain, heads, tx(), "test");
+        return new ChainHeadTracker(chain, IndexerWriters.head(heads, txManager), "test");
     }
 
     private LogReconciler reconciler(FakeChain audit) {
@@ -323,13 +323,10 @@ class LogReconcilerTest extends AbstractPostgresTest {
     }
 
     private LogReconciler reconciler(FakeChain audit, int samples, Random random) {
-        return new LogReconciler(chain, audit, cursors, transferLogs, heads, reconciles, tx(),
+        return new LogReconciler(chain, audit, cursors, transferLogs, heads, IndexerWriters.reconcile(transferLogs, reconciles, txManager),
                 CURSOR, LINK, samples, random);
     }
 
-    private TransactionTemplate tx() {
-        return new TransactionTemplate(txManager);
-    }
 
     private Map<String, String> statusByHash() {
         return jdbc.sql("SELECT block_hash, status FROM chain_transfer_log")

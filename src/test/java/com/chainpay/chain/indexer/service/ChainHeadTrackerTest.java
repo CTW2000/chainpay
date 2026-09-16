@@ -8,13 +8,13 @@ import com.chainpay.chain.indexer.domain.HeadRef;
 import com.chainpay.chain.indexer.repository.ChainHeadRepository;
 import com.chainpay.chain.support.FakeChain;
 import com.chainpay.support.AbstractPostgresTest;
+import com.chainpay.support.IndexerWriters;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.transaction.PlatformTransactionManager;
-import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * 链头只进不退。
@@ -46,7 +46,7 @@ class ChainHeadTrackerTest extends AbstractPostgresTest {
         chain = new FakeChain().withBlocks(100);
         chain.reportSafe(60);
         chain.reportFinalized(20);
-        tracker = new ChainHeadTracker(chain, heads, new TransactionTemplate(txManager), CHAIN);
+        tracker = new ChainHeadTracker(chain, IndexerWriters.head(heads, txManager), CHAIN);
     }
 
     @Test

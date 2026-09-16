@@ -19,6 +19,7 @@ import com.chainpay.chain.rpc.JsonRpcException;
 import com.chainpay.chain.rpc.RpcAuthException;
 import com.chainpay.chain.support.FakeChain;
 import com.chainpay.support.AbstractPostgresTest;
+import com.chainpay.support.IndexerWriters;
 import java.math.BigInteger;
 import java.util.List;
 import java.util.Map;
@@ -37,7 +38,6 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.transaction.PlatformTransactionManager;
-import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * 一次轮询的形状：核对代币（只在第一次）→ 放书签（若没有且配了起点）→ 刷新链头 → 连续推批直到追平 → 抽样对账。
@@ -483,11 +483,10 @@ class ChainIndexerSchedulerTest extends AbstractPostgresTest {
      */
     private ChainIndexerScheduler scheduler(FakeChain reconcileAudit, FakeChain headAudit, String token,
                                             Long startBlock, int batchBlocks, int degradedAfter) {
-        TransactionTemplate tx = new TransactionTemplate(txManager);
-        BlockIndexer indexer = new BlockIndexer(chain, cursors, transferLogs, tx, CURSOR, token, batchBlocks);
-        ChainHeadTracker tracker = new ChainHeadTracker(chain, headAudit, heads, tx, "test");
-        ReorgRecovery recovery = new ReorgRecovery(chain, cursors, transferLogs, heads, reorgs, tx, CURSOR);
-        LogReconciler reconciler = new LogReconciler(chain, reconcileAudit, cursors, transferLogs, heads, reconciles, tx,
+        BlockIndexer indexer = new BlockIndexer(chain, cursors, transferLogs, IndexerWriters.batch(cursors, transferLogs, txManager), CURSOR, token, batchBlocks);
+        ChainHeadTracker tracker = new ChainHeadTracker(chain, headAudit, IndexerWriters.head(heads, txManager), "test");
+        ReorgRecovery recovery = new ReorgRecovery(chain, transferLogs, heads, IndexerWriters.reorg(cursors, transferLogs, reorgs, txManager), CURSOR);
+        LogReconciler reconciler = new LogReconciler(chain, reconcileAudit, cursors, transferLogs, heads, IndexerWriters.reconcile(transferLogs, reconciles, txManager),
                 CURSOR, token, 2, new Random(1));
         TokenRegistry registry = new TokenRegistry(new Erc20Calls(chain), tokens);
         return scheduler(reconcileAudit, headAudit, token, startBlock, batchBlocks, degradedAfter, Duration.ofMinutes(5), System::nanoTime);
@@ -495,11 +494,10 @@ class ChainIndexerSchedulerTest extends AbstractPostgresTest {
 
     private ChainIndexerScheduler scheduler(FakeChain reconcileAudit, FakeChain headAudit, String token, Long startBlock, int batchBlocks,
                                             int degradedAfter, Duration catchUpBudget, java.util.function.LongSupplier nanoTime) {
-        TransactionTemplate tx = new TransactionTemplate(txManager);
-        BlockIndexer indexer = new BlockIndexer(chain, cursors, transferLogs, tx, CURSOR, token, batchBlocks);
-        ChainHeadTracker tracker = new ChainHeadTracker(chain, headAudit, heads, tx, "test");
-        ReorgRecovery recovery = new ReorgRecovery(chain, cursors, transferLogs, heads, reorgs, tx, CURSOR);
-        LogReconciler reconciler = new LogReconciler(chain, reconcileAudit, cursors, transferLogs, heads, reconciles, tx,
+        BlockIndexer indexer = new BlockIndexer(chain, cursors, transferLogs, IndexerWriters.batch(cursors, transferLogs, txManager), CURSOR, token, batchBlocks);
+        ChainHeadTracker tracker = new ChainHeadTracker(chain, headAudit, IndexerWriters.head(heads, txManager), "test");
+        ReorgRecovery recovery = new ReorgRecovery(chain, transferLogs, heads, IndexerWriters.reorg(cursors, transferLogs, reorgs, txManager), CURSOR);
+        LogReconciler reconciler = new LogReconciler(chain, reconcileAudit, cursors, transferLogs, heads, IndexerWriters.reconcile(transferLogs, reconciles, txManager),
                 CURSOR, token, 2, new Random(1));
         TokenRegistry registry = new TokenRegistry(new Erc20Calls(chain), tokens);
         return new ChainIndexerScheduler(tracker, indexer, recovery, reconciler, registry, states,
@@ -565,11 +563,11 @@ class ChainIndexerSchedulerTest extends AbstractPostgresTest {
                 return getConnection();
             }
         };
-        TransactionTemplate brokenTx = new TransactionTemplate(new DataSourceTransactionManager(refusing));
-        BlockIndexer indexer = new BlockIndexer(chain, cursors, transferLogs, brokenTx, CURSOR, LINK, 100);
-        ChainHeadTracker tracker = new ChainHeadTracker(chain, null, heads, brokenTx, "test");
-        ReorgRecovery recovery = new ReorgRecovery(chain, cursors, transferLogs, heads, reorgs, brokenTx, CURSOR);
-        LogReconciler reconciler = new LogReconciler(chain, chain, cursors, transferLogs, heads, reconciles, brokenTx,
+        DataSourceTransactionManager brokenTx = new DataSourceTransactionManager(refusing);
+        BlockIndexer indexer = new BlockIndexer(chain, cursors, transferLogs, IndexerWriters.batch(cursors, transferLogs, brokenTx), CURSOR, LINK, 100);
+        ChainHeadTracker tracker = new ChainHeadTracker(chain, null, IndexerWriters.head(heads, brokenTx), "test");
+        ReorgRecovery recovery = new ReorgRecovery(chain, transferLogs, heads, IndexerWriters.reorg(cursors, transferLogs, reorgs, brokenTx), CURSOR);
+        LogReconciler reconciler = new LogReconciler(chain, chain, cursors, transferLogs, heads, IndexerWriters.reconcile(transferLogs, reconciles, brokenTx),
                 CURSOR, LINK, 2, new Random(1));
         TokenRegistry registry = new TokenRegistry(new Erc20Calls(chain), tokens);
         ChainIndexerScheduler scheduler = new ChainIndexerScheduler(tracker, indexer, recovery, reconciler, registry, states,

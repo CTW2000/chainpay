@@ -1,18 +1,14 @@
 package com.chainpay.chain.indexer.service;
 
 import com.chainpay.chain.indexer.domain.HeadRef;
-import com.chainpay.chain.indexer.domain.IndexerCursor;
 import com.chainpay.chain.indexer.domain.ReorgResult;
 import com.chainpay.chain.indexer.repository.ChainHeadRepository;
-import com.chainpay.chain.indexer.repository.IndexerCursorRepository;
-import com.chainpay.chain.indexer.repository.ReorgRepository;
 import com.chainpay.chain.indexer.repository.TransferLogRepository;
 import com.chainpay.chain.rpc.BlockHeader;
 import com.chainpay.chain.rpc.ChainReader;
 import com.chainpay.chain.rpc.JsonRpcException;
 import java.util.ArrayList;
 import java.util.List;
-import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * 重组恢复：找共同祖先、标废、退书签、记审计。之后索引器从祖先之后正常重放。
@@ -28,33 +24,27 @@ import org.springframework.transaction.support.TransactionTemplate;
  * <p><b>地板是 finalized。</b>连它都对不上，不是重组，是 {@link FinalityViolationException}：停下叫人。
  * 不用 Envio 那种 200 块的魔法数字，以太坊 PoS 把这个数字交给了协议。
  *
- * <p>形状和 {@link BlockIndexer} 一样：网络在事务外，事务里锁、核对、写。
+ * <p>形状和 {@link BlockIndexer} 一样：网络在事务外，事务里锁、核对、写。事务那一段在 {@link ReorgWriter}。
  * 标废、退书签、记审计必须同生同死——崩在「标废」和「退书签」之间，重放永远不会发生，
  * 那几笔转账就静默丢了。
  */
 public final class ReorgRecovery {
 
     private final ChainReader chain;
-    private final IndexerCursorRepository cursors;
     private final TransferLogRepository transferLogs;
     private final ChainHeadRepository heads;
-    private final ReorgRepository reorgs;
-    private final TransactionTemplate tx;
+    private final ReorgWriter writer;
     private final String cursorName;
 
     public ReorgRecovery(ChainReader chain,
-                         IndexerCursorRepository cursors,
                          TransferLogRepository transferLogs,
                          ChainHeadRepository heads,
-                         ReorgRepository reorgs,
-                         TransactionTemplate tx,
+                         ReorgWriter writer,
                          String cursorName) {
         this.chain = chain;
-        this.cursors = cursors;
         this.transferLogs = transferLogs;
         this.heads = heads;
-        this.reorgs = reorgs;
-        this.tx = tx;
+        this.writer = writer;
         this.cursorName = cursorName;
     }
 
@@ -94,23 +84,7 @@ public final class ReorgRecovery {
                     + " 的哈希也和链上对不上（记录的是 " + finalized.hash() + "）。停下叫人");
         }
 
-        // ④ 事务：锁书签、核对号和哈希、标废、退书签、记审计
-        HeadRef cursor = new HeadRef(cursorBlock, cursorHash);
-        HeadRef found = ancestor;
-        return tx.execute(status -> {
-            IndexerCursor locked = cursors.lock(cursorName);
-            boolean untouched = locked.lastBlockNumber() == cursorBlock
-                    && locked.lastBlockHash().equalsIgnoreCase(cursorHash);
-            if (!untouched) {
-                // 别的实例已经恢复过（甚至已重放到同一个号的新分支：号相同、哈希不同）。核对哈希，不只核对号
-                return ReorgResult.skipped(cursorBlock);
-            }
-            int orphaned = transferLogs.orphanAbove(found.number());
-            if (!cursors.rewind(cursorName, cursorBlock, cursorHash, found.number(), found.hash())) {
-                throw new IllegalStateException("书签在锁内被改动，不应发生：" + cursorName);
-            }
-            reorgs.record(cursor, found, orphaned);
-            return new ReorgResult(true, cursorBlock, found.number(), orphaned);
-        });
+        // ④ 事务：锁书签、核对号和哈希、标废、退书签、记审计（ReorgWriter，经代理进事务）
+        return writer.rollback(cursorName, new HeadRef(cursorBlock, cursorHash), ancestor);
     }
 }

@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.entry;
 
 import com.chainpay.chain.indexer.domain.BatchResult;
+import com.chainpay.chain.indexer.domain.HeadRef;
 import com.chainpay.chain.indexer.domain.IndexerCursor;
 import com.chainpay.chain.indexer.domain.ReorgResult;
 import com.chainpay.chain.indexer.repository.ChainHeadRepository;
@@ -15,6 +16,8 @@ import com.chainpay.chain.indexer.repository.TransferLogRepository;
 import com.chainpay.chain.rpc.JsonRpcException;
 import com.chainpay.chain.support.FakeChain;
 import com.chainpay.support.AbstractPostgresTest;
+import com.chainpay.support.IndexerWriters;
+import com.chainpay.support.TransactionalProxy;
 import java.math.BigInteger;
 import java.util.List;
 import java.util.Map;
@@ -25,8 +28,8 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.transaction.PlatformTransactionManager;
-import org.springframework.transaction.support.TransactionCallback;
-import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.interceptor.TransactionAspectSupport;
 
 /**
  * 重组回滚：找共同祖先、标废、退书签、记审计，然后正常重放。
@@ -229,16 +232,7 @@ class ReorgRecoveryTest extends AbstractPostgresTest {
         chain.reorgFrom(14, "A");
         chain.withBlocks(21);
         ReorgDetectedException detected = detect();
-        TransactionTemplate rollbackAtTheEnd = new TransactionTemplate(txManager) {
-            @Override
-            public <T> T execute(TransactionCallback<T> action) {
-                return super.execute(status -> {
-                    T result = action.doInTransaction(status);
-                    status.setRollbackOnly();                                // 所有语句都跑完了，然后整个回滚
-                    return result;
-                });
-            }
-        };
+        ReorgWriter rollbackAtTheEnd = TransactionalProxy.of(new RollbackAtTheEnd(cursors, transferLogs, reorgs), txManager);
 
         ReorgResult r = recovery(rollbackAtTheEnd).recover(detected.blockNumber() - 1, detected.expectedParentHash());
 
@@ -315,24 +309,21 @@ class ReorgRecoveryTest extends AbstractPostgresTest {
     }
 
     private BlockIndexer indexer() {
-        return new BlockIndexer(chain, cursors, transferLogs, tx(), CURSOR, LINK, 1000);
+        return new BlockIndexer(chain, cursors, transferLogs, IndexerWriters.batch(cursors, transferLogs, txManager), CURSOR, LINK, 1000);
     }
 
     private ChainHeadTracker tracker() {
-        return new ChainHeadTracker(chain, heads, tx(), "test");
+        return new ChainHeadTracker(chain, IndexerWriters.head(heads, txManager), "test");
     }
 
     private ReorgRecovery recovery() {
-        return recovery(tx());
+        return recovery(IndexerWriters.reorg(cursors, transferLogs, reorgs, txManager));
     }
 
-    private ReorgRecovery recovery(TransactionTemplate tx) {
-        return new ReorgRecovery(chain, cursors, transferLogs, heads, reorgs, tx, CURSOR);
+    private ReorgRecovery recovery(ReorgWriter writer) {
+        return new ReorgRecovery(chain, transferLogs, heads, writer, CURSOR);
     }
 
-    private TransactionTemplate tx() {
-        return new TransactionTemplate(txManager);
-    }
 
     private IndexerCursor cursor() {
         return jdbc.sql("SELECT name, last_block_number, last_block_hash FROM indexer_cursor WHERE name = :n")
@@ -373,5 +364,21 @@ class ReorgRecoveryTest extends AbstractPostgresTest {
         return jdbc.sql("SELECT cursor_block, ancestor_block, depth, orphaned_logs FROM chain_reorg ORDER BY id")
                 .query((rs, i) -> List.of(rs.getLong(1), rs.getLong(2), rs.getLong(3), rs.getLong(4)))
                 .list();
+    }
+
+    /** 所有语句都跑完、然后整个事务回滚：证明标废、退书签、记审计在同一个事务里。 */
+    static class RollbackAtTheEnd extends ReorgWriter {
+
+        RollbackAtTheEnd(IndexerCursorRepository cursors, TransferLogRepository transferLogs, ReorgRepository reorgs) {
+            super(cursors, transferLogs, reorgs);
+        }
+
+        @Override
+        @Transactional
+        public ReorgResult rollback(String cursorName, HeadRef cursor, HeadRef ancestor) {
+            ReorgResult result = super.rollback(cursorName, cursor, ancestor);
+            TransactionAspectSupport.currentTransactionStatus().setRollbackOnly();   // 所有语句都跑完了，然后整个回滚
+            return result;
+        }
     }
 }

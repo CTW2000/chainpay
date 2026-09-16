@@ -18,13 +18,13 @@ import com.chainpay.chain.indexer.service.LogReconciler;
 import com.chainpay.chain.rpc.EthRpc;
 import com.chainpay.chain.rpc.JsonRpcClient;
 import com.chainpay.support.AbstractPostgresTest;
+import com.chainpay.support.IndexerWriters;
 import java.net.URI;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.PlatformTransactionManager;
-import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * M2-② 的落库探针：对着真实的 Sepolia，把最近几百个区块的 LINK 转账索引进真的 PostgreSQL。
@@ -67,7 +67,7 @@ class SepoliaIndexProbeTest extends AbstractPostgresTest {
         jdbc.sql("TRUNCATE chain_transfer_log, indexer_cursor, chain_head, chain_reconcile CASCADE").update();
         var chain = new EthRpc(new JsonRpcClient(URI.create(System.getenv("CHAINPAY_SEPOLIA_RPC"))));
         long startBlock = chain.blockNumber() - BLOCKS_BACK;
-        var indexer = new BlockIndexer(chain, cursors, transferLogs, new TransactionTemplate(txManager),
+        var indexer = new BlockIndexer(chain, cursors, transferLogs, IndexerWriters.batch(cursors, transferLogs, txManager),
                 CURSOR, LINK_SEPOLIA, 100);
         indexer.start(startBlock);
 
@@ -90,7 +90,7 @@ class SepoliaIndexProbeTest extends AbstractPostgresTest {
                 cursor.lastBlockNumber(), cursor.lastBlockHash(), startBlock + 1, cursor.lastBlockNumber(),
                 onChain, inDb);
 
-        ChainHead head = new ChainHeadTracker(chain, heads, new TransactionTemplate(txManager), "sepolia").refresh();
+        ChainHead head = new ChainHeadTracker(chain, IndexerWriters.head(heads, txManager), "sepolia").refresh();
         System.out.printf(">>> 链头 latest=%d safe=%d (-%d) finalized=%d (-%d)%n",
                 head.latest().number(), head.safe().number(), head.latest().number() - head.safe().number(),
                 head.finalized().number(), head.latest().number() - head.finalized().number());
@@ -100,8 +100,8 @@ class SepoliaIndexProbeTest extends AbstractPostgresTest {
 
         String auditUrl = System.getenv("CHAINPAY_SEPOLIA_AUDIT_RPC");
         var audit = auditUrl == null || auditUrl.isBlank() ? chain : new EthRpc(new JsonRpcClient(URI.create(auditUrl)));
-        var reconciler = new LogReconciler(chain, audit, cursors, transferLogs, heads, reconciles,
-                new TransactionTemplate(txManager), CURSOR, LINK_SEPOLIA, 3, new java.util.Random());
+        var reconciler = new LogReconciler(chain, audit, cursors, transferLogs, heads,
+                IndexerWriters.reconcile(transferLogs, reconciles, txManager), CURSOR, LINK_SEPOLIA, 3, new java.util.Random());
         ReconcileResult reconciled = reconciler.reconcile();
         System.out.printf(">>> 对账（审计节点 %s）：抽了 %s，差异 %d 块%n",
                 auditUrl == null || auditUrl.isBlank() ? "= 主节点" : auditUrl, reconciled.sampledBlocks(), reconciled.mismatches());

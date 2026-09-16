@@ -6,6 +6,7 @@ import com.chainpay.chain.indexer.service.BlockIndexer;
 import com.chainpay.chain.indexer.service.ChainHeadTracker;
 import com.chainpay.chain.support.FakeChain;
 import com.chainpay.support.AbstractPostgresTest;
+import com.chainpay.support.IndexerWriters;
 import java.math.BigInteger;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -15,7 +16,6 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.transaction.PlatformTransactionManager;
-import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * 确认等级是<b>算出来的</b>：视图按最后一次看到的链头，给每条在链上的日志一个 SEEN / SAFE / FINAL。
@@ -132,16 +132,13 @@ class ConfirmationViewTest extends AbstractPostgresTest {
     }
 
     private BlockIndexer indexer() {
-        return new BlockIndexer(chain, cursors, transferLogs, tx(), CURSOR, LINK, 1000);
+        return new BlockIndexer(chain, cursors, transferLogs, IndexerWriters.batch(cursors, transferLogs, txManager), CURSOR, LINK, 1000);
     }
 
     private ChainHeadTracker tracker() {
-        return new ChainHeadTracker(chain, heads, tx(), CHAIN);
+        return new ChainHeadTracker(chain, IndexerWriters.head(heads, txManager), CHAIN);
     }
 
-    private TransactionTemplate tx() {
-        return new TransactionTemplate(txManager);
-    }
 
     private Map<Long, String> levels() {
         return jdbc.sql("SELECT block_number, level FROM chain_transfer_confirmation")

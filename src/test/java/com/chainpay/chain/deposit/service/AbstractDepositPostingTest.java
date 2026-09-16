@@ -9,6 +9,7 @@ import com.chainpay.chain.indexer.service.ChainHeadTracker;
 import com.chainpay.chain.support.FakeChain;
 import com.chainpay.ledger.service.LedgerService;
 import com.chainpay.support.AbstractPostgresTest;
+import com.chainpay.support.IndexerWriters;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.util.List;
@@ -17,7 +18,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.transaction.PlatformTransactionManager;
-import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * 入账测试的脚手架：真的 PostgreSQL、真的索引器与链头追踪、真的地址分配（Hardhat xpub），只有链是 FakeChain。
@@ -91,7 +91,7 @@ public abstract class AbstractDepositPostingTest extends AbstractPostgresTest {
     }
 
     protected DepositPoster poster() {
-        return new DepositPoster(systemLedger, chain, audit, 50);
+        return new DepositPoster(systemLedger, chain, audit, 50, 64);
     }
 
     /** 两条链同样的块，主链上有日志；真的索引进库、真的刷新链头。 */
@@ -101,15 +101,14 @@ public abstract class AbstractDepositPostingTest extends AbstractPostgresTest {
             c.reportSafe(safe);
             c.reportFinalized(finalized);
         }
-        TransactionTemplate tx = new TransactionTemplate(txManager);
-        BlockIndexer indexer = new BlockIndexer(chain, cursors, transferLogs, tx, CURSOR, LINK, 100);
+        BlockIndexer indexer = new BlockIndexer(chain, cursors, transferLogs, IndexerWriters.batch(cursors, transferLogs, txManager), CURSOR, LINK, 100);
         if (!indexer.hasCursor()) {
             indexer.start(0);
         }
         while (indexer.indexNextBatch().outcome() != BatchOutcome.UP_TO_DATE) {
             // 追平
         }
-        new ChainHeadTracker(chain, heads, tx, "test").refresh();
+        new ChainHeadTracker(chain, IndexerWriters.head(heads, txManager), "test").refresh();
     }
 
     protected BigDecimal balanceOf(String code) {

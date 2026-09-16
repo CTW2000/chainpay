@@ -14,7 +14,6 @@ import com.chainpay.chain.rpc.RawLog;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * M2-② 的核心：一批一批地把链上的 Transfer 写进库，并推进书签。
@@ -55,6 +54,9 @@ import org.springframework.transaction.support.TransactionTemplate;
  * 日志自带的块号与块哈希是节点「说」的，不是承诺给我们的：不核对，撒谎的节点可以塞进任意坐标的转账。
  * 所以落库前把这一批当成一个快照来验：范围、每条日志的头、from 块没变。代价是为有日志的块多取一次头。
  *
+ * <p><b>第 ⑦ 步在 {@link BatchWriter}</b>（2026-09-15 由手工模板改为注解）：注解的边界是一个方法，留在本类里要么整个方法进事务、握着连接等网络，
+ * 要么自己调自己绕过代理、悄悄没有事务。
+ *
  * <p>它不是 Spring bean：装配在 {@code ChainIndexerConfig}（配了 RPC 地址才装），
  * 测试里直接 new，把 {@link ChainReader} 换成内存里的链。
  */
@@ -63,7 +65,7 @@ public final class BlockIndexer {
     private final ChainReader chain;
     private final IndexerCursorRepository cursors;
     private final TransferLogRepository transferLogs;
-    private final TransactionTemplate tx;
+    private final BatchWriter writer;
     private final String cursorName;
     private final String token;
     private final int batchBlocks;
@@ -89,7 +91,7 @@ public final class BlockIndexer {
     public BlockIndexer(ChainReader chain,
                         IndexerCursorRepository cursors,
                         TransferLogRepository transferLogs,
-                        TransactionTemplate tx,
+                        BatchWriter writer,
                         String cursorName,
                         String token,
                         int batchBlocks) {
@@ -99,7 +101,7 @@ public final class BlockIndexer {
         this.chain = chain;
         this.cursors = cursors;
         this.transferLogs = transferLogs;
-        this.tx = tx;
+        this.writer = writer;
         this.cursorName = cursorName;
         this.token = requireAddress(token);
         this.batchBlocks = batchBlocks;
@@ -253,9 +255,8 @@ public final class BlockIndexer {
         requireLogsMatchHeaders(transfers, first, last);
         requireStillOnTheSameBranch(first);
 
-        // ⑧ 事务：锁、重读、写、推
-        long batchEnd = to;                                          // 循环里改过的变量进不了 lambda
-        return tx.execute(status -> persist(cursor, transfers, last, from, batchEnd));
+        // ⑧ 事务：锁、重读、写、推（BatchWriter，经代理进事务）
+        return writer.persist(cursorName, cursor, transfers, last, from, to);
     }
 
     /**
@@ -305,23 +306,5 @@ public final class BlockIndexer {
             throw new JsonRpcException(null, "块 " + first.number() + " 在取批期间换了哈希（" + first.hash() + " → "
                     + again.hash() + "）：节点前后不一致，这批作废，稍后再试");
         }
-    }
-
-    private BatchResult persist(IndexerCursor expected, List<Erc20Transfer> transfers,
-                                BlockHeader last, long from, long to) {
-        IndexerCursor locked = cursors.lock(cursorName);
-        boolean untouched = locked.lastBlockNumber() == expected.lastBlockNumber()
-                && locked.lastBlockHash().equalsIgnoreCase(expected.lastBlockHash());
-        if (!untouched) {
-            // 别的实例在我们取数据期间推走了书签，或者重组恢复后重放到了同一个号的另一条分支。
-            // 书签的身份是「号 + 哈希」：同号不同哈希是另一个世界的这一块，按旧分支算的这批作废。
-            // 2026-09-09 之前这里只比号——ReorgRecovery 比了哈希，这边没跟上（扫描补丁）
-            return BatchResult.skipped(from, to, transfers.size());
-        }
-        int inserted = transferLogs.recordCanonical(transfers);
-        if (!cursors.advance(cursorName, expected.lastBlockNumber(), expected.lastBlockHash(), to, last.hash())) {
-            throw new IllegalStateException("书签在锁内被改动，不应发生：" + cursorName);
-        }
-        return new BatchResult(BatchOutcome.INDEXED, from, to, transfers.size(), inserted);
     }
 }
