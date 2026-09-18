@@ -9,7 +9,8 @@
 #   tools/admin.sh POST /admin/v1/audit/run
 #   tools/admin.sh POST /admin/v1/payouts/7/reject '{"reason":"演练"}'
 # 令牌只在环境变量 CHAINPAY_ADMIN_SESSION 里（eval 那一行之后），不进参数、不进文件、不进 shell 历史。
-# 第一个管理员：CHAINPAY_ADMIN_PASSWORD='…' docker compose run --rm --no-deps -e CHAINPAY_ADMIN_PASSWORD app --create-admin <用户名>
+# 第一个管理员：口令先用 read -rs 读进环境变量（别写在命令行上，会进 shell 历史），再
+#   docker compose run --rm --no-deps -e CHAINPAY_ADMIN_PASSWORD app --create-admin <用户名>，做完 unset。完整写法见 docs/runbook/ops.md「控制面」
 set -euo pipefail
 container=${CHAINPAY_APP_CONTAINER:-chainpay-app}
 call() {   # method path [body] [extra curl args…]

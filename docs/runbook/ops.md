@@ -121,8 +121,11 @@ compose 文件里唯一的插值 `${CHAINPAY_IMAGE:-chainpay:current}` 带默认
 控制面（`/admin/**`）认两样东西：**本机回环且无代理头**（容器里跑就在容器里发，`tools/admin.sh` 替你做）和**管理员会话**。静态令牌已经没有了。
 
 ```bash
-# 第一个管理员（只做一次）。口令只在这一条命令的环境里；写进 env/admin.env（gitignore 挡着）方便日后登录，或记在密码管理器里
-CHAINPAY_ADMIN_PASSWORD='至少 12 位' docker compose run --rm --no-deps -e CHAINPAY_ADMIN_PASSWORD app --create-admin ops
+# 第一个管理员（只做一次）。口令只经环境变量交给容器，而且别写在命令行上——写在命令行上会连口令一起进 shell 历史（2026-09-18 改）。
+# 记在密码管理器里，或写进 env/admin.env（gitignore 挡着）方便日后登录
+printf '口令（至少 12 位）：'; read -rs CHAINPAY_ADMIN_PASSWORD; echo; export CHAINPAY_ADMIN_PASSWORD
+docker compose run --rm --no-deps -e CHAINPAY_ADMIN_PASSWORD app --create-admin ops
+unset CHAINPAY_ADMIN_PASSWORD
 
 eval "$(tools/admin.sh login ops)"          # 提示输入口令（不回显）；令牌只在当前 shell 的环境变量里
 tools/admin.sh GET  /admin/v1/indexer        # 只读接口直接调
