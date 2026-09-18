@@ -34,6 +34,12 @@ class DeployGuardTest {
     }
 
     @Test
+    @DisplayName("deploy.sh 被 source 时只定义函数、不跑 main：DeployScriptTest 靠这一点逐环调函数；删了这行，测试一 source 就把整个部署流程跑起来")
+    void deployScriptCanBeSourcedWithoutDeploying() throws IOException {
+        assertThat(Files.readString(Path.of("deploy/deploy.sh"))).contains("if [[ ${BASH_SOURCE[0]} == \"$0\" ]]; then");
+    }
+
+    @Test
     @DisplayName("rollback.sh：可执行、把 previous 换回 current 再 up、等 readiness")
     void rollbackScriptSwapsTagsAndVerifies() throws IOException {
         Path script = Path.of("deploy/rollback.sh");

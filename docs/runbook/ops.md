@@ -87,23 +87,34 @@ docker logs -f chainpay-app
 # 运维手册 · 发布与回滚（M6-④）
 
 ```bash
-set -a; source env/local.env; set +a
 deploy/deploy.sh            # 八环节：构建 → 配置 → 密钥 → 迁移 → 打标签 → 切换 → 验证 → 不过就回滚
+deploy/deploy.sh <提交>      # 发布一个旧提交：构建的就是那个提交里的文件，和工作区无关
 deploy/rollback.sh          # 人手回滚：previous 换回 current、up、再验；数据库不动
 docker images chainpay      # 标签就是发布记录
 ```
 
+**不要先 `set -a; source env/local.env`**（2026-09-18 改）：脚本自己在子 shell 里读 env 文件做检查，读完即丢；compose 自己读 `env_file`，
+compose 文件里唯一的插值 `${CHAINPAY_IMAGE:-chainpay:current}` 带默认值。先 source 等于把全部密钥导进你这个终端，之后跑的每一条命令都继承一份。
+换 env 文件用 `CHAINPAY_ENV_FILE=env/xxx.env deploy/deploy.sh`——第 ② 步配置检查和第 ③ 步按值扫描用的是同一个文件。
+
 | 标签 | 意思 |
 |---|---|
-| `chainpay:<sha>` | 某个提交打出来的镜像；工作区脏时是 `<sha>-dirty`，日后按提交号找不回来源 |
+| `chainpay:<sha>` | 某个提交打出来的镜像：构建上下文是那个提交的 git tree（`git archive`），工作区的改动和杂物进不来 |
+| `chainpay:<sha>-dirty.<tree>` | HEAD 加上工作区未提交改动（含未跟踪文件）打出来的；`<tree>` 是工作区内容的 git tree 号前 7 位——同一份改动同一个标签，改一个字就是另一个标签 |
 | `chainpay:current` | compose 在跑的那个；部署脚本换它，人不手动换 |
 | `chainpay:previous` | 上一版；回滚退到它 |
-| `chainpay:failed` | 上一次被换下的（回滚时打的），留着查 |
+| `chainpay:failed` | 上一次被换下的（回滚或第一次部署失败时打的），留着查 |
 
-**迁移失败**：脚本在 ④ 停，什么都没切换，旧版本继续跑。看脚本打印的 Flyway 错误，改迁移，再跑 `deploy/deploy.sh`（同一个提交的镜像已存在就不重打；改了迁移就是新提交或 `-dirty`）。
-**验证不过**（120 秒没 healthy）：脚本自己回滚到 previous 并退出 1；看 `docker logs chainpay-app` 里新版本为什么起不来。
+标签由内容决定，所以「这个标签已经有镜像了就跳过构建」是安全的。2026-09-18 之前脏工作区一律叫 `<sha>-dirty`，两份不同的改动撞同一个标签，
+脚本会把旧镜像当成这一次部署出去——那种旧格式的标签别再拿来部署。顺带：`.gitignore` 挡住的文件（`env/*.env`、`*.key`）从此进不了构建上下文，不再只靠 `.dockerignore` 一道。
+
+**迁移失败**：脚本在 ④ 停，什么都没切换，旧版本继续跑。完整日志在 `$TMPDIR/chainpay-migrate.XXXXXX`（路径会打出来；迁移成功时自动删掉）。改迁移，再跑 `deploy/deploy.sh`——改了就是新内容、新标签，一定会重新构建。
+**验证不过**（120 秒没 healthy）：有上一版时，脚本自己回滚到 previous 并退出 1；看 `docker logs chainpay-app` 里新版本为什么起不来。
+**第一次部署就验证不过**：没有上一版可退。脚本停下 app，坏镜像改叫 `chainpay:failed`，摘掉 `chainpay:current`，退出 1——回到部署之前「什么都没在跑」的样子，而不是留一个被 `restart: unless-stopped` 反复拉起的坏容器。
+**部署成功之后**：最后一行打出 work 组的总状态（UP / DEGRADED / DOWN），只供参考、不影响部署结果；部件细节用它打出的那条 `docker exec … /actuator/health/work` 命令看。
 **回滚后数据库怎么办**：不动。规矩是「迁移只前进，上一版代码要能跑在新 schema 上」——每条迁移只加不删（先加后删，删要等到没有代码再用它的下一版）。回滚后的旧代码对库里它不认识的更高版本视而不见（`ignore-migration-patterns: *:future`）。
 **只想跑迁移不发布**：`docker compose run --rm --no-deps app --migrate-only`。
+**改了部署脚本之后**：`DeployScriptTest` 用假 docker 逐环验证行为（脚本被 source 时只定义函数、不跑 main），`DeployGuardTest` 守八个环节的顺序；两个都要绿。
 
 # 运维手册 · 控制面（M6-⑤）
 
