@@ -51,6 +51,24 @@ class SchemaGuardTest extends AbstractPostgresTest {
     }
 
     @Test
+    @DisplayName("★ 每个视图都按调用者身份执行（security_invoker）：视图默认用主人的身份读表——主人是超级用户时静默绕过行级安全，不是超级用户时又静默看不见（判官就栽在后一种上，2026-09-21）")
+    void everyViewRunsAsItsCaller() {
+        List<String> views = jdbc.sql("""
+                        SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+                        WHERE n.nspname = 'public' AND c.relkind = 'v' ORDER BY 1
+                        """).query(String.class).list();
+        assertThat(views).as("守卫的匹配集合不能为空").hasSizeGreaterThanOrEqualTo(3);
+
+        List<String> runAsOwner = jdbc.sql("""
+                        SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+                        WHERE n.nspname = 'public' AND c.relkind = 'v'
+                          AND coalesce(array_to_string(c.reloptions, ','), '') !~ 'security_invoker=(true|on|1)'
+                        ORDER BY 1
+                        """).query(String.class).list();
+        assertThat(runAsOwner).as("没开 security_invoker、以主人身份读表的视图").isEmpty();
+    }
+
+    @Test
     @DisplayName("租户策略里的会话函数包成 (SELECT …)：每条语句求值一次，不是每行一次")
     void tenantPoliciesEvaluateSessionFunctionsOncePerStatement() {
         List<String> quals = jdbc.sql("""

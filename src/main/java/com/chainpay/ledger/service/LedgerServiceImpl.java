@@ -145,18 +145,19 @@ public class LedgerServiceImpl implements LedgerService {
     // ==================================================================
 
     /**
-     * 从 {@code account_balance} 视图取余额。
+     * 取余额：直接读物化的 {@code account.balance} 列（V2）。它永远等于分录求和，由判官的 {@code balance_consistency} 守。
      *
-     * <p>V2 之后这个视图直接读物化的 {@code account.balance} 列，不再对分录求和。
-     * <b>调用方一行都不用改</b> —— 这正是当初把余额封装进视图的目的。
+     * <p>2026-09-21 以前这里经过一个 {@code account_balance} 视图，它只是把这一列原样转发——多一层跳转，
+     * 还多一个要记得开 {@code security_invoker} 的对象（视图默认用主人的身份读表，会绕过行级安全），删了。
      *
      * <p>账户不存在时抛异常而不是返回 0：<b>"不存在"和"余额为零"是两件事</b>，
      * 把它们混成同一个返回值，等于把一个 bug 变成一个看起来正常的数字。
+     * 在行级安全之下，别人的账户读出来也是 0 行、同样报「不存在」——不透露那个 id 到底有没有。
      */
     @Override
     public BigDecimal balanceOf(long accountId) {
         return jdbcClient
-                .sql("SELECT balance FROM account_balance WHERE account_id = :id")
+                .sql("SELECT balance FROM account WHERE id = :id")
                 .param("id", accountId)
                 .query(BigDecimal.class)
                 .optional()

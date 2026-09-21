@@ -108,26 +108,6 @@ CREATE INDEX entry_transfer_idx ON entry (transfer_id);
 
 
 -- ----------------------------------------------------------------------------
--- 余额视图
---
--- M0 阶段余额是「算出来」的，不是存的 —— 永远正确，但数据量大了会慢。
---
--- 加分题：加一个物化的 account.balance 列，并写测试证明它永远等于这个视图。
--- 那一刻你就会明白，为什么「存余额」是所有账务系统 bug 的主要来源。
--- ----------------------------------------------------------------------------
-CREATE VIEW account_balance AS
-SELECT a.id                       AS account_id,
-       a.code,
-       a.currency,
-       a.kind,
-       a.allow_negative,
-       COALESCE(SUM(e.amount), 0) AS balance
-FROM account a
-         LEFT JOIN entry e ON e.account_id = a.id
-GROUP BY a.id, a.code, a.currency, a.kind, a.allow_negative;
-
-
--- ----------------------------------------------------------------------------
 -- 不变量视图 —— 你的判官
 --
 --     SELECT * FROM ledger_invariant WHERE total <> 0;

@@ -54,7 +54,8 @@ CREATE TABLE chain_head (
 -- 按金额分级的确认策略现在不做，这两列留着，做时不用改表。
 -- 被抛弃的行（status = ORPHANED）不出现：它们不在链上，谈不上确认。
 --
--- security_invoker 同 V6：视图以调用者身份执行，将来给链表加 RLS 也不会被视图绕过。
+-- security_invoker：视图以调用者身份执行，将来给链表加 RLS 也不会被视图绕过。视图默认用所有者的身份读底层表——
+-- 所有者是超级用户时静默绕过 RLS，不是超级用户时又静默看不见（判官就栽在后一种上，见 V22）。
 -- ----------------------------------------------------------------------------
 CREATE VIEW chain_transfer_confirmation WITH (security_invoker = true) AS
 SELECT l.id, l.token, l.from_address, l.to_address, l.value,

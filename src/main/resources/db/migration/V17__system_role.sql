@@ -24,7 +24,6 @@ END $$;
 GRANT USAGE ON SCHEMA public TO chainpay_system;
 
 GRANT SELECT, INSERT, UPDATE ON account, transfer, entry TO chainpay_system;
-GRANT SELECT ON account_balance TO chainpay_system;
 
 GRANT SELECT ON merchant TO chainpay_system;
 

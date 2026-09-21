@@ -4,6 +4,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.chainpay.support.AbstractPostgresTest;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -16,6 +22,9 @@ import org.springframework.jdbc.datasource.DriverManagerDataSource;
  * 扫描补丁（2026-09-09）：两个判官视图此前没授权给任何角色、没有 security_invoker，而 entry 是 FORCE RLS。
  * 它们「能查通」只因为开发库与测试库的属主恰好是超级用户；换成托管数据库的非超级用户属主，
  * 同一条语句静默返回 0 行、把坏账当平账。修法：判官以系统身份（BYPASSRLS）跑，且判官函数拒绝在看不全的身份下给结论。
+ *
+ * <p>2026-09-21 实测补：上面的修法还不够。判官函数查的是调用者，而视图默认用<b>主人</b>的身份读表——
+ * 把两个视图的主人换成受行级安全约束的角色，同一本坏账判官报 0 行。补 {@code security_invoker} 后主人是谁不再影响结论。
  */
 @SpringBootTest
 @DisplayName("扫描补丁 · 账本判官必须以能看到全部行的身份运行")
@@ -51,6 +60,56 @@ class LedgerJudgeTest extends AbstractPostgresTest {
             jdbc.sql("DELETE FROM entry WHERE transfer_id = :t").param("t", transferId).update();
             jdbc.sql("DELETE FROM transfer WHERE id = :t").param("t", transferId).update();
             jdbc.sql("DELETE FROM account WHERE id IN (:a, :b)").param("a", source).param("b", target).update();
+        }
+    }
+
+    @Test
+    @DisplayName("★ 判官视图的主人换成一个受行级安全约束的角色（托管数据库的样子）：判官照样看得见坏账——主人是谁不能影响结论")
+    void theJudgeStaysSightedWhenItsViewsAreOwnedByARowLimitedRole() throws SQLException {
+        // 整个实验在属主连接的一个事务里，最后回滚：建角色、改属主、坏账一起撤掉（PostgreSQL 的 DDL 也在事务里）
+        try (Connection c = DriverManager.getConnection(jdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
+             Statement s = c.createStatement()) {
+            c.setAutoCommit(false);
+            try {
+                long source = insertReturningId(s, "INSERT INTO account (code, currency, kind, allow_negative) VALUES ('judge-owner:source', 'USDT', 'ASSET', true) RETURNING id");
+                long target = insertReturningId(s, "INSERT INTO account (code, currency, kind, allow_negative) VALUES ('judge-owner:target', 'USDT', 'LIABILITY', false) RETURNING id");
+                long transfer = insertReturningId(s, "INSERT INTO transfer (idempotency_key, currency, amount, debit_account_id, credit_account_id, code) "
+                        + "VALUES ('judge-owner:lopsided', 'USDT', 7, " + source + ", " + target + ", 'INTERNAL') RETURNING id");
+                s.executeUpdate("INSERT INTO entry (transfer_id, account_id, currency, amount) VALUES (" + transfer + ", " + source + ", 'USDT', 7)");
+                assertThat(checksFoundAsSystem(s)).as("基线：视图的主人是超级用户，两个视图各自报得出这条单边分录")
+                        .contains("ledger_invariant", "balance_consistency");
+
+                s.execute("CREATE ROLE judge_view_owner NOLOGIN");                 // 不是超级用户、没有 BYPASSRLS：行级安全对它生效
+                s.execute("GRANT SELECT ON account, entry TO judge_view_owner");
+                s.execute("ALTER VIEW ledger_invariant OWNER TO judge_view_owner");
+                s.execute("ALTER VIEW balance_consistency OWNER TO judge_view_owner");
+
+                assertThat(checksFoundAsSystem(s)).as("换了主人之后判官不能变瞎：一行都没有正是「平账」的样子")
+                        .contains("ledger_invariant", "balance_consistency");
+            } finally {
+                c.rollback();
+            }
+        }
+    }
+
+    /** 以系统身份（BYPASSRLS）调判官，返回报出违规的检查名——逐个视图看，只修好一个也会被抓住。SET LOCAL 只活在当前事务里。 */
+    private static List<String> checksFoundAsSystem(Statement s) throws SQLException {
+        s.execute("SET LOCAL ROLE chainpay_system");
+        List<String> checks = new ArrayList<>();
+        try (ResultSet r = s.executeQuery("SELECT DISTINCT check_name FROM ledger_judge() ORDER BY 1")) {
+            while (r.next()) {
+                checks.add(r.getString(1));
+            }
+            return checks;
+        } finally {
+            s.execute("RESET ROLE");
+        }
+    }
+
+    private static long insertReturningId(Statement s, String sql) throws SQLException {
+        try (ResultSet r = s.executeQuery(sql)) {
+            r.next();
+            return r.getLong(1);
         }
     }
 

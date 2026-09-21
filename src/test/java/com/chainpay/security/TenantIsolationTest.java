@@ -92,20 +92,6 @@ class TenantIsolationTest extends AbstractPostgresTest {
     }
 
     @Test
-    @DisplayName("★ 透过 account_balance 视图查 —— 视图也挡得住")
-    void theBalanceViewIsAlsoFiltered() {
-        // 这条防的是一个静默绕过：PostgreSQL 的视图默认以**视图所有者**身份执行，
-        // 而所有者是超级用户 —— 于是直接查表被拦，透过视图查却畅通无阻。
-        // 而 LedgerServiceImpl.balanceOf() 读的正是这个视图，
-        // 也就是说不加 security_invoker，整套隔离在最常用的路径上是个大洞。
-        var visible = tenantScope.asMerchant(acmeId, () ->
-                appJdbc.sql("SELECT account_id FROM account_balance ORDER BY account_id")
-                        .query(Long.class).list());
-
-        assertThat(visible).containsExactly(acmeAccount);
-    }
-
-    @Test
     @DisplayName("★ 根本没调 asMerchant —— 什么都查不到，而不是什么都查得到")
     void forgettingTheTenantScopeEntirelySeesNothing() {
         // ★ 这条测试在 2026-08-31 的质询扫描后重写，值得记下来为什么 ★

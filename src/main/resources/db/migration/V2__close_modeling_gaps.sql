@@ -20,6 +20,10 @@
 --
 -- 顺带说明：这一列常被当成「性能优化」（把 O(分录数) 的求和变成 O(1) 读取）。
 -- 性能是副产品。它真正的价值是让不变量能写进数据库。
+--
+-- 读余额就直接读这一列（2026-09-21 起）。此前还有一个 account_balance 视图：V1 用它把分录求和当余额，
+-- 这一列物化后它只剩原样转发——多一层跳转，还多一个要记得开 security_invoker 的对象，删了。
+-- 「这一列永远等于分录求和」由下面的 balance_consistency 与判官守。
 -- ----------------------------------------------------------------------------
 ALTER TABLE account ADD COLUMN balance NUMERIC(38, 18) NOT NULL DEFAULT 0;
 
@@ -65,27 +69,6 @@ ALTER TABLE transfer ADD COLUMN code TEXT NOT NULL DEFAULT 'UNSPECIFIED';
 -- 是两回事——后者会让约束静默失效。
 -- ----------------------------------------------------------------------------
 ALTER TABLE transfer ADD COLUMN occurred_at TIMESTAMPTZ;
-
-
--- ----------------------------------------------------------------------------
--- 视图更新
---
--- 必须 DROP 而不能 CREATE OR REPLACE：
--- 旧的 balance 列是 COALESCE(SUM(...), 0)，类型是无约束的 numeric；
--- 新的是 account.balance，类型是 numeric(38,18)。
--- CREATE OR REPLACE VIEW 不允许改变已有列的类型，会报
--- "cannot change data type of view column"。
--- ----------------------------------------------------------------------------
-DROP VIEW account_balance;
-
-CREATE VIEW account_balance AS
-SELECT a.id AS account_id,
-       a.code,
-       a.currency,
-       a.kind,
-       a.allow_negative,
-       a.balance
-FROM account a;
 
 
 -- ----------------------------------------------------------------------------

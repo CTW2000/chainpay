@@ -18,8 +18,16 @@
 -- 修法：判官授权给 chainpay_system——它是唯一被**声明**能看全部行的身份（BYPASSRLS，SystemLedger 建池时核对）；
 -- 再包一个拒绝盲跑的函数：不是超级用户也没有 BYPASSRLS 就直接抛，绝不在看不全的身份下给出「0 处违规」。
 -- 不做成视图里的 WHERE 条件：一行都看不见时过滤器根本不会被求值，抛不出来。
+--
+-- 2026-09-21 实测补：上面两条不够。拒绝盲跑查的是**调用者**（current_user），而两个视图没开 security_invoker，
+-- 真正去读 account / entry 的是视图的**主人**——调用者能不能绕过行级安全，对视图里面不起作用。
+-- 把两个视图的主人换成一个受行级安全约束的角色（托管数据库的样子），同一本坏账、同样以 chainpay_system 调判官，
+-- 判官从报得出掉到 0 行（LedgerJudgeTest.theJudgeStaysSightedWhenItsViewsAreOwnedByARowLimitedRole）。
+-- 补上 security_invoker，视图按调用者的身份读表，主人是谁不再影响结论；SchemaGuardTest 守「每个视图都按调用者执行」。
 -- ----------------------------------------------------------------------------
 GRANT SELECT ON ledger_invariant, balance_consistency TO chainpay_system;
+ALTER VIEW ledger_invariant    SET (security_invoker = true);
+ALTER VIEW balance_consistency SET (security_invoker = true);
 
 CREATE FUNCTION ledger_judge()
     RETURNS TABLE (check_name TEXT, subject TEXT, detail TEXT)
@@ -42,7 +50,7 @@ BEGIN
         WHERE b.stored <> b.computed;
     RETURN QUERY
         SELECT 'negative_balance'::TEXT, a.code::TEXT, 'balance=' || a.balance::TEXT
-        FROM account_balance a
+        FROM account a
         WHERE a.balance < 0 AND NOT a.allow_negative;
 END
 $$;

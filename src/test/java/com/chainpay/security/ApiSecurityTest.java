@@ -553,7 +553,7 @@ class ApiSecurityTest extends AbstractPostgresTest {
     }
 
     private BigDecimal balanceOf(long accountId) {
-        return jdbc.sql("SELECT balance FROM account_balance WHERE account_id = :id")
+        return jdbc.sql("SELECT balance FROM account WHERE id = :id")
                 .param("id", accountId)
                 .query(BigDecimal.class).single();
     }

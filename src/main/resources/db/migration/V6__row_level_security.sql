@@ -38,7 +38,6 @@
 -- ----------------------------------------------------------------------------
 GRANT USAGE ON SCHEMA public TO chainpay_app;
 GRANT SELECT, INSERT, UPDATE ON account, transfer, entry TO chainpay_app;
-GRANT SELECT ON account_balance TO chainpay_app;
 
 -- 控制面（AdminService）也以这个角色跑：开户、发凭证、吊销、停用。
 -- merchant / api_credential 没有 RLS——它们本来就是跨租户的管理表。
@@ -51,27 +50,7 @@ GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO chainpay_app;
 
 
 -- ----------------------------------------------------------------------------
--- 二、视图必须以「调用者」身份执行
---
--- ★ 又一个静默绕过 ★
---
--- PostgreSQL 的视图默认以**视图所有者**的身份执行底层查询。
--- account_balance 的所有者是 chainpay（超级用户），所以：
---
---   直接查 account            → RLS 生效，只看得到自己的
---   透过 account_balance 查   → RLS 完全失效，看得到所有人的
---
--- 而 LedgerServiceImpl.balanceOf() 读的正是这个视图。
--- 不加这行，整套隔离会在「查余额」这条最常用的路径上开一个大洞。
---
--- security_invoker 是 PostgreSQL 15 引入的，让视图改用**调用者**的身份，
--- 底层表的 RLS 于是照常生效。
--- ----------------------------------------------------------------------------
-ALTER VIEW account_balance SET (security_invoker = true);
-
-
--- ----------------------------------------------------------------------------
--- 三、当前租户是谁
+-- 二、当前租户是谁
 --
 -- 从会话变量读。设置它的地方在 TenantScope（Java 侧），用的是
 -- set_config(..., is_local => true)，等价于 SET LOCAL —— 事务结束自动清掉。
@@ -127,7 +106,7 @@ COMMENT ON FUNCTION is_system_scope() IS
 
 
 -- ----------------------------------------------------------------------------
--- 四、开启 RLS
+-- 三、开启 RLS
 --
 -- ENABLE 让策略开始生效；FORCE 让策略**连表的所有者也管**。
 --
@@ -146,7 +125,7 @@ ALTER TABLE transfer FORCE  ROW LEVEL SECURITY;
 
 
 -- ----------------------------------------------------------------------------
--- 五、策略
+-- 四、策略
 --
 -- 账户：直接看 merchant_id。
 -- WITH CHECK 管写入，USING 管读取，两个都要 —— 只写 USING 的话，
