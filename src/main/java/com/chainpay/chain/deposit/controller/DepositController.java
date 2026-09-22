@@ -9,9 +9,9 @@ import com.chainpay.chain.deposit.service.DepositQueryService;
 import com.chainpay.chain.deposit.service.DepositQueryService.Balance;
 import com.chainpay.chain.wallet.EthAddress;
 import com.chainpay.common.web.ApiResponse;
+import com.chainpay.ledger.service.LedgerAmounts;
 import com.chainpay.security.filter.ApiKeyAuthFilter;
 import com.chainpay.security.service.TenantScope;
-import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -97,18 +97,14 @@ public class DepositController {
                                                 @RequestParam String token) {
         return ApiResponse.ok(tenantScope.asMerchant(merchantId, () -> {
             Balance b = queries.balance(token);
-            return new BalanceResponse(b.token(), b.symbol(), text(b.available()), text(b.pending()), text(b.frozen()));
+            return new BalanceResponse(b.token(), b.symbol(), LedgerAmounts.text(b.available()), LedgerAmounts.text(b.pending()), LedgerAmounts.text(b.frozen()));
         }));
     }
 
     private static DepositItem item(DepositRow r) {
-        return new DepositItem(r.token(), r.symbol(), EthAddress.checksummed(r.address()), text(r.amount()),
+        return new DepositItem(r.token(), r.symbol(), EthAddress.checksummed(r.address()), LedgerAmounts.text(r.amount()),
                 r.rawValue().toString(), r.status(), r.level(), r.confirmations(), r.blockNumber(), r.txHash(), r.logIndex(),
                 text(r.occurredAt()), text(r.creditedAt()));
-    }
-
-    private static String text(BigDecimal amount) {
-        return amount == null ? null : amount.toPlainString();
     }
 
     private static String text(Instant t) {

@@ -13,6 +13,7 @@ import com.chainpay.chain.rpc.Hex;
 import com.chainpay.chain.rpc.JsonRpcException;
 import com.chainpay.chain.rpc.RpcAuthException;
 import com.chainpay.chain.rpc.RpcFailure;
+import com.chainpay.ledger.service.LedgerAmounts;
 import com.chainpay.ledger.service.LedgerService.TransferCode;
 import com.chainpay.ledger.service.LedgerService.TransferCommand;
 import com.chainpay.ledger.system.SystemLedger;
@@ -183,7 +184,7 @@ public final class DepositPoster {
         }
         if (c.minDeposit().signum() > 0 && amount.compareTo(c.minDeposit()) < 0) {
             return new Verdict(DepositStatus.REJECTED_DUST, amount,
-                    "金额 " + amount.toPlainString() + " 低于代币最小入账额 " + c.minDeposit().toPlainString() + "，记录不入账", occurredAt);
+                    "金额 " + LedgerAmounts.text(amount) + " 低于代币最小入账额 " + LedgerAmounts.text(c.minDeposit()) + "，记录不入账", occurredAt);
         }
         Optional<Verdict> balance = balanceVerdict(c, amount, occurredAt);
         if (balance.isPresent()) {

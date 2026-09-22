@@ -9,6 +9,7 @@ import com.chainpay.chain.payout.repository.WithdrawalRepository.WithdrawalRow;
 import com.chainpay.chain.payout.service.WithdrawalService;
 import com.chainpay.chain.wallet.EthAddress;
 import com.chainpay.common.web.ApiResponse;
+import com.chainpay.ledger.service.LedgerAmounts;
 import com.chainpay.security.filter.ApiKeyAuthFilter;
 import com.chainpay.security.service.TenantScope;
 import java.math.BigDecimal;
@@ -31,12 +32,10 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/v1")
 public class WithdrawalController {
 
-    static final String ADDRESS = "0x[0-9a-fA-F]{40}";
-
-    public record RegisterAddressRequest(@NotBlank @Pattern(regexp = ADDRESS) String address, @Size(max = 64) String label) {}
+    public record RegisterAddressRequest(@NotBlank @Pattern(regexp = EthAddress.SHAPE) String address, @Size(max = 64) String label) {}
     public record AddressResponse(long id, String address, String label, String status, String createdAt) {}
-    public record WithdrawRequest(@NotBlank @Pattern(regexp = ADDRESS) String token, @NotBlank @Pattern(regexp = ADDRESS) String toAddress,
-                                  @NotBlank @Pattern(regexp = "\\d{1,20}(\\.\\d{1,18})?") String amount,
+    public record WithdrawRequest(@NotBlank @Pattern(regexp = EthAddress.SHAPE) String token, @NotBlank @Pattern(regexp = EthAddress.SHAPE) String toAddress,
+                                  @NotBlank @Pattern(regexp = LedgerAmounts.FITTING_DECIMAL) String amount,
                                   @NotBlank @Size(max = 128) String idempotencyKey) {}
     public record WithdrawalResponse(long id, String idempotencyKey, String token, String symbol, String toAddress, String amount, String rawValue,
                                      String status, String failureReason, String txHash, String createdAt, String updatedAt) {}
@@ -88,7 +87,7 @@ public class WithdrawalController {
     }
 
     private static WithdrawalResponse item(WithdrawalRow r) {
-        return new WithdrawalResponse(r.id(), r.idempotencyKey(), r.token(), r.symbol(), EthAddress.checksummed(r.toAddress()), r.amount().toPlainString(),
+        return new WithdrawalResponse(r.id(), r.idempotencyKey(), r.token(), r.symbol(), EthAddress.checksummed(r.toAddress()), LedgerAmounts.text(r.amount()),
                 r.rawValue().toString(), r.status(), r.failureReason(), r.txHash(), text(r.createdAt()), text(r.updatedAt()));
     }
 

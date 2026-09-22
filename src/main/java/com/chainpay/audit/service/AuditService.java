@@ -16,6 +16,7 @@ import com.chainpay.chain.rpc.BlockHeader;
 import com.chainpay.chain.rpc.ChainReader;
 import com.chainpay.chain.rpc.Hex;
 import com.chainpay.chain.rpc.JsonRpcException;
+import com.chainpay.ledger.service.LedgerAmounts;
 import com.chainpay.ledger.system.SystemLedger;
 import com.chainpay.ledger.system.TransientDbFailure;
 import java.math.BigDecimal;
@@ -153,8 +154,8 @@ public final class AuditService {
             if (d.transferAmount() == null) {
                 findings.add(new AuditFinding("DEPOSIT_LEDGER", AuditKind.MISSING_ON_CHAIN, subject, "有账本转账", "没有", "CREDITED 的入账没有账本转账"));
             } else if (d.transferAmount().compareTo(d.amount()) != 0) {
-                findings.add(new AuditFinding("DEPOSIT_LEDGER", AuditKind.AMOUNT_MISMATCH, subject, "账本转账 " + d.transferAmount().toPlainString(),
-                        "入账行 " + d.amount().toPlainString(), "入账行与账本转账的金额不同：有一边被改过"));
+                findings.add(new AuditFinding("DEPOSIT_LEDGER", AuditKind.AMOUNT_MISMATCH, subject, "账本转账 " + LedgerAmounts.text(d.transferAmount()),
+                        "入账行 " + LedgerAmounts.text(d.amount()), "入账行与账本转账的金额不同：有一边被改过"));
             }
         }
         for (Inflow in : read(r -> r.finalInflowsWithoutDeposit(f - lagBlocks))) {
@@ -179,8 +180,8 @@ public final class AuditService {
                         "CONFIRMED 的提现，上链的那次尝试其实 revert 了：结算错了"));
             }
             if (p.settleAmount() == null || p.settleAmount().compareTo(p.amount()) != 0) {
-                findings.add(new AuditFinding("PAYOUT_LEDGER", AuditKind.AMOUNT_MISMATCH, subject, "结算 " + p.amount().toPlainString(),
-                        String.valueOf(p.settleAmount()), "提现金额与结算转账金额不同"));
+                findings.add(new AuditFinding("PAYOUT_LEDGER", AuditKind.AMOUNT_MISMATCH, subject, "结算 " + LedgerAmounts.text(p.amount()),
+                        p.settleAmount() == null ? "没有结算转账" : LedgerAmounts.text(p.settleAmount()), "提现金额与结算转账金额不同"));
             }
             if (p.logStatus() == null || !"CANONICAL".equals(p.logStatus())) {
                 findings.add(new AuditFinding("PAYOUT_LEDGER", AuditKind.MISSING_ON_CHAIN, subject, "主分支上有交易 " + p.txHash() + " 的转账日志",

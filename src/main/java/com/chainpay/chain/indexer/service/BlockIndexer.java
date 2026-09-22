@@ -11,6 +11,7 @@ import com.chainpay.chain.rpc.BlockHeader;
 import com.chainpay.chain.rpc.ChainReader;
 import com.chainpay.chain.rpc.JsonRpcException;
 import com.chainpay.chain.rpc.RawLog;
+import com.chainpay.chain.wallet.EthAddress;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -172,7 +173,7 @@ public final class BlockIndexer {
      * 然后每一次 eth_getLogs 都是 Invalid params，窗口一路减到 1 块再停机——错误离它的原因隔了四层。
      */
     static String requireAddress(String address) {
-        if (address == null || !address.matches("0x[0-9a-fA-F]{40}")) {
+        if (!EthAddress.isWellFormed(address)) {
             throw new IllegalArgumentException("合约地址必须是 0x + 40 位十六进制，收到：" + address
                     + "（YAML 里的地址要加引号，否则会被当成整数）");
         }

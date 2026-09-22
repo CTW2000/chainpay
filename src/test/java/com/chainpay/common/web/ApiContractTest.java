@@ -15,6 +15,8 @@ import java.util.EnumSet;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
@@ -419,6 +421,52 @@ class ApiContractTest extends AbstractPostgresTest {
                 .formatted(accountId, otherAccountId));
         assertThat(r.statusCode()).isEqualTo(400);
         assertThat(r.body()).contains("\"code\":\"2004\"");
+    }
+
+    @Test
+    @DisplayName("★ 整数部分超过 20 位 —— 400 / 2004，而不是数据库报错落成 500 / 9001")
+    void integerPartBeyondTwentyDigitsIsRejectedNot500() {
+        // 2026-09-21 同镜像实例实测：1e20 回 500 + 9001，日志 DataIntegrityViolationException ← numeric field overflow。
+        // 9xxx 按段位约定是「服务端故障，可以重试」，照约定办事的客户端会一直重试一个永远不会成功的请求。
+        var r = signedPost("/api/v1/transfers", """
+                {"clientTransferId":"ip-1","currency":"USDT","amount":"100000000000000000000",
+                 "debitAccountId":%d,"creditAccountId":%d,"code":"INTERNAL"}"""
+                .formatted(accountId, otherAccountId));
+        assertThat(r.statusCode()).isEqualTo(400);
+        assertThat(r.body()).contains("\"code\":\"2004\"");
+    }
+
+    /**
+     * 2026-09-21：金额此前只有 {@code @NotBlank}，控制器拿到什么就 {@code new BigDecimal} 什么。
+     * {@code 1E-999999999} 一个请求打挂进程、一百万位的普通写法光解析就要 11 秒，都是从这里进来的。
+     * 边界只管「写法」：普通小数、两段各不超过 64 位；「范围」（20 位整数、18 位小数、大于 0）交给账本，错误码仍是 2004。
+     * 其中 {@code ٣} 是阿拉伯-印度数字的 3：BigDecimal 认所有文字的数字，正则的 {@code \d} 只认 ASCII 的 0–9。
+     */
+    @ParameterizedTest(name = "金额 [{0}] → 400 / 2001")
+    @ValueSource(strings = {"1E-5", "1e2", "1E+3", "+1", "-1", "1.", ".5", " 1", "1,000", "0x10", "NaN", "٣",
+            "10000000000000000000000000000000000000000000000000000000000000000",   // 65 位
+            "1E-100000000", "1E-999999999"})   // 这次的两个：修好之前前者回一个 100 MB 的报错，后者打挂进程
+    @DisplayName("★ 金额只收普通小数写法且长度封顶 —— 指数、正负号、空格、别的文字的数字、超长串都在边界 400 / 2001")
+    void amountMustBeAPlainDecimal(String amount) {
+        var r = signedPost("/api/v1/transfers", """
+                {"clientTransferId":"pf-1","currency":"USDT","amount":"%s",
+                 "debitAccountId":%d,"creditAccountId":%d,"code":"INTERNAL"}"""
+                .formatted(amount, accountId, otherAccountId));
+        assertThat(r.statusCode()).as(r.body()).isEqualTo(400);
+        assertThat(r.body()).contains("\"code\":\"2001\"");
+    }
+
+    @Test
+    @DisplayName("★ 一百万位的普通写法 —— 在解析之前就 400 / 2001（此前光 new BigDecimal 就要 11 秒）")
+    void aMillionDigitAmountIsRejectedBeforeParsing() {
+        // 请求体上限是 1 MB，这个金额刚好塞得进去。它是合法的普通写法，只加「写法」规则挡不住它，
+        // 挡住它的是两段各 64 位的长度上限——正则在解析之前跑，匹配 64 位之后就失败，不看剩下的。
+        var r = signedPost("/api/v1/transfers", """
+                {"clientTransferId":"md-1","currency":"USDT","amount":"%s",
+                 "debitAccountId":%d,"creditAccountId":%d,"code":"INTERNAL"}"""
+                .formatted("7".repeat(1_000_000), accountId, otherAccountId));
+        assertThat(r.statusCode()).isEqualTo(400);
+        assertThat(r.body()).contains("\"code\":\"2001\"");
     }
 
     @Test

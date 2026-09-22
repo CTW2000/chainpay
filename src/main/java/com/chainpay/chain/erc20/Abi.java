@@ -1,5 +1,6 @@
 package com.chainpay.chain.erc20;
 
+import com.chainpay.chain.wallet.EthAddress;
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.util.HexFormat;
@@ -30,7 +31,7 @@ public final class Abi {
     public static String encodeCall(String selector, String... addressArgs) {
         StringBuilder data = new StringBuilder(selector);
         for (String address : addressArgs) {
-            if (address == null || !address.matches("0x[0-9a-fA-F]{40}")) {
+            if (!EthAddress.isWellFormed(address)) {
                 throw new IllegalArgumentException("不是地址：" + address);
             }
             data.append(ADDRESS_PADDING).append(address.substring(2).toLowerCase());

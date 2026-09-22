@@ -1,7 +1,6 @@
 package com.chainpay.chain.payout.service;
 
 import com.chainpay.chain.deposit.service.DepositAddressService.UnsupportedTokenException;
-import com.chainpay.chain.erc20.TokenAmounts;
 import com.chainpay.chain.payout.domain.PayoutStatus;
 import com.chainpay.chain.payout.repository.WithdrawalRepository;
 import com.chainpay.chain.payout.repository.WithdrawalRepository.AddressRow;
@@ -11,6 +10,7 @@ import com.chainpay.chain.payout.repository.WithdrawalRepository.WithdrawalRow;
 import com.chainpay.chain.wallet.EthAddress;
 import com.chainpay.chain.wallet.HotWalletSigner;
 import com.chainpay.common.web.ErrorCode;
+import com.chainpay.ledger.service.LedgerAmounts;
 import com.chainpay.ledger.service.LedgerService;
 import com.chainpay.ledger.system.SystemLedger;
 import java.math.BigDecimal;
@@ -110,16 +110,21 @@ public class WithdrawalService {
         return PayoutStatus.QUEUED;
     }
 
-    /** 金额：正数、小数位不超过代币的 decimals（否则链上表示不了）、也不超过账本的 18 位。 */
+    /**
+     * 金额：正数、账本装得下、小数位不超过代币的 decimals（否则链上表示不了）。
+     * 「装得下」只在 {@link LedgerAmounts#requireFits} 判（2026-09-22 收口；此前这里只查了小数位，没查整数位）；
+     * decimals 是代币的规矩，留在这里。
+     */
     private static BigDecimal ledgerAmount(BigDecimal requested, int decimals) {
         if (requested == null || requested.signum() <= 0) {
             throw new WithdrawalRejectedException(HttpStatus.BAD_REQUEST, ErrorCode.INVALID_AMOUNT, "金额必须大于 0");
         }
-        int scale = requested.stripTrailingZeros().scale();
-        if (scale > decimals || scale > TokenAmounts.LEDGER_SCALE) {
-            throw new WithdrawalRejectedException(HttpStatus.BAD_REQUEST, ErrorCode.INVALID_AMOUNT, "小数位超过这种代币能表示的 " + Math.min(decimals, TokenAmounts.LEDGER_SCALE) + " 位");
+        LedgerAmounts.requireFits(requested,
+                reason -> new WithdrawalRejectedException(HttpStatus.BAD_REQUEST, ErrorCode.INVALID_AMOUNT, reason));
+        if (requested.stripTrailingZeros().scale() > decimals) {
+            throw new WithdrawalRejectedException(HttpStatus.BAD_REQUEST, ErrorCode.INVALID_AMOUNT, "小数位超过这种代币能表示的 " + decimals + " 位");
         }
-        return requested.setScale(TokenAmounts.LEDGER_SCALE);
+        return requested.setScale(LedgerAmounts.SCALE);
     }
 
     /**

@@ -4,6 +4,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.Locale;
+import java.util.regex.Pattern;
 import org.bouncycastle.math.ec.ECPoint;
 
 /**
@@ -17,7 +18,23 @@ import org.bouncycastle.math.ec.ECPoint;
  */
 public final class EthAddress {
 
+    /**
+     * 地址的形状：0x 加 40 位十六进制，十六进制部分大小写不限（大小写就是 EIP-55 的校验和）。
+     * 全项目只在这里写这一份（2026-09-22 收口，此前抄了六份；{@code SingleHomeGuardTest} 守着）：
+     * 请求记录与配置的 {@code @Pattern} 用这个字符串，代码里用 {@link #isWellFormed}。
+     * 存库的写法是另一件事——一律小写，由各表的 CHECK 约束守（{@code ^0x[0-9a-f]{40}$}）。
+     */
+    public static final String SHAPE = "0x[0-9a-fA-F]{40}";
+
+    /** 预编译一次：{@code String.matches} 每调一次都要现编一次正则，而索引器每条日志都要问。 */
+    private static final Pattern SHAPE_PATTERN = Pattern.compile(SHAPE);
+
     private EthAddress() {}
+
+    /** 形状对不对；不校验 EIP-55 校验和（十六进制部分全小写、全大写也是合法地址）。null 算不对。 */
+    public static boolean isWellFormed(String address) {
+        return address != null && SHAPE_PATTERN.matcher(address).matches();
+    }
 
     /** 从公钥算地址，返回 EIP-55 带校验和的写法。 */
     public static String fromPublicKey(ECPoint publicKey) {
@@ -28,7 +45,7 @@ public final class EthAddress {
 
     /** 校验形状并转成小写：存库一律小写（CHECK 约束要求），对外展示才用 {@link #checksummed}。 */
     public static String lowercase(String address) {
-        if (address == null || !address.matches("0x[0-9a-fA-F]{40}")) {
+        if (!isWellFormed(address)) {
             throw new IllegalArgumentException("不是地址：" + address);
         }
         return address.toLowerCase(Locale.ROOT);
@@ -36,7 +53,7 @@ public final class EthAddress {
 
     /** 给一个地址加上 EIP-55 校验和（输入大小写不限）。 */
     public static String checksummed(String address) {
-        if (address == null || !address.matches("0x[0-9a-fA-F]{40}")) {
+        if (!isWellFormed(address)) {
             throw new IllegalArgumentException("不是地址：" + address);
         }
         String lower = address.substring(2).toLowerCase(Locale.ROOT);

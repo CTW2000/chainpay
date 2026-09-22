@@ -2,6 +2,7 @@ package com.chainpay;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.chainpay.ledger.service.LedgerAmounts;
 import com.chainpay.support.AbstractPostgresTest;
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -66,6 +67,83 @@ class SchemaGuardTest extends AbstractPostgresTest {
                         ORDER BY 1
                         """).query(String.class).list();
         assertThat(runAsOwner).as("没开 security_invoker、以主人身份读表的视图").isEmpty();
+    }
+
+    @Test
+    @DisplayName("★ 每个带小数位的列都正好是账本自己的上限（2026-09-21）：常量改了或列改了都红——此前「18」散在四处，账本那份收紧成 17，全套测试一条不红")
+    void everyAmountColumnIsExactlyTheLedgersCapacity() {
+        // 带小数位的 numeric 一律当金额列（链上原始单位是 NUMERIC(78,0)，小数位 0，不在其中）。
+        // 哪天真要一个不是金额的小数列（比如百分比），在这里显式放行，而不是悄悄放宽规则。
+        String expected = "(%d,%d)".formatted(LedgerAmounts.INTEGER_DIGITS + LedgerAmounts.SCALE, LedgerAmounts.SCALE);
+        List<String> columns = jdbc.sql("""
+                        SELECT c.table_name || '.' || c.column_name || ' (' || c.numeric_precision || ',' || c.numeric_scale || ')'
+                        FROM information_schema.columns c
+                        JOIN information_schema.tables t ON t.table_schema = c.table_schema AND t.table_name = c.table_name
+                        WHERE c.table_schema = 'public' AND t.table_type = 'BASE TABLE'
+                          AND c.data_type = 'numeric' AND c.numeric_scale > 0
+                        ORDER BY 1
+                        """).query(String.class).list();
+        assertThat(columns).as("守卫的匹配集合不能为空：账本的三列必须在里面")
+                .anyMatch(c -> c.startsWith("transfer.amount "))
+                .anyMatch(c -> c.startsWith("entry.amount "))
+                .anyMatch(c -> c.startsWith("account.balance "));
+        assertThat(columns.stream().filter(c -> !c.endsWith(" " + expected)).toList())
+                .as("精度与小数位不是 LedgerAmounts 的 %s 的金额列", expected)
+                .isEmpty();
+    }
+
+    @Test
+    @DisplayName("★ 地址的形状在库里只写一份：只有 is_eth_address 里有这个正则，约束都调它（2026-09-22 收口，此前 8 个约束各抄一份）")
+    void addressShapeLivesOnlyInIsEthAddress() {
+        List<String> constraintsWithRegex = jdbc.sql("""
+                        SELECT conrelid::regclass || '.' || conname FROM pg_constraint
+                        WHERE contype = 'c' AND connamespace = 'public'::regnamespace AND pg_get_constraintdef(oid) LIKE '%{40}%'
+                        ORDER BY 1
+                        """).query(String.class).list();
+        assertThat(constraintsWithRegex).as("自己写着地址正则的约束（应改成调用 is_eth_address）").isEmpty();
+
+        List<String> functionsWithRegex = jdbc.sql("""
+                        SELECT proname FROM pg_proc
+                        WHERE pronamespace = 'public'::regnamespace AND prokind = 'f' AND pg_get_functiondef(oid) LIKE '%{40}%'
+                        ORDER BY 1
+                        """).query(String.class).list();
+        assertThat(functionsWithRegex).as("写着地址正则的函数只许有一个").containsExactly("is_eth_address");
+
+        // 存库的写法：一律小写（大写、短一位都不算）；NULL 放行、交给 NOT NULL 管——和原来 8 个 CHECK 的行为一样
+        assertThat(jdbc.sql("SELECT is_eth_address('0x' || repeat('a', 40))").query(Boolean.class).single()).isTrue();
+        assertThat(jdbc.sql("SELECT is_eth_address('0x' || repeat('A', 40))").query(Boolean.class).single()).isFalse();
+        assertThat(jdbc.sql("SELECT is_eth_address('0x' || repeat('a', 39))").query(Boolean.class).single()).isFalse();
+        assertThat(jdbc.sql("SELECT is_eth_address(NULL) IS NULL").query(Boolean.class).single()).isTrue();
+    }
+
+    @Test
+    @DisplayName("★ 每个地址类的列都有守：自带调用 is_eth_address 的 CHECK，或外键指向这样的列（2026-09-22：注资登记的 token 两样都没有）")
+    void everyAddressColumnIsGuarded() {
+        // 「地址类的列」按名字认：address、*_address、token、hot_wallet 的 text 列。起了别的名字的地址列这里认不出，要靠评审
+        String addressColumns = """
+                SELECT a.attrelid AS rel, a.attnum AS num, c.relname || '.' || a.attname AS name
+                FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid
+                WHERE c.relnamespace = 'public'::regnamespace AND c.relkind = 'r' AND a.attnum > 0 AND NOT a.attisdropped
+                  AND a.atttypid = 'text'::regtype AND (a.attname ~ '(^|_)address$' OR a.attname IN ('token', 'hot_wallet'))
+                """;
+        assertThat(jdbc.sql("SELECT count(*) FROM (" + addressColumns + ") cols").query(Long.class).single())
+                .as("守卫的匹配集合不能为空").isGreaterThanOrEqualTo(15L);
+
+        List<String> unguarded = jdbc.sql("WITH cols AS (" + addressColumns + """
+                        ), checked AS (
+                          SELECT conrelid AS rel, conkey[1] AS num FROM pg_constraint
+                          WHERE contype = 'c' AND cardinality(conkey) = 1 AND pg_get_constraintdef(oid) LIKE '%is_eth_address(%'
+                        ), referencing AS (
+                          SELECT f.conrelid AS rel, f.conkey[1] AS num FROM pg_constraint f
+                          JOIN checked ch ON ch.rel = f.confrelid AND ch.num = f.confkey[1]
+                          WHERE f.contype = 'f' AND cardinality(f.conkey) = 1
+                        )
+                        SELECT name FROM cols
+                        WHERE NOT EXISTS (SELECT 1 FROM checked WHERE checked.rel = cols.rel AND checked.num = cols.num)
+                          AND NOT EXISTS (SELECT 1 FROM referencing r WHERE r.rel = cols.rel AND r.num = cols.num)
+                        ORDER BY 1
+                        """).query(String.class).list();
+        assertThat(unguarded).as("既没有调用 is_eth_address 的 CHECK、也没有外键指向这样的列").isEmpty();
     }
 
     @Test

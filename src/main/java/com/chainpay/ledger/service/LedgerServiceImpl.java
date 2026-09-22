@@ -21,9 +21,6 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class LedgerServiceImpl implements LedgerService {
 
-    /** 数据库列 {@code NUMERIC(38,18)} 的小数位数。超过这个位数会被静默四舍五入。 */
-    private static final int MAX_SCALE = 18;
-
     private final JdbcClient jdbcClient;
 
     public LedgerServiceImpl(JdbcClient jdbcClient) {
@@ -122,8 +119,8 @@ public class LedgerServiceImpl implements LedgerService {
                 throw new LedgerException(
                         Reason.INSUFFICIENT_BALANCE,
                         "账户 %d 余额 %s，不足以支出 %s"
-                                .formatted(command.debitAccountId(), balance.toPlainString(),
-                                        command.amount().toPlainString()));
+                                .formatted(command.debitAccountId(), LedgerAmounts.text(balance),
+                                        LedgerAmounts.text(command.amount())));
             }
         }
 
@@ -177,16 +174,14 @@ public class LedgerServiceImpl implements LedgerService {
             throw new LedgerException(Reason.MISSING_TRANSFER_CODE, "业务类型 code 不能为空");
         }
         if (command.amount() == null || command.amount().signum() <= 0) {
-            throw new LedgerException(Reason.INVALID_AMOUNT, "转账金额必须为正数：" + command.amount());
+            throw new LedgerException(Reason.INVALID_AMOUNT, "转账金额必须为正数");
         }
-        // 小数位超过 18 位，数据库会静默四舍五入成 18 位 —— 用户以为转了
-        // 0.1234567890123456789，实际记的是别的数。必须在写入前拒绝，不能默默改人家的钱。
-        if (command.amount().stripTrailingZeros().scale() > MAX_SCALE) {
-            throw new LedgerException(
-                    Reason.INVALID_AMOUNT,
-                    "金额小数位超过 %d 位，拒绝四舍五入：%s"
-                            .formatted(MAX_SCALE, command.amount().toPlainString()));
-        }
+        // 装不下的在写库之前拒绝：小数位超过 18 位，数据库会静默四舍五入成 18 位 —— 用户以为转了
+        // 0.1234567890123456789，实际记的是别的数，不能默默改人家的钱；整数位超过 20 位，数据库报
+        // numeric field overflow，在 HTTP 上落成 500 + 9001「可以重试」。
+        // 判断与报错都在 LedgerAmounts.requireFits（2026-09-22 收口）：报错只说几位、不写金额——金额可以写成
+        // 1E-999999999，逐位写全是 10 亿个字符，此前写进报错时同镜像的实例实测一个请求就内存耗尽退出（2026-09-21）。
+        LedgerAmounts.requireFits(command.amount(), reason -> new LedgerException(Reason.INVALID_AMOUNT, reason));
         if (command.debitAccountId() == command.creditAccountId()) {
             throw new LedgerException(Reason.SAME_ACCOUNT, "借贷方不能是同一个账户");
         }

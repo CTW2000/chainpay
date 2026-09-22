@@ -1,9 +1,9 @@
 package com.chainpay.chain.indexer.service;
 
 import com.chainpay.chain.erc20.Erc20Calls;
-import com.chainpay.chain.erc20.TokenAmounts;
 import com.chainpay.chain.indexer.domain.ChainToken;
 import com.chainpay.chain.indexer.repository.ChainTokenRepository;
+import com.chainpay.ledger.service.LedgerAmounts;
 import java.util.OptionalInt;
 
 /**
@@ -36,9 +36,9 @@ public final class TokenRegistry {
             throw new IllegalArgumentException("链上问不到 " + token + " 的 decimals()：EIP-20 说它是 OPTIONAL。"
                     + "要登记就用 registerManually 手工填，并注明来源");
         }
-        if (decimals.getAsInt() > TokenAmounts.LEDGER_SCALE) {
+        if (decimals.getAsInt() > LedgerAmounts.SCALE) {
             throw new IllegalArgumentException("代币 " + token + " 的 decimals=" + decimals.getAsInt()
-                    + " 超过账本的 " + TokenAmounts.LEDGER_SCALE + " 位小数，装不下，拒绝登记");
+                    + " 超过账本的 " + LedgerAmounts.SCALE + " 位小数，装不下，拒绝登记");
         }
         String symbol = calls.symbol(token).orElse("?");
         ChainToken registered = new ChainToken(token, symbol, decimals.getAsInt(), "ACTIVE");
@@ -51,8 +51,8 @@ public final class TokenRegistry {
     /** 运营手工登记（链上问不到 decimals 的代币），必须注明来源。 */
     public ChainToken registerManually(String address, String symbol, int decimals, String note) {
         String token = BlockIndexer.requireAddress(address);
-        if (decimals < 0 || decimals > TokenAmounts.LEDGER_SCALE) {
-            throw new IllegalArgumentException("decimals 必须在 0 到 " + TokenAmounts.LEDGER_SCALE + " 之间：" + decimals);
+        if (decimals < 0 || decimals > LedgerAmounts.SCALE) {
+            throw new IllegalArgumentException("decimals 必须在 0 到 " + LedgerAmounts.SCALE + " 之间：" + decimals);
         }
         if (symbol == null || symbol.isBlank() || symbol.length() > Erc20Calls.MAX_SYMBOL_LENGTH) {
             throw new IllegalArgumentException("symbol 必须是 1 到 " + Erc20Calls.MAX_SYMBOL_LENGTH + " 个字符的代号，收到 "

@@ -1,5 +1,6 @@
 package com.chainpay.chain.indexer.config;
 
+import com.chainpay.chain.wallet.EthAddress;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
 import java.time.Duration;
@@ -32,7 +33,7 @@ public record ChainIndexerProperties(
         String rpcUrl,
         String auditRpcUrl,
         @NotBlank String chainName,
-        @NotBlank @Pattern(regexp = "0x[0-9a-fA-F]{40}", message = "必须是 0x 开头的 40 位十六进制地址") String tokenAddress,
+        @NotBlank @Pattern(regexp = EthAddress.SHAPE, message = "必须是 0x 开头的 40 位十六进制地址") String tokenAddress,
         @NotBlank String cursorName,
         @Min(1) int batchBlocks,
         Long startBlock,

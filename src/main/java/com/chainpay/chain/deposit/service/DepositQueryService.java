@@ -8,6 +8,7 @@ import com.chainpay.chain.deposit.service.DepositAddressService.UnsupportedToken
 import com.chainpay.chain.erc20.AmountOverflowException;
 import com.chainpay.chain.erc20.TokenAmounts;
 import com.chainpay.chain.wallet.EthAddress;
+import com.chainpay.ledger.service.LedgerAmounts;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.util.List;
@@ -47,7 +48,7 @@ public final class DepositQueryService {
         TokenRow chainToken = repository.findToken(normalized)
                 .orElseThrow(() -> new UnsupportedTokenException("代币未登记：" + normalized));
         BigDecimal available = repository.availableBalance(normalized)
-                .orElse(BigDecimal.ZERO.setScale(TokenAmounts.LEDGER_SCALE));
+                .orElse(BigDecimal.ZERO.setScale(LedgerAmounts.SCALE));
         BigInteger pendingRaw = repository.pendingRaw(normalized);
         return new Balance(normalized, chainToken.symbol(), available, toLedgerOrNull(pendingRaw, chainToken.decimals()), repository.frozenBalance(chainToken.symbol()));
     }

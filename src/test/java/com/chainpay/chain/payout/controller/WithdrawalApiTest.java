@@ -190,7 +190,9 @@ class WithdrawalApiTest extends AbstractDepositPostingTest {
         whitelist(DEST);
         long approveMe = Long.parseLong(field(withdraw(acmeSecret, "ak_acme", DEST, "1", "w-1").body(), "id"));
         long rejectMe = Long.parseLong(field(withdraw(acmeSecret, "ak_acme", DEST, "2", "w-2").body(), "id"));
-        assertThat(adminGet("/admin/v1/payouts/pending").body()).contains("\"id\":" + approveMe).contains("\"id\":" + rejectMe);
+        assertThat(adminGet("/admin/v1/payouts/pending").body()).contains("\"id\":" + approveMe).contains("\"id\":" + rejectMe)
+                // 金额的写法钉在这里（2026-09-22 收口前先钉）：此前由 SQL 的 ::text 写，收口后由 LedgerAmounts.text 写，输出必须一字不差
+                .contains("\"amount\":\"1.000000000000000000\"").contains("\"amount\":\"2.000000000000000000\"");
 
         HttpResponse<String> approved = adminPost("/admin/v1/payouts/" + approveMe + "/approve", "");
         HttpResponse<String> rejected = adminPost("/admin/v1/payouts/" + rejectMe + "/reject", "{\"reason\":\"收款人可疑\"}");

@@ -5,9 +5,11 @@ import com.chainpay.chain.payout.domain.PayoutStatus;
 import com.chainpay.chain.payout.repository.PayoutSendRepository;
 import com.chainpay.chain.wallet.EthAddress;
 import com.chainpay.common.web.ErrorCode;
+import com.chainpay.ledger.service.LedgerAmounts;
 import com.chainpay.ledger.system.SystemLedger;
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.slf4j.Logger;
@@ -31,11 +33,20 @@ public class PayoutApprovalService {
     }
 
     public List<Map<String, Object>> pending() {
-        return system.inTransaction(s -> s.jdbc().sql("""
-                        SELECT p.id, m.code AS merchant, t.symbol, p.to_address AS "toAddress", p.amount::text AS amount, p.created_at AS "createdAt"
+        List<Map<String, Object>> rows = system.inTransaction(s -> s.jdbc().sql("""
+                        SELECT p.id, m.code AS merchant, t.symbol, p.to_address AS "toAddress", p.amount, p.created_at AS "createdAt"
                         FROM payout p JOIN merchant m ON m.id = p.merchant_id JOIN chain_token t ON t.address = p.token
                         WHERE p.status = 'PENDING_APPROVAL' ORDER BY p.id
                         """).query().listOfRows());
+        // 金额写成字符串只经 LedgerAmounts.text（2026-09-22 收口）：此前这里用 SQL 的 ::text，是写法的第二份定义——输出碰巧一样，
+        // 哪天写法要改（比如去掉尾零），这一处会被漏掉
+        return rows.stream().map(PayoutApprovalService::withAmountAsText).toList();
+    }
+
+    private static Map<String, Object> withAmountAsText(Map<String, Object> row) {
+        Map<String, Object> view = new LinkedHashMap<>(row);
+        view.put("amount", LedgerAmounts.text((BigDecimal) row.get("amount")));
+        return view;
     }
 
     public void approve(long payoutId) {

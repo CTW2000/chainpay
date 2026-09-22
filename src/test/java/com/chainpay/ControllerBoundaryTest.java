@@ -6,6 +6,8 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -67,5 +69,36 @@ class ControllerBoundaryTest {
             }
         }
         assertThat(bodies).as("守卫的匹配集合不能是空的").isGreaterThanOrEqualTo(3);
+    }
+
+    /**
+     * 2026-09-21：转账接口的金额只有 {@code @NotBlank}，控制器拿到什么就 {@code new BigDecimal} 什么——
+     * {@code 1E-999999999}（12 个字符）一个请求让进程内存耗尽退出，一百万位的普通写法光解析就要 11 秒。
+     * 提现与限额接口一直有格式正则，只有转账这一处漏了，所以规矩由这条测试强制：控制器里每一个
+     * {@code new BigDecimal(x.y())}，{@code y} 都必须带 {@code LedgerAmounts} 里的某个正则（金额的规矩只在那里写一份）。
+     */
+    @Test
+    @DisplayName("★ 控制器解析的每个金额都带 LedgerAmounts 的格式校验；且扫描到的解析点不少于三个")
+    void everyAmountAControllerParsesIsFormatChecked() throws IOException {
+        Pattern parse = Pattern.compile("new BigDecimal\\(\\s*\\w+\\.(\\w+)\\(\\)\\s*\\)");
+        int sites = 0;
+        try (Stream<Path> files = Files.walk(Path.of("src/main/java"))) {
+            for (Path controller : files.filter(p -> p.toString().endsWith(".java") && p.toString().contains("/controller/")).toList()) {
+                String source = Files.readString(controller);
+                Matcher parsed = parse.matcher(source);
+                while (parsed.find()) {
+                    sites++;
+                    String component = parsed.group(1);
+                    // @Pattern 之后可以再跟别的注解，然后才是 String <名字>
+                    Pattern declared = Pattern.compile("@Pattern\\(regexp\\s*=\\s*LedgerAmounts\\.[A-Z_]+\\)"
+                            + "(\\s*@\\w+(\\([^)]*\\))?)*\\s*String\\s+" + component + "\\b");
+                    assertThat(declared.matcher(source).find())
+                            .as("%s：new BigDecimal(….%s()) 之前，%s 必须带 @Pattern(regexp = LedgerAmounts.…)",
+                                    controller, component, component)
+                            .isTrue();
+                }
+            }
+        }
+        assertThat(sites).as("守卫的匹配集合不能是空的").isGreaterThanOrEqualTo(3);
     }
 }

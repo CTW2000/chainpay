@@ -1,6 +1,6 @@
 package com.chainpay.chain.deposit.repository;
 
-import com.chainpay.chain.erc20.TokenAmounts;
+import com.chainpay.ledger.service.LedgerAmounts;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.sql.Types;
@@ -90,7 +90,7 @@ public class DepositQueryRepository {
     /** 本商户在这种币上冻着的钱（M4-④，账户 user:<code>:<SYM>:frozen）；没有冻结账户 = 0。 */
     public BigDecimal frozenBalance(String symbol) {
         return jdbc.sql("SELECT a.balance FROM account a JOIN merchant m ON m.id = a.merchant_id WHERE a.code = 'user:' || m.code || ':' || :s || ':frozen'")
-                .param("s", symbol).query(BigDecimal.class).optional().orElse(BigDecimal.ZERO.setScale(TokenAmounts.LEDGER_SCALE));
+                .param("s", symbol).query(BigDecimal.class).optional().orElse(BigDecimal.ZERO.setScale(LedgerAmounts.SCALE));
     }
 
     public Optional<BigDecimal> availableBalance(String token) {

@@ -2,12 +2,14 @@ package com.chainpay.ledger.controller;
 
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Pattern;
 import com.chainpay.common.web.ApiResponse;
 
 import com.chainpay.security.service.AccountAccessService;
 import com.chainpay.security.service.AccountAccessService.AuthorizedAccount;
 import com.chainpay.security.filter.ApiKeyAuthFilter;
 import com.chainpay.security.service.TenantScope;
+import com.chainpay.ledger.service.LedgerAmounts;
 import com.chainpay.ledger.service.LedgerService;
 import com.chainpay.ledger.service.LedgerService.TransferCode;
 import com.chainpay.ledger.service.LedgerService.TransferCommand;
@@ -52,11 +54,14 @@ public class TransferController {
      *                         JSON 里的数字在 JavaScript 里会被读成 double（双精度浮点），
      *                         而 0.1 + 0.2 在 double 里不等于 0.3。
      *                         币安和 OKX 的所有价格、数量字段也全是字符串，同一个原因。
+     *                         <b>字符串只收普通小数写法</b>（{@link LedgerAmounts#PLAIN_DECIMAL}，2026-09-21）：
+     *                         此前只有 {@code @NotBlank}，{@code 1E-999999999} 一个请求打挂进程、
+     *                         一百万位的数字光解析就 11 秒，都是从这里进来的。范围（20 位整数、18 位小数）仍由账本判，2004。
      */
     public record CreateTransferRequest(
             String clientTransferId,
             @NotBlank String currency,
-            @NotBlank String amount,
+            @NotBlank @Pattern(regexp = LedgerAmounts.PLAIN_DECIMAL) String amount,
             long debitAccountId,
             long creditAccountId,
             @NotBlank String code
@@ -132,7 +137,7 @@ public class TransferController {
             AuthorizedAccount account = accounts.requireOwned(merchantId, accountId);
             return new BalanceResponse(
                     String.valueOf(account.id()),
-                    ledger.balanceOf(account.id()).toPlainString());
+                    LedgerAmounts.text(ledger.balanceOf(account.id())));
         }));
     }
 }
