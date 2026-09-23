@@ -1,9 +1,10 @@
 # CLAUDE.md — chainpay
 
 这是一个**学习项目**。规约的目的不是产出效率，是**保证学习真的发生**。
+进度与下一步见 `LEARNING-PATH.md`；进行中的进程拆分见 `docs/knowledge/m6-process-split.md`。
 
 ---
-## 0. 分工（2026-08-13 由用户确定）
+## 0. 分工（用户定）
 
 **用户不写代码。** 用户的职责是搞清楚来龙去脉、每个细节在干什么、把握整体方向不出错。
 
@@ -23,25 +24,23 @@
 
 > 判据：解释是为了让用户能**独立判断**这段代码对不对，不是让用户相信它是对的。
 
-### 讲解的结构（2026-09-09 由用户定，硬要求）
+### 讲解的结构（用户定，硬要求）
 
-用户反馈：讲解时把代码里的字段和逻辑混在一起，看着费劲；重点常被一句话带过。这是学习项目，目的是让用户获得知识，尤其是基础知识。
-从此每一次讲解都按下面的顺序，**不跳层、不混层**：
+每一次讲解都按下面的顺序，**不跳层、不混层**：
 
 1. **先讲整体**：这一步在整个系统里的位置、要解决的问题、不做会怎样。这一层不出现任何字段名、类名、SQL。
-2. **再讲基础知识**：这一步用到的概念从零讲（数据库的、以太坊的、记账的、并发的），每个概念配一个能落地的例子。
-   重点不许一句话概括——要讲清「是什么、为什么、错了会怎样」，能给数字就给数字，能给失败场景就给失败场景。
+2. **再讲基础知识**：用到的概念从零讲（数据库的、以太坊的、记账的、并发的），每个概念配一个能落地的例子。
+   重点不许一句话概括——讲清「是什么、为什么、错了会怎样」，能给数字就给数字，能给失败场景就给失败场景。
 3. **再讲逻辑与流程**：用图（ASCII 流程图、状态图、表格）讲数据怎么流、状态怎么变、哪几道门各守什么。这一层仍然不贴代码。
 4. **最后单独讲代码**：只挑承重的几段，每段先说它在上面哪个位置、干什么，再贴代码，再逐段用大白话解释。
    字段名、类名、SQL 关键字第一次出现时要先说明它是什么，不能突然冒出来。
-5. 一段讲解只讲一件事；「为什么这么做」和「不这么做会怎样」都要展开成具体场景，不用一句话带过。
-6. **图的载体**（2026-09-09 由用户定）：复杂的东西——系统结构、多组件交互、状态机、并发时序、一笔钱或一笔交易的一生——
-   做成浏览器页面（Artifact，真正的流程图 / 状态图 / 结构图）配详细解释让用户看；简单的关系用 ASCII 图或表格在终端里讲。
-   **不把所有讲解都搬进浏览器**，那太费 token：一步最多一页，只装那一步里靠文字讲不清的部分。
+5. 一段讲解只讲一件事；「为什么这么做」和「不这么做会怎样」都要展开成具体场景。
+6. **图的载体**：复杂的东西（系统结构、多组件交互、状态机、并发时序、一笔钱或一笔交易的一生）做成浏览器页面（Artifact）配详细解释；
+   简单的关系用 ASCII 图或表格在终端里讲。**不把所有讲解都搬进浏览器**：一步最多一页，只装那一步里靠文字讲不清的部分。
 
 > 判据：读者不看代码也能复述这一步的逻辑；读到代码时，每一个名字都已经在前面被介绍过。
 
-## 1. 技术栈（不要擅自更换）
+## 1. 技术栈与结构（不要擅自更换）
 
 | 层 | 选型 | 版本 |
 |---|---|---|
@@ -54,74 +53,45 @@
 
 **版本相关的既有教训见 `README.md` 末尾**，改 pom 前先读。
 
-### 包结构（2026-08-31 重整）
-
-**顶层按功能分，包内按类型分**——和 flow-pay 同一套规矩，切换项目不用换脑子。
+### 包结构：顶层按功能分，包内按类型分
 
 ```
 com.chainpay
-├── common/web/          横切的对外契约：信封、错误码、异常处理、错误写出
-├── ledger/              账本领域（**没有 controller**：2026-09-22 删掉通用转账与按 id 查余额两个演示接口后，账本不再直接对外）
-│   ├── service/         ★ 账本核心，禁止 ORM（见下）
-│   └── system/          系统身份的账本入口 SystemLedger（独立角色 + 独立连接池，M3-⓪）；池与事务管理器是限定名 system 的非默认候选 bean（2026-09-15）
-├── merchant/            控制面：开户、发凭证、吊销、停用
-│   ├── controller/
-│   └── service/
-├── security/            认证、授权、限流、重放、加密
-│   ├── filter/          进业务代码之前跑的东西
-│   ├── service/         验签、归属校验、租户降权、限流、重放登记
-│   └── crypto/          AES-GCM
-├── audit/               对账（M5）：站在两节点都认的 finalized 块上比对链上事实与库内记录；service 五条检查、repository 只追加的 audit_run / audit_finding、controller GET/POST /admin/v1/audit
-├── ops/                 上线（M6）：health/ 三个健康指示器（索引器、热钱包、判官）只做判定，OpsHealthConfig 装配（两个连接池的健康与指标由 Boot 覆盖）；端点只在回环的管理端口；alert/ 定时看 work 组、变化时打 webhook；Migrate / AdminBootstrap 两个最小上下文的命令；role/ 进程角色（进程拆分 ①）：恰好一个 web / worker，禁用名单上的凭证一出现就在创建任何 bean 之前拒绝启动
-├── admin/               控制面的门（M6-⑤）：管理员、短期会话、敏感操作再认证、管理操作审计；security/filter/AdminAuthFilter 认人，admin/web 的拦截器认操作
-└── chain/               只读上链（M2）
-    ├── rpc/             JSON-RPC 客户端、ChainReader、十六进制、区块头与日志原文
-    ├── erc20/           Transfer 事件解码、ABI 编解码与 eth_call 问合约、金额换算
-    ├── wallet/          收款地址派生（M3-①）：Keccak/EIP-55、Base58Check、BIP-32 公钥派生；私钥数学只给 XpubTool 与测试
-    ├── deposit/         收款（M3）：config 装配（配了 xpub 才生效）、service 分配与入账、repository、domain、controller 商户接口
-    ├── payout/          付款（M4）：domain 状态机（PayoutStatus / PayoutTxStatus 显式转换表）、service 三笔账本流（PayoutLedger）、发送任务（PayoutSender / FeePolicy，含加价）与追踪任务（PayoutTracker：回执、FINAL 结算、重组、丢弃）、repository 热钱包行、发送用的提现与尝试、商户连接上的白名单与申请（WithdrawalRepository）、config 装配（设了私钥才装签名器；私钥 + 主节点都有才装发送任务）、controller 商户提现接口与管理核准接口（M4-④）
-    └── indexer/         索引器（2026-09-02 拆分：20 个文件按类型分四组）
-        ├── service/     BlockIndexer、ChainHeadTracker、ReorgRecovery、ChainIndexerScheduler 及它们抛的异常；四个写入类 BatchWriter / ChainHeadWriter / ReorgWriter / ReconcileWriter（事务那一段，注解，2026-09-15）
-        ├── repository/  四张表的 SQL：书签、事件、链头、重组审计
-        ├── domain/      record 与 enum：书签、链头、批结果、轮询结果
-        ├── config/      装配（配了节点地址才生效）与配置
-        └── controller/  只读的状态接口 GET /admin/v1/indexer
+├── common/web/      对外契约：信封、错误码、异常处理
+├── ledger/          账本（不直接对外）
+│   ├── service/     ★ 账本核心
+│   └── system/      系统身份的入口 SystemLedger；池与事务管理器是限定名 system 的非默认候选 bean
+├── merchant/        控制面：开户、发凭证、吊销、停用
+├── security/        filter（进业务代码之前）、service（验签、租户降权、限流、重放）、crypto（AES-GCM）
+├── admin/           管理员、短期会话、敏感操作再认证、审计（AdminAuthFilter 认人，拦截器认操作）
+├── audit/           对账：五条检查，只追加的 audit_run / audit_finding
+├── ops/             health（指示器只做判定）、alert（看 work 组、变化时打 webhook）、role（进程角色守卫）、Migrate / AdminBootstrap（一次性命令）
+└── chain/
+    ├── rpc/         JSON-RPC 客户端、ChainReader、十六进制、区块头与日志原文
+    ├── erc20/       Transfer 解码、ABI、eth_call、金额换算
+    ├── wallet/      收款地址派生（Keccak / EIP-55、Base58Check、BIP-32 公钥派生）；私钥数学只给离线工具与测试
+    ├── deposit/     收款：分配地址、入账、商户接口
+    ├── payout/      付款：状态机、三笔账本流、发送与追踪任务、白名单与申请、商户与管理接口
+    └── indexer/     索引器：service（含四个写入类）、repository、domain、config、controller（只读状态）
 ```
 
-**为什么不是纯按类型分**（`controller/` `service/` 各一个大包）：
-那样 `AdminService` 会和 `RateLimiter` 放在一起——两个毫不相干的东西挨着，
-而一个功能的相关文件散在三四个包里。改一个功能要同时开好几个目录。
+纯按类型分，一个功能的文件散在三四个包里；纯按功能分，一个包里混着入口、服务、工具，看目录看不出谁调谁。
 
-**为什么也不是纯按功能分**（一个包里塞 controller + service + filter）：
-这正是重整前的状态，`api/auth/` 里 8 个文件混着过滤器、服务、加密工具三类东西，
-看目录看不出哪个是入口、哪个是被调用的。
+### 收口按概念，不按层（用户定）
 
-**收口按概念，不按层**（2026-09-21 用户定）：同一个事实在两处以上用到，就给它一个以**概念**命名的家，
-放在定义这个事实的包里。例：金额「装得下多大、对外怎么写」只在 `ledger/service/LedgerAmounts`——金额列的类型是账本定的，
-对外格式的正则就是容量写成文字，两者同住一个文件。不按层各放一份（当天先把正则拆到 `common/web` 的另一个类，
-用户叫停：这样收口的类会散落各处），也不建全局 `Constants` 大杂烩（人人依赖它、为不相干的原因改它、没有主人）。
-另一个概念各有各的家、只依赖这里：链上原始单位按 decimals 换算留在 `chain/erc20/TokenAmounts`。
-**收口要配守卫**：一个文件挡不住下一个人再抄一份，要有测试把收口点和它的每个使用处绑住。
-现有的家（2026-09-22 用户定「都一起收」）：**金额** `ledger/service/LedgerAmounts`——容量、对外写法的两个正则、
-`requireFits`（装不装得下只在这里判，账本入口 / 链上换算 / 提现申请各给各的异常）、`text`（金额写成字符串只经这里，先判装得下）；
-**地址** `chain/wallet/EthAddress`——`SHAPE`（给注解）、`isWellFormed`（给代码）、`lowercase`（存库）、`checksummed`（对外）；
-**库里的地址形状**（存库一律小写，和 Java 的输入写法是两件事）只在函数 `is_eth_address`（V28），8 个 CHECK 都调它，
-每个地址类的列要么自带这个 CHECK、要么外键指向这样的列（V28 顺手给注资登记的 `token` 补了外键）。
-**密钥形态的变量名**（2026-09-23，进程拆分 ①）只在 `tools/image-check.sh` 那一行正则——它在生产里按这个名单逐个按值扫描镜像；Java 测试经 `support/SecretNames` 从脚本里读（此前 `ContainerGuardTest` 抄了一份，两份一起漏了告警地址与测试探针的节点地址），`EnvInventoryTest` 把它和 env 样例的变量清单绑住。
-「只许在家里出现」的规则集中在 `SingleHomeGuardTest`，一条规则守一个家，再收口一个概念就在那里加一条；
-还有两类绑定各在原处：`SchemaGuardTest`（金额容量 ↔ 每个带小数位的列）、`ControllerBoundaryTest`（控制器解析的金额 ↔ 格式正则）。
+同一个事实在两处以上用到，就给它一个以**概念**命名的家，放在定义这个事实的包里；不按层各放一份，也不建全局 `Constants` 大杂烩。
+**收口要配守卫**：一个文件挡不住下一个人再抄一份，要有测试把收口点和它的每个使用处绑住。现有的家：
+
+- **金额** `ledger/service/LedgerAmounts`：容量（18 / 20 位）、对外写法的两个正则、`requireFits`（装不装得下只在这里判）、`text`（金额写成字符串只经这里）。链上原始单位按 decimals 换算是另一个概念，家在 `chain/erc20/TokenAmounts`。
+- **地址** `chain/wallet/EthAddress`：`SHAPE`（给注解）、`isWellFormed`（给代码）、`lowercase`（存库）、`checksummed`（对外）。**库里的地址形状**只在函数 `is_eth_address`，地址类的列要么自带调它的 CHECK、要么外键指向这样的列。
+- **密钥形态的变量名**：只在 `tools/image-check.sh` 那一行正则（它在生产里按这个名单按值扫描镜像）；Java 测试经 `support/SecretNames` 读。
+
+守卫：`SingleHomeGuardTest`（一条规则守一个家）、`SchemaGuardTest`（金额容量 ↔ 每个带小数位的列）、`ControllerBoundaryTest`（控制器解析的金额 ↔ 格式正则）、`EnvInventoryTest`（env 样例 ↔ 密钥名单 ↔ 禁用名单）。
 
 ### 账本层禁止 ORM
 
-**`com.chainpay.ledger.service` 下只允许 `JdbcClient` + 手写 SQL。**
-
-范围写成 `.service` 而不是整个 `ledger` 包，原本是为了把 `ledger.controller` 排除在外（它只翻译 HTTP，不做数据访问）。
-**那个包 2026-09-22 已经整个删掉**，所以今天 `ledger` 包下只有 `service` 与 `system`，两者都在这条规则里。
-
-理由：账本是唯一不能错的地方，抽象越薄越好。ORM 的隐式行为
-（几条 SQL、加不加锁、插件拦截）是 flow-pay 已经付过学费的坑。
-
-M3 之后的业务层可以引入 ORM，但要显式讨论并记录取舍。
+**`com.chainpay.ledger`（`service` 与 `system`）下只允许 `JdbcClient` + 手写 SQL。**
+账本是唯一不能错的地方，抽象越薄越好；ORM 的隐式行为（几条 SQL、加不加锁、插件拦截）是 flow-pay 付过学费的坑。其它业务层要引入 ORM，先显式讨论并记录取舍。
 
 ---
 
@@ -135,127 +105,163 @@ M3 之后的业务层可以引入 ORM，但要显式讨论并记录取舍。
 SELECT * FROM ledger_judge();   -- 以 chainpay_system 身份跑；必须 0 行
 ```
 
+判官只在能看到全部行的身份（BYPASSRLS 或超级用户）下给结论，其余身份直接拒绝。每个测试结束时三个判官自动核一次账（`AbstractPostgresTest`）。
+
 ### 能让数据库守的，不要交给应用
 
-约束（`UNIQUE` / `CHECK` / `FK` / `NOT NULL`）写进 schema，不写进 Java。
-应用代码会被绕过（新接口、手工 SQL、并发路径），约束不会。
+约束（`UNIQUE` / `CHECK` / `FK` / `NOT NULL`）写进 schema，不写进 Java。应用代码会被绕过（新接口、手工 SQL、并发路径），约束不会。
+**幂等尤其如此**：靠 `UNIQUE` 约束，不靠「先 SELECT 查一遍」——两个线程可以同时查到"不存在"。
+**账本只追加**：两个角色对 `transfer` / `entry` 都没有 UPDATE 与 DELETE，`account` 只能改 `balance` 一列（`SchemaGuardTest` 守）。
 
-**幂等尤其如此**：靠 `UNIQUE` 约束，不靠「先 SELECT 查一遍」——
-后者在并发下必然失败，两个线程可以同时查到"不存在"。
+### 数据库身份与作用域
 
-### 数据库身份与作用域（2026-08-31 定）
-
-应用以**普通角色** `chainpay_app` 连库（不是超级用户、不是表的所有者），RLS 对它无条件生效。
-角色由 `db/init/01-roles.sql` 建；Flyway 以属主跑迁移。**不要为迁就任何特权角色写代码。**
-
-两种作用域，默认哪个都不设 = 一行都看不到（fail-closed）：
+应用以**普通角色** `chainpay_app` 连库（不是超级用户、不是属主），RLS 对它无条件生效；角色由 `db/init/01-roles.sql` 建，Flyway 以属主跑迁移。
+**不要为迁就任何特权角色写代码。** 两种作用域，默认哪个都不设 = 一行都看不到（fail-closed）：
 
 | | 谁用 | 看到什么 | 权限来自 |
 |---|---|---|---|
 | `TenantScope.asMerchant(id, …)` | HTTP 控制器 | 只有该商户的行 | 会话变量（同一条应用连接） |
-| `SystemLedger.inTransaction(…)` | M3 入账、结算、M4 出账、M0 账本测试的脚手架 | 全部行 | **连接身份**：独立角色 `chainpay_system`（BYPASSRLS，非超级用户，非属主）+ 独立连接池 |
+| `SystemLedger.inTransaction(…)` | 入账、结算、出账、对账、控制面、账本测试的脚手架 | 全部行 | **连接身份**：独立角色 `chainpay_system`（BYPASSRLS，非超级用户，非属主）+ 独立连接池 |
 
-**第三种（`TenantScope.asSystem`，会话变量 `chainpay.system = on` 放行策略）已于 M4-⓪（2026-09-09）删除**，V21 同时把五张表策略里的 `is_system_scope()` 分支拆掉、函数删掉：
-从此没有任何一个会话变量能打开整库，`PayoutSchemaTest.theSessionVariableDoorIsGone` 守着（应用连接上 set_config 之后仍一行看不到）。
+- 没有任何会话变量能打开整库（`PayoutSchemaTest.theSessionVariableDoorIsGone`）。但商户号这个会话变量是连接自己设的：RLS 挡的是「代码忘了限定商户」，挡不住一个已被控制的连接——所以强凭证不能放在对外的进程里（见「进程角色」）。
+- 开了 RLS 的表一律 FORCE；策略里的会话函数包成 `(SELECT …)`，每条语句只算一次；每个视图都按调用者执行（`security_invoker`——否则视图用主人的身份读表，换一个受行级安全约束的主人，判官就静默报 0 行）。`SchemaGuardTest` 守这三条。
+- `SystemLedger` 建池即自检（不是 BYPASSRLS、或是超级用户 = 拒绝启动，并跑一次判官）；绑在系统连接上的 `JdbcClient` 与账本只在回调的 `Session` 里可见；系统身份对账本同样只追加。
+- 系统池与事务管理器是 `@Bean(defaultCandidate = false)` + `@Qualifier("system")`（`SystemLedgerConfig`）。**这两个 `defaultCandidate = false` 是承重墙**：去掉池那个，Boot 对主数据源的自动配置整体退让，应用侧的 `JdbcClient` 悄悄连成系统身份（读会绕过租户隔离）；去掉事务管理器那个，`asMerchant` 的事务开在系统池上，租户变量设不上。`SystemPoolBeansTest` 抓得住两者。
+- 系统侧写 `@Transactional("system")` 会和 `inTransaction` 叠在同一个事务里；用到系统身份的源文件里，`@Transactional` 必须写明限定名（`SystemTransactionalQualifierTest`）。controller 包不得引用系统身份的入口与两个 bean（`ControllerBoundaryTest` 扫源码）。
 
-**M3-⓪（2026-09-06）兑现了那句承诺**：系统权限是连接身份，不是一个开关。`SystemLedger` 建池即自检
-（不是 BYPASSRLS、或者是超级用户 = 拒绝启动），事务边界由它自己的模板给（手工 `new` 的 `LedgerServiceImpl`
-上的 `@Transactional` 没有代理，形同虚设），账本只在回调里可见。V17 的 GRANT 里没有 DELETE：账本对系统身份同样只追加。
-~~故意不做成第二个 `DataSource` / `JdbcClient` bean~~（2026-09-15 改判，见下一段）：池与事务管理器现在是 bean，但声明为 `defaultCandidate = false`，Boot 4.1 下主连接的自动配置因此不退让（实测）；绑在系统连接上的 `JdbcClient` 与账本仍不是 bean，只在回调里可见。
-`ControllerBoundaryTest` 扫源码断言 `controller` 包既不引用 `asSystem` 也不引用 `SystemLedger`（不引 ArchUnit 依赖，规则的形状就是「某个包里不出现某个字符串」）。
+### 进程角色（进程拆分进行中）
 
-**薄实现 vs Boot 官方双数据源（2026-09-07 定：先不换）**：`SystemLedger` 靠**类型**守事务边界与越权出口（拿不到 `Session` 就拿不到账本），
-官方做法靠**限定名字符串**（`@Transactional("systemTx")`、`@Qualifier("system")`，忘了写就静默错）。按「能靠结构保证的，不要靠纪律保证」，前者不是权宜之计。
-**回来换的条件**（任一命中即评估；前两条同时命中即换）：
-① 系统侧超过三个服务类，且 `Session` 开始被当参数一层层往下传；
-② 系统侧需要传播语义：`REQUIRES_NEW`、提交后再发事件、嵌套回滚；
-③ 上线（M6）需要两个池的健康检查与指标进监控——只命中这一条时手工给 Hikari 绑 Micrometer，不换。**M6-⓪（2026-09-14）只命中了这一条，按此办：`SystemLedger.ping()` / `bindMetrics()`，没换。**
-换法：两个 `DataSource` / 事务管理器 / `JdbcClient` 按官方方式声明，应用侧全部 `@Primary`，现有代码不动；`SystemLedger` 保留外形只换内脏，仍是边界测试守的那个类型；
-加一条源码扫描测试「系统包里的 `@Transactional` 必须带限定名」；今天「回调抛异常整体回滚」那条测试换完必须仍绿。
+- 同一个镜像起成 `web`（对外接商户请求）/ `worker`（定时任务、控制面、重钥匙）两种常驻进程，`SPRING_PROFILES_ACTIVE` **恰好一个**，没给或两个都给就拒绝启动。
+- 每个角色一张禁用名单（`ops/role/ProcessRole`：环境变量名 + 配置键 + 它能干什么），出现就拒绝启动，报错只写变量名。「有没有」与 `@ConditionalOnProperty` 同口径：非空白、不是 false，解析不出的占位符算没配。
+- 守卫是静态、最高优先级的 BeanFactoryPostProcessor，在造任何 bean 之前核对。写成普通 bean 就晚了：应用已经在建连接。一次性命令（`--migrate-only`、`--create-admin`）不属于任何角色，守卫不管。
+- 名单上的名字必须真实存在：`ProcessRoleBootTest` 起真应用、逐项设运维真会设的环境变量（从名单派生的单元测试查不出名单里的拼写错误）；`EnvInventoryTest` 让 env 样例里每个变量都有归属。
+- 拆服务（第 ⑥ 步）之前，compose 唯一的 `app` 以 `worker` 身份跑，测试基类激活 `test` + `worker`。九条取舍、步骤与进度见 `docs/knowledge/m6-process-split.md`。
 
-**2026-09-15 用户改判：换。** 条件没有同时命中（① 只中一半：系统侧 8 个类，`Session` 只在入账任务内部往下传一层；② 没中），用户的理由是项目会越来越大、越早换越便宜，并想让两个池都走 Boot 标准的健康检查与指标（M6-⓪ 已手工接过，这次交给 Boot）。**实际换法比上面写的轻**：两个 bean 都是 `@Bean(defaultCandidate = false)` + `@Qualifier("system")`（`SystemLedgerConfig`），Boot 4.1 实测主数据源、主事务管理器、`JdbcClient`、`TransactionTemplate` 照常自动配置，应用侧一行没动、不需要 `@Primary`；Boot 的 `db` 健康项变成组合项（子项 `dataSource` / `systemDataSource`），`hikaricp.*` 指标自动覆盖系统池，手写的 `SystemDbHealthIndicator`、`ping()`、`bindMetrics()` 退役。`SystemLedger` 外形不变（`inTransaction`、`Session` 只在回调里；启动自检照旧），模板用的就是容器里那个 system 事务管理器，所以系统侧以后写 `@Transactional("system")` 会和 `inTransaction` 叠在同一个事务里。守卫：`SystemPoolBeansTest`（按类型注入拿到的是主池、两种写法同一条连接、外层失败账本写入回滚）、`SystemTransactionalQualifierTest`（在代码里用到 SystemLedger 的源文件，`@Transactional` 必须写明限定名）、`ControllerBoundaryTest` 加扫限定名与两个 bean 名。拆墙实测（临时拷贝里各拆一处，跑守卫与收款地址分配测试）：系统池去掉 `defaultCandidate = false` → 容器里只剩 `systemDataSource`，Boot 对主数据源的自动配置整体退让，应用侧的 `JdbcClient` 悄悄连成了系统身份——写入因系统角色没有授权报 `BadSqlGrammarException`，读取则会带着 BYPASSRLS 绕过租户隔离（后半句按角色定义推出，实验没走到那一步）；事务管理器去掉它 → 主事务管理器退让，`asMerchant` 的事务开在系统池上，应用连接上的 SQL 不在事务里、租户变量设不上，第一次插入账户就被 RLS 拒绝。两处都由 `SystemPoolBeansTest` 的第一条抓住。**这两个 `defaultCandidate = false` 是承重墙**：删掉任何一个都不是「少了个优化」，而是应用侧的身份或事务被悄悄换掉。
+### 事务的两种写法
 
-### 事务的两种写法（2026-09-14 定）
+- **容器创建的服务用 `@Transactional`**（`TenantScope`、`LedgerServiceImpl`、`AdminService`、`DepositAddressService`、索引器的四个写入类……）。注解靠代理生效，三条纪律：
+  类与带注解的方法不能 final（final 类启动失败；final 方法启动只打一行 WARN，调用时字段全是 null）；不能 this 自调用；容器外 `new` 的实例没有事务（后两条完全静默）。
+  删掉注解本身也静默（外层还有事务时测试照绿），所以守卫测试钉住「容器给的是代理、方法带 REQUIRED、类与方法都不是 final」（`DepositAddressServiceTest`、`IndexerWritersTransactionalTest`）。
+- **`TransactionTemplate` 只剩 `SystemLedger`**：它本身就是事务边界。
+- **网络在事务外、写库在事务里**的类（索引器）：事务那一段搬进写入类（`BatchWriter` / `ChainHeadWriter` / `ReorgWriter` / `ReconcileWriter`），网络那一侧留在原类。
+  测试用 `IndexerWriters`（`TransactionalProxy` 给 new 出来的对象套上和容器同样的事务代理）。后三个写入类的注解被删，只有守卫测试发现得了。
+- 两种写法能叠加靠传播方式 REQUIRED：外层开的事务，内层直接加入。
 
-- **容器创建的服务用 `@Transactional`**：`TenantScope`、`LedgerServiceImpl`、`AdminService`，2026-09-14 从手工传入模板改过来的 `DepositAddressService`，以及 2026-09-15 从索引器四个类里拆出来的写入类 `BatchWriter` / `ChainHeadWriter` / `ReorgWriter` / `ReconcileWriter`（用户选：项目变大后，每个类手工传模板、`new TransactionTemplate` 散在各处更难维护；接受多出四个类）。注解靠代理生效，代价是三条纪律，响的程度不同：类与带注解的方法不能 final（final 类启动失败；final 方法启动只打一行 WARN，调用时方法体跑在代理对象上、字段全是 null，`DepositAddressService` 第一行就空指针）；不能通过 this 自调用、容器外 new 的实例没有事务（这两条不报错，是真静默）。**删掉注解本身也静默**：调用方外面包着 asMerchant 的事务，拆墙实测其余 9 条测试全绿——所以 `DepositAddressServiceTest` 的守卫测试钉住「容器给的是代理、方法带 REQUIRED、类与方法都不是 final」。
-- **仍用 `TransactionTemplate` 的**：只剩 `SystemLedger`（它本身就是事务边界；模板里的事务管理器 2026-09-15 起是容器里限定名 system 的 bean，系统侧也可以写 `@Transactional("system")`，与 `inTransaction` 叠在同一个事务里）。
-- **索引器怎么换的**（2026-09-15）：注解的边界是「一个方法」，而这四个类的方法里网络在前、事务只包最后一段——所以把事务那一段各自搬进一个写入类，网络那一侧留在原类、构造时收写入类（只在事务里用的仓库参数一并去掉）。测试直接 new 网络那一侧，写入类用 `IndexerWriters` 造：`TransactionalProxy` 给 new 出来的对象套上和容器同一个 `TransactionInterceptor`，事务管理器可以指定——「数据库连不上」那条就是给写入类套一个连不上库的事务管理器，「最后一刻回滚」那条是一个覆写 rollback、在事务里最后一步 setRollbackOnly 的子类。`IndexerWritersTransactionalTest` 按 bean 名钉住：四个写入类都是代理、每个公开方法都带 REQUIRED、类与方法都不是 final。拆墙实测（临时拷贝里逐个去掉写入类方法上的注解）：去掉 `BatchWriter.persist` 的，守卫红、「一批里一条写不进去，整批回滚」也红；去掉 `ReorgWriter.rollback`、`ReconcileWriter.apply`、`ChainHeadWriter.store` 的，**只有守卫红**——「同生同死」那条用的是自带注解的子类，它证明「几步在同一个事务里」，管不到生产里的写入类有没有注解。所以对这三个写入类，守卫是承重墙。
-- 两种写法能叠加靠传播方式 REQUIRED：外层注解开的事务，内层模板或注解直接加入。
+### 控制面
 
-### 控制面的防护深度（2026-09-02 定：暂不加）
-
-`/admin/**` 目前只有「回环地址 + 静态令牌」一层：无限流、无重放防护、无审计日志、
-发凭证不幂等（质询扫描 3.8）。**这是开发阶段的临时实现**，系统里没有真钱，
-后续会做一个生产级的管理员系统（用户体系 + 短期会话 + 敏感操作再认证 + 审计表）。
-**回来做的条件**：任一成立即触发——接入第一个真实商户；部署到可从公网到达的机器；
-开始做 M6。在那之前不要往这个临时接口上叠防护，那是给一个要被替换的东西建配套。
-**M6-⑤（2026-09-14）已做**：静态令牌删除，换成管理员体系——见下面「控制面」那条。M6-① 起应用在容器里跑，宿主到发布端口的请求不是回环，控制面从宿主打一律 401：用 `tools/admin.sh`（容器内发 curl）。
+`/admin/**` 三道门：回环地址 + 不经代理 + 管理员会话（口令只存 Argon2id 散列；会话只存令牌的 SHA-256，闲置 30 分钟、12 小时到点失效；
+敏感操作要 5 分钟内用口令再认证过；每次调用写 `admin_action`）。应用在容器里时，宿主打发布端口的请求不是回环，一律 401——用 `tools/admin.sh`（在容器里发请求）。
+第一个管理员用 `--create-admin`，口令只从环境变量来。还没做：TOTP、提现冷却期、管理员的增删与停用接口。操作见 `docs/runbook/ops.md`「控制面」。
 
 ### 金额
 
-- 一律 `BigDecimal` ↔ `NUMERIC(38,18)`，**绝不用 `double`/`float`**
-- **绝不拆成整数部分 + 小数部分两个字段**
-- 对外 JSON **一律用字符串**，不用 number（JS 的 number 是 double）
-- 跨币种数值不可直接比较，先判 currency
-- **字符串只收普通小数写法，账本只按位数拒绝**（2026-09-21）：转账接口的金额此前只有 `@NotBlank`——`1E-999999999`（12 个字符）一个请求让进程内存耗尽退出（账本拒绝时用 `toPlainString` 把它写全成 10 亿个字符放进报错；同镜像、同内存上限的实例实测退出码 3），一百万位的普通写法光 `new BigDecimal` 就 11 秒，`1e20` 落到数据库报 numeric field overflow、回 500 + 9001。现在：三处请求记录都带 `LedgerAmounts` 里的正则（转账 `PLAIN_DECIMAL`：两段各 ≤ 64 位，范围交给账本、仍回 2004；提现与限额 `FITTING_DECIMAL`：范围在边界、回 2001），`ControllerBoundaryTest` 守「控制器里每个 `new BigDecimal(…)` 解析的字段都带其中一个」；账本入口按 `NUMERIC(38,18)` 查小数位**和整数位**，整数位按 long 算（scale 可以是负二十亿，int 相减溢出成负数，检查被绕过），去零溢出当整数位超长，**报错只说几位、不写金额**。金额的容量（18 / 20）与写法（两个正则）只在 `ledger/service/LedgerAmounts` 写一份（此前「18」散在四处，账本那份收紧成 17 全套测试一条不红；`TokenAmounts` 不留别名），`SchemaGuardTest` 把容量和每个带小数位的列绑在一起。判断装不装得下（`LedgerAmounts.requireFits`）与写成字符串（`LedgerAmounts.text`）也只在那里（2026-09-22 收口：此前金额写成字符串散在七处，其中 `String.valueOf` 那处把 1 wei 写成 `1E-18`，待核准列表用 SQL 的 `::text` 另写一份）。**任何把外来数据格式化进输出的地方都要问：它最长能有多长。**
+- 一律 `BigDecimal` ↔ `NUMERIC(38,18)`，**绝不用 `double` / `float`**，**绝不拆成整数部分 + 小数部分两个字段**；对外 JSON **一律用字符串**；跨币种数值不可直接比较，先判 currency。
+- **字符串只收普通小数写法**：请求里的金额字段都带 `LedgerAmounts` 的正则（`ControllerBoundaryTest` 守「控制器里每个 `new BigDecimal(…)` 解析的字段都带正则」）。
+  不收科学计数法：`1E-999999999` 只有 12 个字符，写全是 10 亿位。
+- 账本入口按 `NUMERIC(38,18)` 查小数位**和**整数位（整数位按 long 算：scale 可以是负二十亿，int 相减会溢出），报错只说几位、不写金额。
+- **任何把外来数据格式化进输出的地方都要问：它最长能有多长。**
 
 ### check-then-act
 
-「先查，再改」的每一处都要问：**两个线程同时走到中间会怎样？**
-这是本项目最主要的 bug 来源，M0/M2/M4 会以三种不同形态各出现一次。
-M2 的形态已在 2026-09-02 出现：不是「先查再改」，是「两个写入之间有缝」——写事件与推书签，见 V9 注释与 `BlockIndexer`。
-2026-09-03 又在 `TokenRegistry.register` 出现一次最经典的形态（先查再插），是评审代理抓到的，不是自己想到的——改成 `INSERT … ON CONFLICT DO NOTHING`，插不进去 = 已登记，让主键裁决。**自己写的代码最容易犯自己最熟的错。**
-2026-09-03 第三种形态：不是「先查再改」也不是「两个写入之间有缝」，是「**多次读取之间有缝**」——取一批要问节点三次，父哈希只在第一次核对过，一次重组落在三次之间就把旧分支的行留成了 CANONICAL。见 `BlockIndexer` 的 ⑥。
+「先查，再改」的每一处都要问：**两个线程同时走到中间会怎样？** 这是本项目最主要的 bug 来源，已经见过三种形态：
 
-### 链数据（M2 起，2026-09-02 定）
+- 先查再插（`TokenRegistry.register`）→ `INSERT … ON CONFLICT DO NOTHING`，让主键裁决；
+- 两个写入之间有缝（写事件与推书签）→ 放进同一个事务；
+- 多次读取之间有缝（取一批要问节点三次，父哈希只核对过一次）→ 读完之后重读核对（`BlockIndexer` 的 ⑥）。
 
-`chain_transfer_log` / `indexer_cursor` 是账本的**上游证据，不是账本**：没有 RLS（链上事实不属于任何商户），
-应用角色没有 DELETE（重组时标 `ORPHANED`，不删行）。
+**自己写的代码最容易犯自己最熟的错。**
 
-- **事件与书签在同一个事务里提交**；书签只进不退：锁后重读 + `UPDATE … WHERE last_block_number = 期望值` 两道保险
-- **网络 IO 在事务外面**：事务要短，握着行锁等 RPC 会拖垮另一个实例和连接池
-- **解码失败 = 停下，不跳过**：一条被跳过的日志就是一笔静默丢失的入账。**重组 = 回滚**（M2-④）：`BlockIndexer` 只检测（parentHash 对不上就抛 `ReorgDetectedException`），`ReorgRecovery` 恢复
-- `value` 存 `NUMERIC(78,0)` 原始单位；进账本前必须显式检查装不装得下 `NUMERIC(38,18)`，不能静默截断
-- 日志的唯一坐标是 `(block_hash, log_index)`，不是 `tx_hash`：重组后同一笔交易会在另一个区块里再出现一次。**坐标相同不等于内容相同**：重放与对账都比载荷（代币、付款人、收款人、金额），同坐标不同内容 = 重放停下 / 对账 disputed，代码永远不改金额（2026-09-03 补丁）
-- `BlockIndexer` 不是 Spring bean：设了 `CHAINPAY_CHAIN_RPC_URL` 才由 `ChainIndexerConfig` 装配；测试用内存里的 `FakeChain` 换整条链。它和另外三个类的事务那一段（2026-09-15 起）在四个写入类里：`@Component` + `@Transactional`，容器总会装配它们；测试 new 网络那一侧、用 `IndexerWriters`（`TransactionalProxy` 套上和容器一样的事务代理）造写入类
-- **确认等级不存，算出来**（M2-③）：视图 `chain_transfer_confirmation` 按单行表 `chain_head` 算 SEEN < SAFE < FINAL。给用户加钱绑在 FINAL（M3），于是重组回滚永远只碰链表、不碰账本。**M3 前置条件**：入账那一步再向两个节点核对该行的块哈希与 finalized 高度，那是动钱的边界，索引器无论怎么错都过不了这道门
-- `chain_head` 只进不退：finalized 倒退或同号换哈希 = `FinalityViolationException`，停下叫人；safe / latest 倒退 = 节点落后，保留旧值
-- 轮询（`ChainIndexerScheduler`）的失败分两种：瞬时的（`JsonRpcException`，以及 `TransientDbFailure.isTransient`：`TransientDataAccessException`、拿不到连接的 `DataAccessResourceFailureException`、事务开不出来的 `CannotCreateTransactionException`——Spring 把后两者归为 NonTransient，那是它的口径，库抖一下对我们是下一轮再来，2026-09-10 起）下次再来；重组这一次回滚、下一次重放（REORGED）；结构性的（finalized 倒退、解码失败、约束违反、没书签也没配 `start-block`）停下
-- **重组回滚**（M2-④）：祖先 = 能证明和链上一致的最高一块——候选只有书签、有日志的块、finalized 头，其余块的哈希我们没有；祖先可能比分叉点低，**多退不伤，少退要命**。祖先之上标 ORPHANED、书签退回祖先、记 `chain_reorg`，三者同一事务；锁内核对书签的号**和哈希**（别的实例可能已重放到同号的新分支）。地板是 finalized，连它都对不上 = `FinalityViolationException`
-- 重放的写入是 upsert：CANONICAL 不动，ORPHANED **复活**成 CANONICAL（同一行同一 id）——链翻回原分支时，DO NOTHING 会让存款永远消失；复活只在载荷相同时发生
-- **一批的归属**（2026-09-03 补丁）：日志自带的块号与块哈希是节点「说」的，不是承诺给我们的。`BlockIndexer` 落库前三道核对：块号在 [from, to] 内（否则是答非所问，停下）；每条日志的块哈希等于该块的头（为有日志的块再取一次头）；取完日志和 block(to) 之后重读 block(from)，哈希与父哈希未变（否则节点前后不一致，这批作废、下次再来）。不核对的后果实测过：一次重组落在三次读取之间，旧分支的行以 CANONICAL 留下、视图判 FINAL，之后每轮父哈希检查都通过
-- **RPC 不信任**（M2-⑤）：三种错三种对策。大声的错（带 code 的 error）：getLogs 窗口对半分；**成功后不翻倍撞回去**，记住失败过的尺寸、向它二分逼近，收敛在上限上后每批只问一次，连续成功 100 批才忘掉天花板试探一次（M3-⑤ 补丁，2026-09-09：Alchemy 免费层限 10 块，翻倍策略在固定上限上永远震荡、一半调用注定失败）；减到一块还失败就停下——**除非那一块在链头两块以内**：那是提供商各后端头不一致（eth_blockNumber 看到了、getLogs 还没有），按瞬时处理并把减半得到的假信息整体恢复（2026-09-09 真实启动实测，此前会停机）；安静的错（getLogs 静默漏日志，回执才是事实源）：每次轮询抽 `reconcile-samples` 个已 finalized、已索引的块用 `eth_getBlockReceipts` 重数，差异**两个节点都点头才动，点的是内容不只是坐标**（补录要求两个节点给的内容一致 / 标废 / 只有一方点头或内容不同 = disputed 等人看），只把有差异的检查记进 `chain_reconcile`；自相矛盾的错：只核对 finalized 那一块，两个节点意见不同 = `FinalityViolationException`，头部的分歧不管
-- 客户端对「发出到正文读完」整段计时，正文 16 MB 封顶。审计节点 `CHAINPAY_CHAIN_AUDIT_RPC_URL` 要独立于主节点才有价值（同一家两台机器会被同一个 bug 骗过）；不设时退化为主节点自己的回执路径，能抓索引漏日志，抓不住节点整体撒谎
-- **代币白名单**（M2-⑥）：Transfer 事件是合约「说」的，余额是合约「做」的；事件金额只对行为规范的代币等于到账金额。只索引、只入账 `chain_token` 里 ACTIVE 的代币；登记时用 `eth_call` 问链上的 `decimals()` 与 `symbol()`，问不到要运营手工填并注明来源；轮询第一次推批前核对链上 decimals 与表一致，不一致 = 停下。symbol 是从别人的合约里解出来的：Java 侧空白或超过 64 字符当问不到，V14 的 CHECK 兜底（note ≤ 500）。ABI 解码里偏移字与长度字是对方给的 32 字节的数，**先在 BigInteger 上比过实际字节数再收窄**，否则 2^31 抛 ArithmeticException、2^30 乘 2 溢出成负数绕过边界检查；形状不对只允许抛 `IllegalArgumentException`，调用方只接这一种。**白名单由数据库守**（V15）：事件表与书签表的 token 都是指向 `chain_token` 的外键，任何写路径都绕不开；索引器落库前比对每条日志的合约地址，不信节点的过滤；轮询**每轮**都 `requireUsable`（一次主键查询，停用下一轮生效、不等重启），上链核对 decimals 每进程一次；书签记住自己服务的代币，配置换了币而书签没换 = 停下，不从旧进度开始猜
-- **金额换算只经 `TokenAmounts.toLedger`**：精确除法、永不四舍五入；整数位超过 20 或 decimals 超过 18 抛 `AmountOverflowException`，M3 把那笔标成「无法入账、等人看」而不是让它卡住循环。铸币（from 为 0x0）按普通入账；不发事件的铸币我们看不见、不入账，留给 M5 用 `balanceOf` 对账发现
-- **收款地址是租户边界**（M3-①b，2026-09-07）：`deposit_address` 挂 RLS（同账户表的策略），`token` 是指向白名单的外键，`account_id` 指向商户在该币上的账本账户（`user:<商户 code>:<SYMBOL>`，分配时 `ON CONFLICT (code) DO NOTHING` 顺手建）。一户一币一址由 `UNIQUE (merchant_id, token)` 裁决，并发申请 `INSERT … ON CONFLICT DO NOTHING`、输的一方读回赢家的地址；序号来自序列 `deposit_address_index_seq`，`UNIQUE (derivation_index)` 保证不重用，跳号无害；`address` 主键冲突不是并发是配置错（序号重用或 xpub 配错），报出来不猜。账本币种名用 symbol，`chain_token` 上 ACTIVE 代币的 symbol 部分唯一索引。模块设了 `CHAINPAY_DEPOSIT_XPUB` 才装配，启动日志打出 xpub 指纹与 0/0 地址供对照，xpub 本身不进日志
-- **入账**（M3-②，2026-09-07）：`DepositPoster` 只从 `chain_transfer_confirmation` 取 `level = 'FINAL'`、收款方是 ACTIVE 收款地址、代币 ACTIVE、还没有 `deposit` 行的日志；「记给谁」由 `deposit_address` 那一行推导，不接受调用方递进来的商户 id。三步：**核对在事务外**（主节点与审计节点各取一次该块头，哈希等于库里的 block_hash 且块号 ≤ 两个节点各自的 finalized；哈希对不上 = HELD_NODE_DISAGREE，finalized 还没到则看两把尺子——两个节点之间的差、以及库里的视图比两个节点超前多少，两者都在 `chainpay.deposit.finality-tolerance-blocks`（默认 64 ≈ 两个 epoch）以内 = **这一轮延后、不占坑**、下一轮再看，超出 = HELD_NODE_DISAGREE 叫人去看节点（2026-09-15 修：原来一律 HELD，审计节点的 finalized 只是慢半拍时正常入账也被永久 HELD——占了坑就再也不是候选，人只能用「跳过全部核对」的核准放行；而落后到答不出这一块反而只是重试、会自愈，落后少的比落后多的处理得还严。拆墙实测：拆掉延后判决、或拆掉落库前那道拦截 → `defersWhileTheAuditNodeCatchesUpOnFinality` 红；条件里只看两节点之差、不看视图超前 → `holdsWhenTheViewIsAheadOfBothNodes` 红；装配里把配置换成写死的 64 → 行为测试全绿，只有 `DepositPropertiesTest` 的源码扫描抓得住）；同一轮内块头与 finalized 复用），**判决是纯计算**（零值 IGNORED_ZERO；金额只经 `TokenAmounts.toLedger`，装不下 HELD_OVERFLOW），**落库是系统池上的一个事务**：**先占坑再动钱**——`INSERT deposit … ON CONFLICT (transfer_log_id) DO NOTHING`（状态 POSTING），占不到 = 别的实例已处理、不碰账本；占到了才 `ledger.transfer`（幂等键 `deposit:<block_hash>:<log_index>`，借镜像账户 `chain:custody:<SYMBOL>`、贷商户账户，occurred_at = 区块时间），再改成 CREDITED。反过来先记账再占坑不安全：另一个实例可能已把同一条判成 HELD。HELD 永不自动变 CREDITED、不卡队列；节点瞬时失败让这一轮提前结束；`deposit` 有 RLS，商户只读自己的。镜像账户余额的绝对值 = 托管地址链上应有余额之和，M5 对账的判官
-- **入账策略**（M3-③，2026-09-07）：**信合约做的，不信合约说的**——记账前向两个节点问该地址在那一块的 `balanceOf`，必须等于事件累计（转入减转出，原始单位），对不上或问不到 = HELD_BALANCE_MISMATCH，转账扣费、弹性供应、静默铸币、节点撒谎都在这里露馅。`chain_token.min_deposit` 是每种代币的最小入账额（账本单位，0 = 不限），低于它 REJECTED_DUST 记录不入账也不退。失败分三种（2026-09-16 补）：**瞬时的**（拿不到回答：传输失败、超时、限流、`TransientDataAccessException`）这一轮提前结束；**重试没用的**（`RpcAuthException`，节点撤了凭证）这一轮 HALTED、`work` 组里 `deposit` 变 DOWN 叫人——此前它是 `JsonRpcException` 的子类、被当成瞬时，于是每 30 秒一行 WARN、永不叫人（索引器早已单独接住它，入账没有：无意的不一致）；停下之后 `DepositPostingScheduler` 关上内存闸门，之后每轮不再碰节点，换 key 后**重启**才再试——索引器落状态表、发送任务标钱包 HALTED、入账用闸门，三个任务口径一致（2026-09-15 审核补）。**余额问不到**先按 `RpcFailure` 分类（错误从哪一层来 ≠ 该做什么）：合约 revert 是节点的最终回答、当场 HELD；不认识的错误码（后端落后、非归档、配额）**只把这一笔延后**——不占坑、不写库、这一轮接着看别的候选——连续 5 轮仍是它才 HELD 并写明重试过几轮（审核改：此前是结束整轮，候选按块号升序，一个老块答不上来会拖住排在它后面的所有入账两分半）；**结构性的**那一笔 HELD_ERROR 带异常原文、队列继续。余额问不到时由 `RpcFailure` 判：合约 revert = 节点的最终回答，当场 HELD；带别的错误码 = 分不清暂时还是永久（后端落后、非归档、配额都长这样），先重试 `DepositPoster.UNKNOWN_BALANCE_ROUNDS`（5）轮再 HELD 并写明重试过几轮。拆墙实测：去掉 `RpcAuthException` 那一档 → 凭证被撤销退回「下一轮再来」，`revokedCredentialsHaltTheRound` 红；`RpcFailure` 改回「带码就是回答」→ 入账两条与 `RpcFailureTest` 红；调度器不记结局 → 连续轮数永远是 0，健康项永远 UP。HELD 的人工路径：人复核后把行改成 APPROVED 并把谁、为什么写进 `hold_reason`，任务下一轮不再核对、用 `UPDATE … WHERE status = 'APPROVED'` 重新占坑、同一幂等键记账；**人永远不手工碰账本表**。每种状态该做什么见 `docs/runbook/deposit.md`
-- **收款接口**（M3-④，2026-09-07）：`POST /api/v1/deposit-addresses {token}` 一户一币一址且幂等，地址给 EIP-55 写法；`GET /api/v1/deposits` 把已处理的行和「在路上」的钱（PENDING）并在一起，都带 `level` 与 `confirmations`；`GET /api/v1/deposits/balance` 分 `available`（账本余额）与 `pending`（在路上合计）。查询走应用连接、整段在 `asMerchant` 里：地址表与入账表有 RLS，链表没有但每条查询都经地址表连接，别人的转账结构上带不出来；没有「按 id 查一条」的接口，「不存在」与「不是你的」连区分的机会都没有。金额一律字符串；HELD 只露状态不露原因；请求体只有 token，地址与序号由服务端派生；白名单外或停用的代币回 400 + 2008（`TOKEN_NOT_SUPPORTED`）；没配 xpub 时这些路径是 404
-- **真环境演练**（M3-⑤，2026-09-08）：一笔真实的 Sepolia LINK 走完 SEEN → SAFE → FINAL → CREDITED（入块到 FINAL 约 18 分钟）；`kill -9` 演练证明占坑、镜像账户、转账、分录在一个事务里同生同死；书签回退重放不双记。演练留下的规矩与补丁：① **动书签（前跳或回退）必须用两个节点都同意的块哈希**，先记旧值，只在停机或两轮之间做（做法见 `docs/runbook/chain-indexer.md` 第五节）；② Alchemy 免费层 `eth_getLogs` 限 10 块，「对半分、成功后翻倍」在固定上限上震荡——已修，见上面「RPC 不信任」；追赶速度仍受「每轮 10 批」限制，那是 M6 的题（停机恢复）；③ 入账任务与索引器曾共用单线程调度器——已修，见下一条。给人用的签名客户端是 `tools/api.py`，凭证只从环境变量来；`entry`/`deposit` 这类带外键的表，锁被引用表会连带挡住引用表的插入
-- **出账地基**（M4-⓪，2026-09-09）：出账是**账本先扣、链上后发生**，中间的不确定期用冻结账户 `user:<商户>:<币>:frozen`（LIABILITY，属于商户）表达。三笔账本流都是普通 `ledger.transfer`：申请 `WITHDRAWAL_FREEZE`（可用 → 冻结，键 `withdrawal:<申请幂等键>:freeze`，走商户连接与 asMerchant）、FINAL `WITHDRAWAL`（冻结 → 托管镜像，键 `withdrawal:<id>:settle`，系统身份）、失败 `WITHDRAWAL_REVERSE`（冻结 → 可用，键 `withdrawal:<id>:reverse`，系统身份）；结算过的不能再解冻由**冻结账户不许为负**守，不靠代码记得。V21 四张表：`hot_wallet`（`next_nonce` 是意图，真相在链上由对账拉回；无 RLS，应用角色连读都没有）、`payout`（`freeze_transfer_id NOT NULL UNIQUE`——每笔提现以冻结开始，先冻结再插行同一事务；settle / reverse 互斥；CONFIRMED ⇔ 有结算、FAILED/REJECTED ⇔ 有解冻且写原因；`UNIQUE (merchant_id, idempotency_key)`；RLS 商户只看只插自己的，应用角色无 UPDATE）、`payout_tx`（签好的原文先落库再广播；`tx_hash` 唯一；MINED ⇔ 带块号块哈希；**部分唯一索引 (hot_wallet, nonce) WHERE status = 'MINED'**——加速后只有一笔上链由数据库守；无 RLS，应用角色只读）、`payout_address`（白名单，RLS 同账户表）。状态机是显式转换表（`PayoutStatus`：PENDING_APPROVAL → QUEUED → SIGNED → BROADCAST → MINED → CONFIRMED，核准可拒、排队与上链可失败、上链可因重组退回；**BROADCAST 没有到 FAILED 的边**——广播后只有回执能宣布结局；`PayoutTxStatus`：SIGNED → BROADCAST → MINED / DROPPED / REPLACED，丢弃可重发、上链可因重组退回、被替代是终态）。系统角色对四张表都没有 DELETE
-- **签名与序列化**（M4-①，2026-09-09）：`Rlp` 是 web3j `rlp` 模块的薄包装（字节串与列表、整数按去前导零的大端）；库的解码器宽松，我们只解码自己签的字节，规范性由交易层守：`toInteger` 拒绝前导零，`Eip1559Transaction.decode` **拆回再编回必须与原文逐字节相同**——节点会拒的我们不能比它宽松，否则本地算的交易哈希指向一笔节点眼里不存在的交易。`Eip1559Transaction` 九个字段构造时校验（地址形状、非负、小费上限 ≤ 总费率上限、accessList 固定空）；签名载荷 = `0x02 ‖ RLP(9)`，签名哈希是它的 Keccak；原文 = `0x02 ‖ RLP(9 + yParity, r, s)`，交易哈希是原文的 Keccak，**广播前就能算出**——这是 ②「先落库再广播」的基础；`decode` 把原文拆回字段与签名（web3j `TransactionDecoder` + 编回比对）。`Ecdsa.recoverAddress` 做的就是节点做的事（交易没有 from 字段，web3j `Sign.recoverFromSignature`）。已知答案四层：RLP 官方 28 例（`src/test/resources/vectors/`，MIT，逐字复制并记提交号）、EIP-155 正文算例（RLP + Keccak + 确定性签名一次证明）、ethereum/tests 的类型 2 向量（拆开、编回逐字节相同、发送方恢复一致；带前导零的反例被拒）、keyaddrtest 私钥→地址；自洽：签完恢复地址等于签名者、两次签名相同、s ≤ n/2、拆回等于原字段
-- **编号与广播**（M4-②，2026-09-09）：发送任务 `PayoutSender.sendOnce()` 每轮三段，顺序是硬的。**对账**：链上 `latest` 计数 C 在事务外问；事务里 `SELECT … FOR UPDATE` 锁 `hot_wallet` 行，第一次见到钱包 `INSERT … ON CONFLICT DO NOTHING` 从 C 起步、不从 0 猜；核 **N = C + U**（N 是库里下一个编号，是意图；U 是没有任何一次尝试 MINED 的编号数）：C > N = 有人在别处用了这把私钥，N > C + U = 分出去的编号没有尝试记录，两者都把整把钱包 HALTED 并写 `halt_reason`，**重启不算恢复**，人改回 ACTIVE 才算。**重发**：所有 SIGNED 尝试原样重发——进程死在提交与广播之间留下的就是它们；节点回 already known 也算成功。**排队的**：每笔先在事务外估 gas、取费率（`eth_estimateGas` revert = 这笔发不出去，锁提现行判 FAILED + 解冻 + 写原因，编号没分出去；`FeePolicy`：小费 = max(节点建议, 地板)，总费率 = 2 × 基础费 + 小费且 ≤ 上限——超了这一轮不发等回落，gasLimit = 估算 × 1.2 且 ≤ 上限——超了判失败），再一个系统事务：锁热钱包行 → `UPDATE payout … WHERE status = 'QUEUED'` 改不动 = 别的实例先签了 → 拿 `next_nonce` 签名 → 写 `payout_tx`（SIGNED、原文、哈希）→ 编号 +1 带期望值守卫 → 提交；**提交之后**才广播。网络永远不在事务里。广播的回答分三类：成功 / already known → BROADCAST；code 为空（传输）→ 这一轮结束、下一轮重发同一份原文；nonce too low 且节点认识我们的哈希 → 当成功，不认识 → HALT；其它带 code 的拒绝（insufficient funds 等）→ 整把钱包 HALTED、尝试留在 SIGNED，人处理后恢复即重发。**凭证被拒单独一档（2026-09-16 补）**：四处问节点的地方（对账取链上计数、估 gas / 取费率、广播、加价）都先接 `RpcAuthException` 再接 `JsonRpcException`——它是后者的子类、code 也为空，此前和网络抖动同一桶，后果是每 10 秒重试一次、永不停发、永不告警（`RpcAuthException` 的类注释早写过这件事，索引器接住了，发送任务没有）。现在按 M6-③ 的约定走热钱包指示器：钱包标 HALTED → work 组 DOWN → 告警；恢复要换 key、重启、再把钱包改回 ACTIVE。边界：热钱包那一行是第一次成功对账时建的，一笔都没发过时没有行可标，那时叫人的是索引器（测试钉住了这一条）。拆墙实测：去掉对账那处的档 → 两条红；去掉广播那处的档 → 一条红。双实例：同一笔 revert 由 `SELECT … FOR UPDATE` 锁提现行让后到的看见已 FAILED；同一份原文两个实例同时重发，谁先改 BROADCAST 谁算，后到的看见已改就走。装配：`PayoutSendConfig` 要同时有 `chainpay.payout.hot-wallet-key` 与 `chainpay.chain.rpc-url`；`PayoutSendScheduler` 每 `send-interval`（10s）一轮。**双实例测试证明不了热钱包行锁**：两个线程按同样顺序抢同一笔提现，在提现行上就串行了，拆掉行锁和编号守卫它仍绿——行锁是照教科书的第一道防线，那条测试证明的是「不重不漏」。每种停发原因该做什么见 `docs/runbook/payout.md`
-- **回执与结算**（M4-③，2026-09-10）：广播之后**只有回执能宣布结局，钱只在 FINAL 之后动**。追踪任务 `PayoutTracker.trackOnce()` 只读链、只改状态、只在最后一步记账，从不签名、不广播。**BROADCAST 的尝试**问 `eth_getTransactionReceipt`：有回执 → MINED（带块号块哈希；**status 0 也是上链**——编号已用、gas 已扣、转账没发生），同编号的兄弟全部 REPLACED；没回执但节点还认识它 → 等；节点不认识它 → 若有个兄弟正被节点认着，是被替身顶掉了（REPLACED），否则是节点忘了（DROPPED，发送任务下一轮原样重发，编号不变）。**MINED 的尝试**：主节点现在说那块的哈希变了 → 重组，尝试与提现都退回 BROADCAST 继续等；审计节点意见不同 → 等（每轮 WARN）；两个节点的 finalized 都过了那块且哈希一致（M3-② 那道门原样复用）→ 锁提现行 → 结算 `WITHDRAWAL`（冻结 → 托管，CONFIRMED）或解冻 `WITHDRAWAL_REVERSE`（回执 status 0，FAILED 写原因）。幂等键 `withdrawal:<id>:settle` / `:reverse` 保证重组来回也只记一次。**卡单**在发送任务里：每个编号最新的那次尝试广播超过 `stuck-after`（3m）、没回执、节点还认着 → 同编号再签一笔替身，两个费率都取 max(市价, 旧 × 125%)（节点要 ≥ 110% 才肯顶替，25% 留基础费上涨的余地），gasLimit 沿用；先落库（SIGNED，编号不动）再广播；超过费率上限这一轮不加、等回落。谁先上链谁算，另一笔由追踪任务标 REPLACED；`payout_tx` 的部分唯一索引守「同编号只有一笔 MINED」。广播回答里多了两类：nonce too low 且**兄弟**已上链或被节点认着 → 这笔作废（REPLACED，不是事故）；`underpriced` → 节点里那笔不是我们记的那笔，停发叫人。`PayoutTxStatus` 加边 SIGNED → REPLACED、DROPPED → REPLACED。`FakeChain` 学会上链（`mine`，必须是该地址最小编号）、回执、重组时把交易退回内存池、按费率顶替（两个费率都 ≥ 110%）、忘记。调度线程 5（四个任务）。每种状态该做什么见 `docs/runbook/payout.md`
-- **白名单、限额与提现接口**（M4-④，2026-09-10）：`POST /api/v1/withdrawal-addresses {address, label}`（幂等，已有就返回已有的）、`GET …`、`POST …/{id}/disable`；`POST /api/v1/withdrawals {token, toAddress, amount, idempotencyKey}`、`GET /api/v1/withdrawals?token&status&limit`（带链上状态与最新一次尝试的哈希）；`GET /api/v1/deposits/balance` 多一个 `frozen`。整段在 `asMerchant` 的事务里走商户连接，`WithdrawalService.request` 的顺序是硬的：代币 ACTIVE → 金额（正、小数位 ≤ decimals 且 ≤ 18）→ **锁本商户的 merchant 行**（同一商户的申请从这里起串行，「看幂等键 + 算当日汇总 + 插行」之间没有缝）→ 幂等键已有：同参数返回同一笔、不同参数 409 + 4003 → **平台自己的口袋永远拒绝**（400 + 2010，先于白名单）：任何商户的收款地址（商户连接看不到别家的 `deposit_address`，这一问走系统身份只回答是或否）与热钱包自己的地址（`Optional<HotWalletSigner>` 注入，没装配就没有可拒的；讲解时发现的口子，2026-09-11 补）→ 白名单里且 ACTIVE（否则 400 + 2009）→ 建账户（`user:<code>:<SYM>` 与 `:frozen`）→ 按限额定状态 → 冻结（余额不够由账本拒，4001）→ 插 `payout`，冻结与插行同一事务。**限额**在 `payout_limit`（V23，每代币单笔上限与当日上限，账本单位；商户只读、系统身份改）：没有行 = 没定过 → 一律 PENDING_APPROVAL（fail-closed）；单笔超上限 → PENDING_APPROVAL；当日上限管的是「一天里不经人手能出去多少」——汇总只算当日**自动放行**过的（QUEUED 及之后），等核准的不算（人核准时看得到全部），退了钱的不算；超了 → PENDING_APPROVAL。钱在任何状态都冻着。管理接口（回环 + 令牌）：`GET /admin/v1/payouts/pending`、`POST …/{id}/approve`（PENDING_APPROVAL → QUEUED，之后与普通申请一样）、`POST …/{id}/reject {reason}`（解冻 + REJECTED + 原因，一个事务；不在待核准状态 409 + 4004）、`PUT /admin/v1/payout-limits/{token} {perTxMax, dailyMax}`（当日 ≥ 单笔）——走 `PayoutApprovalService` 与系统身份，控制器不碰 `SystemLedger`（`ControllerBoundaryTest` 守）。错误码 2009 / 2010 / 4004。冷却期与二次验证依赖用户会话与通知渠道，v1 不做（记 M6 之后）。每种状态该做什么见 `docs/runbook/payout.md`，真环境演练的步骤见 `docs/runbook/payout-drill.md`
-- **真环境演练**（M4-⑤，2026-09-13）：Sepolia 上 5 笔真实提现走完全程，首笔申请到结算 13 分 35 秒（上链 13 秒、等 finalized 13 分）；一轮签四笔编号 1–4 连续；超限转人工核准后照常；拒绝解冻。终态账本与链上一致（可用 18、镜像 −18、热钱包 18 LINK）——这就是 M5 要每天核的等式。热钱包用另一句助记词（`tools/mnemonic.sh`），地址 `0xf7c0…bC1E`，ETH 只从水龙头来。演练留下的规矩：给热钱包充币前先核对地址（一次贴错把 25 LINK 打到了平台没有钥匙的地址）；`confirmed_at` 由 M5 补写
-- **对账**（M5，2026-09-14）：`AuditService.runOnce()` 只读、只报，不改任何业务表。**脚下的块**：F 取 `chain_head.finalized` 与索引书签 `indexer_cursor` 中**较小**的那个（V25 给系统角色读书签），再向两个节点各取一次 F 的块头，哈希不等于库里的就 FAILED 不给结论——在分叉上对账对出来的差异是假的。取较小的那个是真实首轮教的：Docker 停了两天后索引器落后 4300 块，对账站在 finalized 上、日志只到书签，把「还没索到」报成了 7 处差异；证据和事实必须是同一个时刻的。**五条检查**：ADDRESS_BALANCE（每个收款地址与热钱包：链上 `balanceOf(F)` 两节点都问、不一致 = DISPUTED，vs 主分支日志的转入减转出，与 M3-③ 同一条 SQL；链上多 = MISSING_IN_LEDGER、链上少 = MISSING_ON_CHAIN）；DEPOSIT_LEDGER（每笔 CREDITED 入账的日志必须 CANONICAL 且块 ≤ F、账本转账金额等于入账金额；每条块 ≤ F − lag 的 ACTIVE 收款地址日志必须有入账行，任何状态）；PAYOUT_LEDGER（每笔 CONFIRMED 提现恰好一次 MINED 尝试、未 revert、链上有从热钱包到收款地址、金额相等、哈希相同的 CANONICAL 日志；每条热钱包发出的日志必须对应一次尝试——否则就是「有人在别处用了这把钥匙」）；CUSTODY_TOTAL（每种币：链上托管 C = Σ 收款地址余额 + Σ 热钱包余额；等式 **C = |镜像| + 已 FINAL 未入账 − 已上链未结算 + E**，E ≠ 0 按符号报；某个地址 DISPUTED 就跳过这种币）；LEDGER_JUDGE（`ledger_judge()` 每行一条）。**每一轮都落一行** `audit_run`（OK / DIFF / FAILED，站在哪块、几处差异、原因），差异逐条落 `audit_finding`，两张表只追加、无 RLS、谁都没有 DELETE；节点失败、库瞬时失败、任何异常都是 FAILED 带原因，不抛给调度器。**「没跑」和「跑了没事」分得开**：`GET /admin/v1/audit` 按上次 OK / DIFF 距今超过两个周期报 `stale`，FAILED 不算给过结论；`POST /admin/v1/audit/run` 立刻跑一轮。没配主节点时接口 404，不假装跑过。每小时一轮（`chainpay.audit.interval`），首轮延迟 2 分钟给索引器追平，宽限 `lag-blocks` 10。调度线程 6（五个任务）。外部注资（运营往热钱包充币）账本一无所知，会以 CUSTODY_TOTAL 的 MISSING_IN_LEDGER 报出来，v1 只报不登记。每种差异该做什么见 `docs/runbook/audit.md`
-- **健康检查**（M6-⓪，2026-09-14）：引 `spring-boot-starter-actuator`（分组、探针、状态映射、db / redis 指示器是协议编码），三个指示器自己写（`ops/health`，只做判定，读状态的一步由装配时的 lambda 给，不起容器就能测）。**只在回环的管理端口上答**（`management.server.port` 8096、`address` 127.0.0.1，`CHAINPAY_MANAGEMENT_PORT` 可改），主端口上没有 `/actuator`：探针不能带令牌（进程管理器、容器 HEALTHCHECK 都不会带），放主端口就是对公网开一个无认证接口。**三个组回答三个问题**：`liveness`（进程在不在）；`readiness`（能不能接请求 = `db` 通：Boot 的组合项，子项 `dataSource` 主池、`systemDataSource` 系统池；容器 HEALTHCHECK 打它）；`work`（能不能干活 = `indexer` / `deposit`（2026-09-16 加：入账 HALTED = DOWN、连续 5 轮没跑完 = DEGRADED）/ `hotWallet` / `audit` / `redis`，给告警和人看，**不影响进程去留**——索引器停了要叫人，不是下线整个进程，下线了商户连余额都查不了）。多出来的一档 `DEGRADED`（还在跑，但有人该来看看）排在 DOWN 后、UP 前，HTTP 200：告警按「不是 UP」触发，容器不重启。判定表：索引器 没配 = UNKNOWN、无行 / RUNNING = UP、DEGRADED、HALTED = DOWN 带原因；热钱包 没配 = UNKNOWN、无行 / ACTIVE = UP、HALTED = DOWN 带原因（细节只有地址与下一个编号）；判官 没装配 = UNKNOWN、stale 或上次 DIFF = DOWN、上次 FAILED 未 stale = DEGRADED、OK = UP。系统池 2026-09-15 前是手写的 `systemDb`（`SELECT 1` 加四个数），系统池成为 bean 后由 Boot 的 `db` 组合项取代。细节里没有密码、没有连接串（`HealthProbesTest` 守）。指标：两个池都由 Boot 自动绑（系统池 2026-09-15 前是手工绑），`hikaricp.*` 靠 `pool` 标签分（`HikariPool-1` / `chainpay-system`）。三组怎么读、每种状态该做什么见 `docs/runbook/ops.md`
-- **容器化**（M6-①，2026-09-14）：`Dockerfile` 两阶段——构建（`maven:3.9-eclipse-temurin-25`，`~/.m2` 挂 BuildKit 缓存，`-Dmaven.test.skip`）→ 运行（`eclipse-temurin:25-jre-noble`，只多装 curl 给 HEALTHCHECK）；胖 jar 用 `-Djarmode=tools extract --layers` 拆成四层按「最不常变 → 最常变」COPY（依赖层 49 MB 命中缓存，应用层 0.5 MB 每次重打）；专用系统用户 `chainpay`，`USER` 之后不再 COPY；HEALTHCHECK 打容器内回环 8096 的 readiness。`.dockerignore` 第一条是 `env/`。`docker-compose.yml` 加 `app` 服务：**密钥只从 `env_file: env/local.env` 来，`environment` 里只放拓扑**（`postgres:5432`、`redis:6379`）；端口只绑 `127.0.0.1:8095`，8096 不发布；OWASP Docker 规则落地为 `cap_drop: [ALL]`、`no-new-privileges`、`read_only: true` + tmpfs `/tmp`、`mem_limit: 1g`（JVM `MaxRAMPercentage=75`、OOM 即退）、`pids_limit`；`restart: unless-stopped`——容器运行时就是进程管理器（取舍 5）。**镜像打完必须跑 `tools/image-check.sh`**：非 root、有 HEALTHCHECK、`/app` 无私钥形态、`env/local.env` 里每个密钥值在展开的文件系统里都 grep 不到、没有 env 目录。`ContainerGuardTest` 扫这三个文件（JRE 而非 JDK、非 root、USER 后无 COPY、HEALTHCHECK 打 readiness、无密钥形态 ARG/ENV、不整目录 COPY；ignore 含 env/ target/ .git；compose 的 app 有 env_file、environment 无密钥名、端口回环、去能力、禁提权、只读、限内存、依赖健康、readiness 健康检查、自动重启）。**真跑发现的规矩**：应用在容器里时，宿主打发布端口的请求源地址是 Docker 网桥网关，控制面的回环检查会 401——这是对的（能 `docker exec` 的人才算本机），管理接口一律用 `tools/admin.sh`（在容器里发 curl，令牌只从环境变量来；没有容器时退而打宿主）。这台 Mac 的出网走本机代理的隧道，容器内 TLS 偶发「Remote host terminated the handshake」，构建失败重跑即可，不是配置问题
-- **停机恢复**（M6-②，2026-09-14）三件事。**① 追赶按时间封顶，不按批数**：`ChainIndexerScheduler` 的「每轮最多 10 批」改成 `chainpay.chain.catch-up-budget`（默认 5 分钟）——落后时一轮里连续推批到追平或预算用完，下一轮接着追，每 50 批打一行进度；正常时一轮一批用不到它。理由：调度线程池已经每个任务一条线程（M3-⑤ 补丁 2），一轮跑久压不住别的任务，只压住自己的降级检测与状态更新，所以封顶的是时间。真跑：书签回退 2000 块（两个节点一致的哈希、带旧值守卫），一轮 200 批约 4 分钟追平、重放插入 0 行；旧法 10 批一轮加 12 秒间隔约 8 分钟。**② 注资登记**（`hot_wallet_funding`，V26；`HotWalletFundingService`；`POST/GET /admin/v1/hot-wallet/fundings`）：运营往热钱包充的币账本不记（不是任何商户的钱），但托管等式要能解释它。运营只指认「是哪一笔」（交易哈希，同一笔多条时给 logIndex），金额、块、代币全部从索引器记下的日志读——**请求体里没有金额字段，结构上不给人填**。四道门：日志在库里且收款方是热钱包（否则 404 + 2011）；同一笔多条要指定 logIndex（400）；发起方不是平台自己的地址——收款地址或热钱包，那是归集不是注资（400 + 2010）；块 ≤ finalized（否则 409 + 4005，会被重组翻掉的钱不进等式）。同一条日志登记两次返回同一行。表只追加，谁都没有 UPDATE / DELETE。对账等式变为 **C = 镜像 + 已 FINAL 未入账 − 已上链未结算 + 已登记注资 + E**，只算日志仍 CANONICAL 且块 ≤ F 的登记；登记过、日志已不在主分支的另报 CUSTODY_TOTAL / MISSING_ON_CHAIN「登记的注资链上不认」。真跑：登记水龙头那 25 LINK（从日志读出 25e18、块 11699936、logIndex 25）后对账 OK、0 处差异，`work` 组第一次全 UP。**③ 监听地址与日志级别由环境定**（安全扫描第 15 条）：`server.address: ${CHAINPAY_BIND_ADDRESS:127.0.0.1}`——宿主直接跑 jar 只绑回环，容器里 compose 给 `0.0.0.0`（对外仍只有宿主回环，由 compose 管）；`logging.level.com.chainpay: ${CHAINPAY_LOG_LEVEL:INFO}`，开发要看细节在 env/local.env 里设 DEBUG，DEBUG 会把地址、金额打进日志，不带上生产。容器里实测：8095 绑所有网卡、8096 绑回环、日志 0 行 DEBUG
-- **告警**（M6-③，2026-09-14）：`ops/alert`。`AlertScheduler` 每 30 秒（启动后 1 分钟起）读健康端点算出的 **`work` 组**（索引器 / 热钱包 / 判官 / Redis）——探针看到什么告警就看到什么，没有第二套判定；`AlertPolicy` 只在**变化**时叫：每个部件记「上次送到的状态」（起点 UP），不同就叫一次，送到了才记下来，没送到的下一轮还叫（用最新状态）；UP 与 UNKNOWN 同档「没事」（UNKNOWN = 这个进程没配这个模块）；DEGRADED 是事，DOWN ↔ DEGRADED 也是变化；进程重启状态清零，站着的问题会再叫一次（重启不算恢复）。`WebhookSender`：一个 HTTP POST，地址只从 `CHAINPAY_ALERT_WEBHOOK_URL` 来、**按密码对待**（入站 webhook 令牌常在 URL 里，日志与描述只出主机名），四种载荷 `CHAINPAY_ALERT_FORMAT` generic / slack / dingtalk / feishu；非 2xx 或连不上 = 没送到；不设地址 = 只打 ERROR 日志且算送到。调度线程池 8。真跑：停 Redis 后 12 秒收到 🔴，停着的 35 秒内不重复，起 Redis 后收到 🟢（细节带 version）。发送任务的 HALT 走热钱包指示器（HALTED = DOWN），不另接。三个部件不是 UP 时该做什么见 `docs/runbook/ops.md`
-- **部署脚本与回滚**（M6-④，2026-09-14）：`deploy/deploy.sh` 八环节按顺序、任一步失败即停：① 构建（构建上下文一律来自一棵 git tree、`git archive` 打包；标签 `chainpay:<sha>`，HEAD 带工作区改动时 `chainpay:<sha>-dirty.<tree 前 7 位>`，工作区快照用空暂存区按内容算——标签由内容决定，「已有就不重打」才安全；2026-09-18 补丁）→ ② 配置检查（四个必填变量在不在、密钥是 Base64 32 字节；env 文件在子 shell 里读，检查完密钥即丢；只报名字不回显值）→ ③ `tools/image-check.sh` → ④ **迁移单独一步**：新镜像 `--migrate-only`（`Migrate`：只起数据源与 Flyway 两个自动配置的最小上下文，读同一份 `spring.flyway.*`，不装配应用、0 个定时任务，成功 0 失败非 0；`ChainpayApplication.main` 经 `oneShot` 分派：只认精确的 `--migrate-only` / `--create-admin`，以 `--migrate` / `--create` 开头的其它写法、两者同时出现一律退出码 2、什么都不跑（2026-09-18：另起 JVM 实测，`--migrate_only` 会被 Spring 当成无名配置项、静默起完整应用））——失败到此为止，旧版本还在跑（取舍 6；启动时的 `validate-on-migrate` 保留做最后一道）→ ⑤ 打标签（`current` → `previous`，新镜像 → `current`；**两个标签就是发布记录**，compose 永远跑 `${CHAINPAY_IMAGE:-chainpay:current}`，不靠人记环境变量）→ ⑥ `docker compose up -d app` → ⑦ 等 healthy + readiness 200（≤ 120 秒）→ ⑧ 不过就 `deploy/rollback.sh`（`current` → `failed`、`previous` → `current`、up、再验）；第一次部署没有 previous 就停下 app、坏镜像改叫 failed、摘掉 current（2026-09-18）。**取舍 9 落地**：迁移只前进，`spring.flyway.ignore-migration-patterns: "*:future"` 让回滚后的旧代码容忍库里它不认识的更高版本（Flyway 默认已如此，显式写下是钉住）；代价是每条迁移都得让上一版代码也能跑（先加后删）。**改列类型不满足这一条**（包括改成 DOMAIN）：结果列的类型一变，运行中实例缓存的预编译语句在事务里第一次执行报 SQLSTATE 0A000「cached plan must not change result type」（2026-09-22 用 pgjdbc 42.7.11 默认设置实测：自动提交时驱动悄悄重试掩盖了它，事务里必失败一次）；Spring 不把 0A000 当瞬时错误，索引器会当结构性错误停机、状态落库。所以迁移里要么别改类型（V28 收地址形状用函数 + CHECK 而不是 DOMAIN），要么把它当成需要停机的变更单独安排。`DeployGuardTest` 守顺序、`set -euo pipefail`、不回显密钥、compose 的 current 默认值、yml 的未来版本容忍；`DeployScriptTest` 用假 docker 逐环守行为（脚本被 source 时不跑 main）；`MigrateOnlyTest` 真跑三条（已迁移的库 0 且无任务；坏迁移非 0 且历史表无痕——PostgreSQL 的 DDL 事务性；历史表里有未来版本仍 0）。真跑两场演练：A 放一条坏迁移 → 脚本在 ④ 停，`current` 没动、容器仍 healthy、历史表无 V27；B 部署 ④（47 秒）→ 回滚到 ③ 镜像（9 秒 healthy）→ 再部署 ④（45 秒）。`failed` 只是「上一次被换下的」标签。八环节怎么跑见 `docs/runbook/ops.md`
-- **控制面**（M6-⑤，2026-09-14）：静态令牌 `CHAINPAY_ADMIN_TOKEN` 删除（能配钥匙的钥匙吊销不掉），换成 `admin/`：**管理员**（`admin_user`，口令只存 Argon2id 散列，`spring-security-crypto` 引库，Spring Security 5.8 参数；用户名 3–32 位小写；口令 ≥ 12 位）；**登录**（`POST /admin/v1/auth/login`，失败一律同一个 401 同一句话，不存在的用户名也做一次散列比对耗时一样；连续错 5 次锁 15 分钟，锁着时对的口令也不行；成败都进 `admin_action`）；**短期会话**（`admin_session` 只存令牌 SHA-256；闲置 30 分钟失效、12 小时到点失效；请求头 `X-CP-ADMIN-SESSION`；`logout` 立刻吊销）；**敏感操作再认证**（`@Sensitive`：建商户、发凭证、核准 / 拒绝提现、改限额、登记注资；会话的 `reauth_at` 必须在 5 分钟内，登录那一刻算一次，否则 403 + 3002；`POST /admin/v1/auth/reauth` 带口令刷新）；**改口令**踢掉本人其它会话；**审计**（`admin_action` 只追加：每次 /admin 调用一行——谁、方法、路径、状态、来源；登录由服务自己记带用户名与成败；过滤器在 `finally` 里记，401 也记）。分工：`AdminAuthFilter` 认人（回环 + 无代理头 + 会话，登录接口也要前两条），`AdminReauthInterceptor` 认操作（到了控制器门口才知道方法上有没有 `@Sensitive`）。**第一个管理员**：`--create-admin <用户名>`，口令只从环境变量 `CHAINPAY_ADMIN_PASSWORD` 来（不进参数：ps 能看到），和 `--migrate-only` 一样是只起数据源的最小上下文。`tools/admin.sh login / reauth / logout / GET / POST / PUT`，令牌只在环境变量里。测试里 `AbstractPostgresTest.adminSessionToken()` 建用户并登录，不走 HTTP。真跑：V27 迁移、建 `ops`、切换、登录、只读 200、敏感 403 → 再认证 → 过门、旧头 401、七行审计、库里只有 `$argon2id$` 与散列。**尚未做**：二次验证（TOTP）与提现冷却期——现在有了会话与再认证，它们有地方挂了，记 M7 之后
-- **进程角色**（进程拆分 ①，2026-09-23；规划与九条取舍见 `docs/knowledge/m6-process-split.md`）：同一个镜像起成 `web` / `worker` 两种常驻进程，靠 Spring profile（`SPRING_PROFILES_ACTIVE`）区分，**恰好一个**，没给或两个都给就拒绝启动——profile 天生可以叠加，「恰好一个」不是 Spring 的保证（对标 Fineract：角色开关默认全开，它的「worker」照样对外提供全部读写接口）。每个角色一张**禁用名单**（`ops/role/ProcessRole`，每项写运维设的环境变量名 + 应用读它用的配置键 + 它能干什么）：web 七项（系统角色口令、属主口令、热钱包私钥、两个节点地址、告警地址、建管理员的口令），worker 一项（建管理员的口令；属主口令第 ⑤ 步再加——在那之前唯一的容器以 worker 身份跑、启动时还要迁移）。「有没有」和 `@ConditionalOnProperty` 同一口径：非空白、不是 false，解析不出的占位符算没配；报错只写变量名，永不带值。**守卫是一个静态的、优先级最高的 BeanFactoryPostProcessor**（`ProcessRoleConfig`），跑在「读完 bean 图纸」与「造 bean」之间：拆墙实测，写成普通 bean 的构造器检查，应用在它被创建之前就去建连接了（`Connection refused`），等于没有。只在完整应用里生效，`--migrate-only` / `--create-admin` 的最小上下文不扫描这个包。compose 的 `app` 在拆成两个服务（第 ⑥ 步）之前设 `SPRING_PROFILES_ACTIVE: worker`，测试基类 `@ActiveProfiles({"test", "worker"})`。**名单上的名字必须真实存在**：`ProcessRoleBootTest` 起真的应用（真的 application.yml；系统环境整份换成假的，库和 Redis 指向端口 1，守卫漏了也碰不到开发机上的中间件），逐项设运维真正会设的那个环境变量，断言根因是守卫、报错不含值——拆墙：名单上的配置键拼错一个字，从名单派生的单元测试照样绿，只有它红。`EnvInventoryTest` 给 env 样例里每个变量归类（配置 / 两边都要 / 只给 worker / 属主 / 一次性命令 / 测试探针），断言样例 = 清单、清单判为密钥的 = 镜像扫描按值查的、每个角色的禁用名单 = 清单里它不许拿的密钥；测试探针的节点地址因此挪到 `env/probe.env.example`——应用从不读它们，原来却整份跟着 `env/local.env` 进了容器。七处拆墙都有测试红。**拆墙之后恢复原状，要确认编译产物也恢复了**：拆墙用的拷贝里 `rsync -a` 恢复源文件会连旧的修改时间一起恢复，只改 shell 脚本的那一轮 Maven 认为源码没变、沿用上一轮编出的旧类，多红了一条不该红的；清掉 `target` 重跑后只剩该红的那一条。方向反过来就是「拆了却还绿」的假象，更危险。
-- **演练补丁**（2026-09-09）：`spring.task.scheduling.pool.size` ≥ `@Scheduled` 任务数（现在 4，两个任务），`ChainIndexerBootSmokeTest` 用一个卡住的任务证明别的任务照跑——Spring 默认只有一条调度线程，入账事务等锁时索引器跟着停、降级检测不跑、一条 ERROR 都没有。系统连接带 `lock_timeout`（`chainpay.system-db.lock-timeout`，默认 5s，Hikari `connectionInitSql`）：等锁超过上限就放弃。**Spring 7 把 SQLSTATE 55P03 翻成 `UncategorizedSQLException`（非瞬时）**，入账任务会据此记 HELD_ERROR、每次等锁超时都变成一张工单——红灯测试实测；所以系统池的 `JdbcTemplate` 装了翻译器把 55P03 翻成 `CannotAcquireLockException`（瞬时），其余交回默认翻译。加超时的同时必须问「超时会被翻成哪一类」，否则修法比病更重
-- **扫描补丁**（2026-09-09，M0–M3 全量安全扫描的 14 条，V22 + 十处 Java）：**判官必须以能看到全部行的身份跑**——`ledger_judge()` 只在超级用户或 BYPASSRLS 下给结论，其余身份直接拒绝；两个判官视图授权给 `chainpay_system`；`SystemLedger` 启动时跑一次判官并打出可见分录数。此前视图没授权也没 `security_invoker`，能查通只是开发库属主恰好是超级用户的副作用，非超级用户属主会静默得到 0 行。**只授权、只查调用者还不够**（2026-09-21 实测补）：视图默认用主人的身份读表，调用者的 BYPASSRLS 对视图里面不起作用——把两个判官视图的主人换成受行级安全约束的角色，同一本坏账判官报 0 行；补 `security_invoker = true` 后主人是谁不再影响结论（`LedgerJudgeTest` 守），`SchemaGuardTest` 守「每个视图都按调用者执行」。同日删掉只做转发的 `account_balance` 视图（多一层跳转、多一个要记得开 `security_invoker` 的对象），`balanceOf` 直接读 `account.balance`。**开发阶段直接改了旧迁移**（用户定）：上线之后不许再这样做，已执行过的迁移只能往前加。**开了 RLS 的表一律 FORCE**，`SchemaGuardTest` 扫 `pg_class` 守着；租户策略里的会话函数包成 `(SELECT …)` 每条语句只算一次；`chain_transfer_log` 按 `(to_address, token)` / `(from_address, token)` 各一个 `WHERE status = 'CANONICAL'` 的部分索引——谓词与查询耦合，EXPLAIN 测试守着。**书签的身份是「号 + 哈希」**：`indexer_cursor` 的守卫 WHERE 同时比两者，`persist` 与 `ReorgRecovery` 一样。**每个 `@RequestBody` 都带 `@Valid`**（`ControllerBoundaryTest` 守），校验失败 / JSON 不可读 / 参数缺失或类型不匹配一律 400 + 2001。**nonce 的格式在验签之前检查**（32 位十六进制）：定长是「拼接无歧义」的前提，必须在算签名之前成立；重放登记仍在验签之后。凭证未命中也做一次诱饵解密与 HMAC，两条失败路径等耗时。块哈希一律 `equalsIgnoreCase`；`logIndex` 收窄前比范围；`Hex` 只接受 `[0-9a-fA-F]`；对账路径的解码失败记 disputed 而不是停机；带 key 的节点 URL 只对回环与内网允许 `http://`；离线 xpub 工具没有终端就拒绝
-- **删掉通用转账接口与按 id 查余额**（2026-09-22，用户定）。讲解冻结账户时发现的缺口：`POST /api/v1/transfers` 的账户 id 与 `code` 都来自请求体，授权只问「这账户是不是你的」——而商户的冻结账户**确实是商户的**。于是商户可以自己拼一笔「冻结 → 可用」的 `WITHDRAWAL_REVERSE`，把提现途中冻着的钱捞回可用余额，链上的币照常发出去：**双花**（实测到「余额不足 4001」那一步，说明授权与业务类型两道门都已放行，只差账户里有钱；整条链没实测）。两个修法里用户选了**删接口**而不是加限制：真实业务各走专用流程（入账、提现三笔流的借贷双方都由服务端定），这个接口只是 M0/M1 的演示。顺带删掉按 id 查余额——它要账本的内部主键，而系统从不告诉商户这个主键，**没有真实调用者**；业务上查余额走 `GET /api/v1/deposits/balance`（available / pending / frozen）。连带删掉只有它一个调用方的 `AccountAccessService`（授权只剩 RLS 一道：商户接口不再收任何账户 id，「这个 id 是谁的」这个问题本身没有了）。`ControllerBoundaryTest` 加一条承重的守卫：**任何 controller 都不得出现 `TransferCode` / `ledger.transfer(` / `new TransferCommand`**——规矩不是「那个接口别回来」，而是「没有任何 HTTP 入口能自己选借贷双方」。46 处测试重新安置：签名 / 重放 / 限流 / 信封的靶子换成白名单接口（幂等、无副作用、不依赖链上配置），金额格式换到提现接口（`FITTING_DECIMAL` 在边界回 2001，账本侧的 2004 由 `LedgerAmountBoundsTest` 在服务层守），「跨商户碰别人的对象」改到唯一还收 id 的 `POST /api/v1/withdrawal-addresses/{id}/disable`（RLS 让「不是你的」和「不存在」都是改 0 行，结构性不可区分），「幂等键按商户分命名空间」下移到 `TenantIsolationTest`、「币种不符」下移到 `LedgerModelingTest`。**删接口会制造空转测试**：`accessDeniedAndNotFoundAreIndistinguishable` 与 `notFoundAndForbiddenAreIndistinguishable` 在接口消失后两边都拿到 404、body 一样，**照样绿但什么都不证明**；失败的测试会喊，空转的不会——删接口时要把打这个接口的测试逐条看过，不能只看红的那些。**V29 顺手收权限**：清点 `role_table_grants` 发现两个角色在 `transfer` / `entry` 上都有 UPDATE 而全仓无人使用，撤掉；`account` 的整行 UPDATE 收成列级 `UPDATE (balance)`——`allow_negative`、`merchant_id` 这些从此只有属主能改。`SchemaGuardTest` 钉住这套权限。**残留风险（用户定先不管）**：删的是今天那条路，数据库层「应用角色能插入借方是冻结账户的转账」这个能力还在，将来哪段新代码写错还能再走一遍；关掉能力要给 `transfer` 的租户策略加写入检查（借方不能是冻结账户、`code` 只能是 INTERNAL / WITHDRAWAL_FREEZE）
-- **签名协议 CP2**（2026-09-09）：`canonical = "CP2" LF ts LF nonce LF method LF path(含查询串，原样) LF sha256hex(body)`，`signature = Base64(HMAC-SHA256(canonical, secret))`。换的原因：HMAC 只认字节，「请求 → 字节串」必须是单射；此前照 OKX 五段无分隔符拼接，靠「每段定长」保证单射，而路径与请求体从来不定长，路径末尾的字符挪进请求体开头拼出同一串字节——今天做不成事只是现有路由和 JSON 的形状碰巧不给机会。CP2 让每段要么定长要么不含换行，版本标签在串里受签名保护（放头里会被降级）。三处副本必须一字不差：`ApiCredentialService.prehash`、测试助手 `SignedRequests`、`tools/api.py`；`HmacKnownAnswerTest` 的向量由 Python 独立算出，边界滑动那条测试先把缺陷钉成事实再断言修法。硬切不做双协议：今天没有外部客户端，双协议会把「两条失败路径耗时相等」搅乱
-- **清点补丁**（2026-09-10，第十二节「手写 vs 引库」全量扫描后）：① `TransientDbFailure` 一处定义「库这一下没成」，索引器、入账、发送三个任务共用——之前库连不上会让索引器 HALTED 落库、入账记 HELD_ERROR（受控复现后修）；② `ApiExceptionHandler` 继承 `ResponseEntityExceptionHandler`，框架认得的二十来种异常由父类判状态码、`handleExceptionInternal` 一处套信封——之前 405 / 415 / 404 落进兜底回 500 + 9001「可重试」；③ `ChainIndexerProperties` 用 `@Validated` + jakarta 约束守合法范围（漏配的 int 是 0，对 batch-blocks / degraded-after-failures 都不是合法值）；④ 出金 calldata 走仓内 `Abi.transfer`（M4-② 曾内联了第三份）；⑤ pom：bcprov 升 1.80 与 web3j 声明一致，排除 tuweni 那一串（vert.x、netty http 编解码、connid、kotlin、Jackson 2，5.7 MB 零引用，排除后 89 条零网络测试全绿）；⑥ `@DependsOnDatabaseInitialization` 代替内部 bean 名、`CONTENT_TOO_LARGE` 代替弃用常量、`toFixed32` 委托 `ser256`、`WalletBoundaryTest` 改按包前缀挡；⑦ 对库对拍进测试：ABI 编解码与 transfer calldata 对 web3j `FunctionEncoder` / `FunctionReturnDecoder`，Transfer topic0 对 `EventEncoder`，BIP-32 官方向量 3、4（前导零）。**规矩**：新依赖进树那天，回头清点原先「因为没有库」而手写的每一段（技能 12.11）
-- **停下要能被问到**（M2-⑥ 补丁 3）：状态表 `indexer_state`（RUNNING / DEGRADED / HALTED）。进程启动先读它，HALTED 就不碰节点，**重启不算恢复**，人改回 RUNNING 才算；连续 `degraded-after-failures` 次瞬时失败、或审计节点连续答不出 = DEGRADED，每轮 ERROR；HTTP 401 / 403 是凭证失效，`RpcAuthException` 直接停下不重试；只读接口 `GET /admin/v1/indexer` 一次给全状态、书签、链头、落后块数、争议块数。每种停机原因该做什么见 `docs/runbook/chain-indexer.md`
-- **节点地址按密码对待**：只经 `RpcEndpoint` 解析，失败只报变量名与主机名，永不回显原文（`URI.create` 会把整条含 key 的输入放进异常）；审计节点与主节点同一主机 = 拒绝启动；没配审计节点要在启动日志里写明「单节点」
-- **翻译层是外部 JSON 的唯一入口**：`EthRpc` 缺字段就指名拒绝，不留空指针；`EthRpcTest` 用 2026-09-04 录自 Sepolia 的真实响应做契约测试，`ChainIndexerBootSmokeTest` 让容器真的装配一次索引器（条件注解、属性绑定、`@Scheduled` 三者从此有默认覆盖）
-- controller 包不得引用 `asSystem`：`ControllerBoundaryTest` 扫源码守着（§2 那条 ArchUnit 的承诺以更薄的方式兑现，匹配集合不能为空）
+### 链数据与索引器
+
+- `chain_transfer_log` / `indexer_cursor` 是账本的**上游证据，不是账本**：没有 RLS（链上事实不属于任何商户）；应用角色没有 DELETE（重组标 `ORPHANED`，不删行）。
+- **事件与书签在同一个事务里提交**；书签只进不退，身份是「号 + 哈希」（锁后重读 + `UPDATE … WHERE` 期望的号与哈希）。
+- **网络 IO 在事务外面**：事务要短，握着行锁等 RPC 会拖垮连接池。
+- **解码失败 = 停下，不跳过**：跳过一条日志就是静默丢一笔入账。
+- `value` 存 `NUMERIC(78,0)` 原始单位；进账本只经 `TokenAmounts.toLedger`（精确除法、永不四舍五入，装不下抛 `AmountOverflowException`，那一笔 HELD，不卡住循环）。
+- 日志的唯一坐标是 `(block_hash, log_index)`，不是 `tx_hash`。**坐标相同不等于内容相同**：重放与对账都比载荷（代币、付款人、收款人、金额），同坐标不同内容 = 重放停下 / 对账 disputed，代码永远不改金额。
+- **一批的归属**：节点给的块号与块哈希不可信。落库前三道核对——块号在 [from, to] 内；每条日志的块哈希等于该块的头；取完之后重读 block(from)，哈希与父哈希未变（否则整批作废、下次再来）。
+- **重组 = 回滚**：`BlockIndexer` 只检测，`ReorgRecovery` 恢复。祖先 = 能证明和链上一致的最高一块（候选只有书签、有日志的块、finalized 头），**多退不伤，少退要命**；
+  祖先之上标 ORPHANED、书签退回祖先、记 `chain_reorg`，三者同一事务；地板是 finalized。重放的写入是 upsert：载荷相同时把 ORPHANED 复活成 CANONICAL（同一行）。
+- **确认等级不存，算出来**：视图 `chain_transfer_confirmation` 按单行表 `chain_head` 算 SEEN < SAFE < FINAL；给用户加钱绑在 FINAL。
+  `chain_head` 只进不退：finalized 倒退或同号换哈希 = `FinalityViolationException`，停下叫人；safe / latest 倒退 = 节点落后，保留旧值。
+- 失败分三类：瞬时的（`JsonRpcException`；`TransientDbFailure.isTransient` 认定的库抖动）下一轮再来；重组这一轮回滚、下一轮重放；
+  结构性的（finalized 倒退、解码失败、约束违反、没书签也没配 `start-block`）停下。`RpcAuthException`（401 / 403，凭证失效）直接停下，不重试。
+- **停下要能被问到**：状态表 `indexer_state`（RUNNING / DEGRADED / HALTED），HALTED **重启不算恢复**，人改回 RUNNING 才算；`GET /admin/v1/indexer` 一次给全状态。
+- **RPC 不信任**，三种错三种对策：大声的错（带 code）→ getLogs 窗口对半分，记住失败过的尺寸、向它二分逼近，不翻倍撞回去；减到一块还失败就停下，
+  除非那一块在链头两块以内（提供商后端之间头不一致，按瞬时处理）。安静的错（getLogs 漏日志）→ 每轮抽样用 `eth_getBlockReceipts` 重数，差异两个节点都点头（内容一致）才动，否则 disputed。
+  自相矛盾的错 → 只核对 finalized 那一块，两个节点意见不同 = `FinalityViolationException`。
+- 客户端对「发出到正文读完」整段计时，正文 16 MB 封顶。审计节点要独立于主节点才有价值（同一家两台机器会被同一个 bug 骗过）；没配时启动日志写明「单节点」。
+- **节点地址按密码对待**：只经 `RpcEndpoint` 解析，报错只写变量名与主机名；审计节点与主节点同一主机 = 拒绝启动；带 key 的地址只对回环与内网允许 `http://`。
+- **翻译层 `EthRpc` 是外部 JSON 的唯一入口**：缺字段就指名拒绝，不留空指针；契约测试用录下来的真实响应。
+- **代币白名单**：只索引、只入账 `chain_token` 里 ACTIVE 的代币，由数据库外键守（事件表与书签表）；登记时用 `eth_call` 问 decimals / symbol，问不到由运营手填并注明来源；
+  轮询第一次推批前核对链上 decimals，每轮 `requireUsable`；书签记住自己服务的代币，配置换了币而书签没换 = 停下。
+  ABI 解码里对方给的偏移与长度，先在 BigInteger 上比过实际字节数再收窄。Transfer 事件是合约「说」的，余额是合约「做」的（见「收款」）。
+- 追赶按时间封顶（`chainpay.chain.catch-up-budget`），不按批数。**动书签**（前跳或回退）必须用两个节点都同意的块哈希，先记旧值，只在停机或两轮之间做（`docs/runbook/chain-indexer.md`）。
+
+### 收款
+
+- **收款地址是租户边界**：`deposit_address` 有 RLS；一户一币一址由 `UNIQUE (merchant_id, token)` 裁决，并发申请输的一方读回赢家的地址；
+  序号来自序列、`UNIQUE (derivation_index)` 保证不重用；`address` 主键冲突不是并发，是配置错（序号重用或 xpub 配错），报出来不猜。
+  设了 `CHAINPAY_DEPOSIT_XPUB` 才装配；启动日志打出 xpub 指纹与 0/0 地址供对照，xpub 本身不进日志。
+- **入账**（`DepositPoster`）只取 FINAL、收款方是 ACTIVE 收款地址、代币 ACTIVE、还没有 `deposit` 行的日志；记给谁由收款地址那一行推导，不接受调用方递进来的商户 id。三步：
+  1. **核对在事务外**：两个节点各取该块头，哈希等于库里的、块号 ≤ 各自的 finalized。finalized 还没到、差距在 `finality-tolerance-blocks`（64）以内 = 这一轮延后、不占坑；超出 = HELD_NODE_DISAGREE。
+  2. **判决是纯计算**：零值 IGNORED_ZERO；装不下 HELD_OVERFLOW；低于 `min_deposit` 的 REJECTED_DUST。
+  3. **落库是系统池上的一个事务，先占坑再动钱**：`INSERT deposit … ON CONFLICT DO NOTHING` 占到了才记账（幂等键 `deposit:<block_hash>:<log_index>`，借镜像账户 `chain:custody:<SYMBOL>`、贷商户账户）。反过来先记账再占坑不安全：别的实例可能已把同一条判成 HELD。
+- **信合约做的，不信合约说的**：记账前向两个节点问该地址在那一块的 `balanceOf`，必须等于事件累计，否则 HELD_BALANCE_MISMATCH。
+- 失败分三种：拿不到回答 → 这一轮提前结束；`RpcAuthException` → 这一轮 HALTED，调度器关闸门、之后不再碰节点，换 key 后重启才再试；
+  余额问不到时按 `RpcFailure` 分类——合约 revert 当场 HELD，不认识的错误码只把这一笔延后、连续 5 轮才 HELD。
+- HELD 永不自动变 CREDITED、不卡队列；人复核后把行改成 APPROVED 并写明谁、为什么，任务下一轮重新占坑记账。**人永远不手工碰账本表。** 每种状态见 `docs/runbook/deposit.md`。
+- 商户接口：分配一户一币一址且幂等，地址给 EIP-55 写法；查询整段在 `asMerchant` 里；没有「按 id 查一条」，「不存在」与「不是你的」无从区分；HELD 只露状态不露原因；没配 xpub 时这些路径是 404。
+
+### 付款
+
+- **账本先扣、链上后发生**：申请时 可用 → 冻结（`WITHDRAWAL_FREEZE`，商户连接）；FINAL 后 冻结 → 托管镜像（`WITHDRAWAL`，系统身份）；失败 冻结 → 可用（`WITHDRAWAL_REVERSE`）。
+  结算过的不能再解冻，由「冻结账户不许为负」守，不靠代码记得。
+- 表：`hot_wallet`（`next_nonce` 是意图，真相在链上）、`payout`（每笔以冻结开始；结算与解冻互斥；状态与结局一一对应）、
+  `payout_tx`（签好的原文先落库再广播；同编号只有一笔 MINED 由部分唯一索引守）、`payout_address`（白名单）。系统角色对这几张表都没有 DELETE。
+- 状态机是显式转换表（`PayoutStatus`、`PayoutTxStatus`）。**BROADCAST 没有到 FAILED 的边**：广播后只有回执能宣布结局。
+- **发送**（`PayoutSender.sendOnce`，顺序是硬的）：对账（链上计数 C 在事务外问；事务里锁热钱包行，核 C ≤ N ≤ C + U：C > N 是有人在别处用了这把钥匙，N > C + U 是有编号没有尝试记录，都整把钱包 HALTED，**重启不算恢复**）
+  → 原样重发所有 SIGNED 的尝试 → 排队的：事务外估 gas、取费率，事务里锁行、签名、落库、编号 +1，**提交之后才广播**。网络永远不在事务里。
+- 广播的回答：成功 / already known → BROADCAST；没有 code（传输失败）→ 下一轮重发同一份原文；nonce too low → 看节点认不认识我们的哈希或兄弟尝试；
+  其它带 code 的拒绝与 `underpriced` → 钱包 HALTED。四处问节点的地方都先接 `RpcAuthException` → 钱包 HALTED → 告警。
+- **追踪**（`PayoutTracker`）只读链、只改状态、只在最后一步记账：status 0 也是上链（编号已用、gas 已扣）；主节点说那块哈希变了 = 重组，退回 BROADCAST；
+  两个节点的 finalized 都过了那块且哈希一致才结算或解冻。卡单（广播超过 3 分钟、没回执、节点还认着）→ 同编号加价 25% 替换，两个费率都有上限。
+- **申请**（`WithdrawalService.request`，顺序是硬的）：代币 → 金额 → 锁本商户的 merchant 行（同一商户的申请从这里起串行）→ 幂等键 → 平台自己的地址永远拒绝 → 白名单 → 按限额定「放行 / 待核准」→ 冻结 → 插行（冻结与插行同一事务）。
+  限额没定过 = 一律人工；当日上限只算自动放行过的。
+- **已知缺口**：发送任务签名前不复核白名单、限额、核准与冻结；入账不重新派生收款地址——worker 不能信 web 写进库里的行（进程拆分第 ③ 步修）。
+  商户用应用角色仍能插入借方是冻结账户的转账（没有接口会这么做；数据库层的写入检查用户定先不做）。
+- 每种停发原因该做什么见 `docs/runbook/payout.md`，真环境演练步骤见 `docs/runbook/payout-drill.md`。给热钱包充币前先核对地址。
+
+### 对账
+
+- `AuditService.runOnce()` 只读、只报，不改任何业务表。脚下的块 F = min(`chain_head.finalized`, 索引书签)：证据和事实必须是同一个时刻的；两个节点取 F 的块头，哈希不符就 FAILED，不给结论。
+- 五条检查：ADDRESS_BALANCE、DEPOSIT_LEDGER、PAYOUT_LEDGER（热钱包发出的每条日志都要对应一次尝试，否则就是有人在别处用了这把钥匙）、
+  CUSTODY_TOTAL（**C = |镜像| + 已 FINAL 未入账 − 已上链未结算 + 已登记注资 + E**，E ≠ 0 就报）、LEDGER_JUDGE。
+- 每一轮都落一行 `audit_run`（OK / DIFF / FAILED），差异逐条落 `audit_finding`，两张表只追加；「没跑」和「跑了没事」分得开（上次结论超过两个周期 = stale）。
+- 运营往热钱包充的币要登记（`hot_wallet_funding`）：只指认是哪一笔，金额、块、代币从索引到的日志读；块 ≤ finalized 才收。每种差异该做什么见 `docs/runbook/audit.md`。
+
+### 上线与运维
+
+- **健康检查**只在回环的管理端口（8096）上答，主端口没有 `/actuator`（探针不带令牌）。三个组：liveness（进程在不在）、readiness（`db`：两个连接池；容器 HEALTHCHECK 打它）、
+  work（索引器 / 入账 / 热钱包 / 判官 / Redis：给告警和人看，不影响进程去留）。多一档 DEGRADED（HTTP 200）。细节里没有密钥。
+- **容器**：两阶段构建、JRE、非 root、按层 COPY；密钥只从 `env_file` 来，compose 的 `environment` 只放拓扑与角色；端口只绑宿主回环；
+  去掉全部能力、禁止提权、根文件系统只读、限内存与进程数；`restart: unless-stopped`。镜像打完必须跑 `tools/image-check.sh`。
+- **告警**：定时读 work 组，只在变化时叫，送到了才记下；webhook 地址按密码对待（日志只出主机名）。
+- **部署**（`deploy/deploy.sh`，任一步失败即停）：构建（标签由内容决定）→ 配置检查 → 镜像扫描 → **迁移单独一步**（`--migrate-only`）→ 打标签（`current` / `previous` 就是发布记录）→ 切换 → 等就绪 → 不过就回滚。
+  一次性模式只认精确的 `--migrate-only` / `--create-admin`，写错一个字就退出码 2、什么都不跑。
+- **迁移只前进**：上一版代码必须能跑在新 schema 上（先加后删），Flyway 容忍库里的未来版本。**改列类型不满足这一条**（包括改成 DOMAIN）：运行中实例缓存的预编译语句在事务里报 SQLSTATE 0A000。
+  **已执行过的迁移只能往前加，不能改**（Flyway 按文件内容算校验和，连注释也算）。
+- 这台 Mac 的容器内 TLS 偶发断手，构建失败先重跑。操作细节见 `docs/runbook/ops.md`。
+
+### 接口与安全
+
+- **签名协议 CP2**：`canonical = "CP2" LF ts LF nonce LF method LF path(含查询串) LF sha256hex(body)`，签名是 Base64(HMAC-SHA256)。每段要么定长要么不含换行，拼接才无歧义；
+  三处副本必须一字不差：`ApiCredentialService.prehash`、测试的 `SignedRequests`、`tools/api.py`。
+- nonce 的格式在验签之前查（定长是拼接无歧义的前提），重放登记在验签之后；凭证未命中也做一次诱饵解密与 HMAC，两条失败路径耗时相等。
+- 每个 `@RequestBody` 都带 `@Valid`；校验失败 / JSON 不可读 / 参数缺失或类型不匹配一律 400 + 2001；框架认得的异常由 `ResponseEntityExceptionHandler` 判状态码，不落进兜底的 500。
+- **没有任何 HTTP 入口能自己选借贷双方**：controller 里不许出现账本的转账代码与业务类型（`ControllerBoundaryTest`）。
+- 调度线程数 ≥ `@Scheduled` 任务数（Spring 默认只有一条，一个任务等锁时全体停摆）。系统连接带 `lock_timeout`，并把 55P03 翻成瞬时错误——**加超时的同时要问：超时会被翻成哪一类。**
+- 新依赖进树那天，回头清点原先因为「没有库」而手写的每一段。
 
 ---
 
@@ -296,43 +302,34 @@ M2 的形态已在 2026-09-02 出现：不是「先查再改」，是「两个�
 
 **证据会过期**：三轮编辑之前的那次绿灯，现在不算数。
 
+- **拆墙**：在临时拷贝里一次拆一处承重的东西，确认该红的测试红。恢复原状后要确认编译产物也恢复了——`rsync -a` 连旧的修改时间一起恢复，Maven 可能沿用旧 class；拿不准就清掉 `target` 再跑。
+- **删接口会制造空转测试**：打这个接口的测试可能两边都拿到 404、照样绿，却什么都不证明。删接口时把相关测试逐条看过，不能只看红的那些。
+- **单个向量证明不了「永远」**：要证明一条规律，就要让测试覆盖到那条规律会被违反的样本。
+
 ---
 
 ## 6. Git
 
-### 提交前必须先让用户看 diff（2026-08-13 增补）
+### 提交前必须先让用户看变更集
 
-**AI 写完代码后不要直接 commit。** 正确流程：
+AI 写完代码后不要直接 commit：写完 + 跑测试 → 把改动留在工作区，告诉用户「改了哪些文件、每个文件改了什么、重点看哪几行」→ 用户说「提交」才提交，说「push」才推送。
+用户不写代码，判断力是他唯一的把关手段；代码一旦进了 commit，就从 IDE 的 Changes 面板里消失了。
 
-```
-① 写完 + 跑测试
-② 把改动留在工作区/暂存区，告诉用户「改了哪些文件、每个文件改了什么、重点看哪几行」
-③ 等用户确认
-④ 用户说可以了，再 commit
-```
-
-> **为什么**：用户不写代码，判断力是他唯一的把关手段。
-> 代码一旦进了 commit，在 IDE 的 Changes 面板里就消失了——等于把唯一的审阅窗口关掉。
-
-**如果已经误提交了**（且未推送）：`git update-ref -d HEAD`（首次提交）或
-`git reset --soft HEAD~1`，文件不动、全部退回暂存区。**提交信息先存到临时文件**，
-确认后原样重新提交。
-
-### 其余规则
-
-- **AI 不得自行 `push`**，除非明确要求
-- 暂存按显式路径，**禁止 `git add -A` / `git add .`**
-- `env/*.env`、私钥、助记词**绝不入库**（`.gitignore` 已配，但别依赖它）
+- 暂存按显式路径，**禁止 `git add -A` / `git add .`**。
+- 误提交且未推送：`git reset --soft HEAD~1`（首次提交用 `git update-ref -d HEAD`），文件不动、全部退回暂存区；提交信息先存到临时文件，确认后原样重新提交。
+- `env/*.env`、私钥、助记词**绝不入库**（`.gitignore` 已配，但别依赖它）。
 
 ---
 
-## 7. 私钥（M4 起）
+## 7. 私钥
 
-- 绝不进代码、绝不进镜像层、绝不进日志
-- 镜像的层不可变：`COPY` 进去再 `RUN rm` 删掉，密钥仍在前一层里
-- 测试网私钥也按真密钥对待——习惯是练出来的
-- **服务端没有私钥**（M3-①，2026-09-07）：收款地址从账户层 xpub（m/44'/60'/0'）做 BIP-32 普通派生，助记词与 xprv 从头到尾不进服务器。主代码里只有 `chain/wallet` 包能碰 `ExtendedPrivateKey` / `Bip39`，`WalletBoundaryTest` 扫源码守着；xpub 用 `tools/xpub.sh` 断网算，工具不回显、不落盘、不记日志。xpub 泄露 = 隐私全丢（能枚举全部收款地址），但转不走钱；**xpub 加任意一个普通派生的子私钥 = 父私钥**，所以 M4 取私钥签名时绝不能把某个子私钥单独交出去
-- **热钱包私钥**（M4-①，2026-09-09）：服务端唯一的一把私钥，从环境变量 `CHAINPAY_PAYOUT_HOT_WALLET_KEY` 装入一次，进程里只活在 `HotWalletSigner` 里（只暴露 `address()` 与 `sign(tx)`，`toString` 只含地址；错误消息只说长度与范围，永不回显内容）。它**必须与收款树隔离**：另一句助记词（推荐：离线那一端出事时不用重发商户的收款地址；`tools/mnemonic.sh` 断网生成 12 词，`SecureRandom` 128 位熵 + BIP-39 校验位，词表逐字取自 bitcoin/bips 620871a 并核 sha256，只显示一次），或同一句的硬化账户 `m/44'/60'/1'/0/0`（`tools/hotwallet.sh` 断网算，私钥只打印一次）。**绝不能**从日常 MetaMask 导出某个账户的私钥当热钱包：那是收款树的普通子节点，它的私钥加上服务器里的 xpub 就是整棵收款树的私钥——普通派生的子私钥减去由 xpub 就能算出的偏移量就是父私钥，硬化派生的偏移量用父私钥算、拿 xpub 算不出。`WalletBoundaryTest` 的禁用符号扩到 `Ecdsa` / `HotWalletDerivation` / `HotWalletTool`：payout 包只能拿签名器，拿不到裸私钥。`tools/check-secrets.sh` 扫仓库（git 跟踪 + 未忽略的文件）与任意目录：带 key/private/secret/mnemonic/xprv 字样的行里的 64 位十六进制、xprv 长串、整行 12/24 个小写单词；公开测试密钥在 `tools/check-secrets.allow` 里**逐值**放行并注明来源，规范向量文件按路径放行；命中只打印前 6 位。`SecretScanTest` 证明它在仓库上过、且抓得住埋进去的私钥与助记词
-- **签名的两条会丢钱的规矩**（M4-①）：k 由 RFC 6979 确定地算出（两笔撞同一个 k 就能解出私钥）；s 取 ≤ n/2 的那个（EIP-2，否则同一笔交易有两个哈希，库里记的哈希可能指向一笔不存在的交易）。实现在 web3j 里，证据是我们的：EIP-155 正文算例的 (r, s) 逐位相同；24 条消息里 s 永远 ≤ n/2——**单个向量证明不了「永远」**（自写版拆掉 low-s 时那条向量仍绿，它的 s 碰巧是小的）
-- **原语与协议编码用库，策略与业务自己写**（2026-09-09 由用户改判）：密码学原语（Keccak、曲线、ECDSA、HMAC、PBKDF2）一直是 BouncyCastle；协议层编码（RLP、EIP-1559 布局、签名打包与恢复、地址）改为 web3j 6.0.0 的 `crypto` 模块（不拿 `core`；排除 EIP-4844 的原生库 jc-kzg-4844），我们只留不依赖 web3j 类型的薄包装（`Rlp.Item`、`Eip1559Transaction`、`Ecdsa`、`HotWalletSigner`），换库只动这一层。**测试是我们的，实现是库的**：官方向量与自洽测试原样保留，成为对库的验收，升级版本由它们把关。JSON-RPC 客户端仍自写（正文封顶、超时、错误分类、双节点核对是策略，不是轮子）。M3 的 BIP-32/39 与 xpub 解析不动，理由（2026-09-10 扫描核实后重写）：web3j 的 `Bip32ECKeyPair` 只能从私钥派生、没有只用公钥的入口、没有 xpub 的解析与序列化、不做「I_L ≥ n」检查；`MnemonicUtils.generateSeed` 不做 NFKD；把私钥侧交给库、公钥侧自写会让同一份规范落在两处。证据是 BIP-32 官方向量 1、2、3、4（3、4 专测前导零）与 BIP-39 向量。同理保留的：`Abi` / `TransferLogDecoder`（库对畸形返回更宽松：uint 直接收窄、topic 地址丢上位 12 字节，我们的严格是策略；测试里与库对拍）、`EthAddress`（与 `Keys` 两套并存互相对拍）、`Hex`（比 `Numeric` 更严且不把 web3j 类型带进 rpc 包）
-- **已知答案必须来自原始文本**：BIP-32 向量经概括模型转述时被抄错一个字母，Base58Check 校验和立刻不成立；规范向量用 curl 取原文逐字核对，不经任何转述
+- 绝不进代码、镜像层、日志。镜像的层不可变：`COPY` 进去再 `RUN rm`，密钥仍在前一层里。测试网私钥也按真密钥对待——习惯是练出来的。
+- **服务端没有收款私钥**：收款地址从账户层 xpub（m/44'/60'/0'）做 BIP-32 普通派生，助记词与 xprv 从头到尾不进服务器；主代码只有 `chain/wallet` 能碰私钥数学（`WalletBoundaryTest` 守）。
+  xpub 泄露 = 隐私全丢（能枚举全部收款地址），但转不走钱。**xpub 加任意一个普通派生的子私钥 = 父私钥**，所以绝不能把收款树里的某个子私钥单独交出去。
+- **热钱包私钥**是服务端唯一的私钥：从 `CHAINPAY_PAYOUT_HOT_WALLET_KEY` 装入一次，只活在 `HotWalletSigner` 里（只暴露地址与签名，`toString` 只含地址，错误消息只说长度与范围）。
+  它必须与收款树隔离：另一句助记词（`tools/mnemonic.sh`），或同一句的硬化账户 `m/44'/60'/1'/0/0`（`tools/hotwallet.sh`）；**绝不能**从日常钱包导出收款树里某个账户的私钥当热钱包。payout 包只能拿签名器，拿不到裸私钥。
+- 离线工具（`tools/xpub.sh`、`hotwallet.sh`、`mnemonic.sh`）断网跑，不回显、不落盘、不记日志。`tools/check-secrets.sh` 扫仓库与任意目录里的私钥、xprv、助记词形态，命中只打印前 6 位；公开测试密钥在 `tools/check-secrets.allow` 里逐值放行（`SecretScanTest` 守）。
+- **签名的两条会丢钱的规矩**：k 由 RFC 6979 确定地算出（两笔撞同一个 k 就能解出私钥）；s 取 ≤ n/2（EIP-2，否则同一笔交易有两个哈希）。
+- **原语与协议编码用库，策略与业务自己写**：密码学原语用 BouncyCastle，RLP / EIP-1559 / 签名打包与恢复用 web3j 的 `crypto` 模块，我们只留不依赖 web3j 类型的薄包装，换库只动这一层；
+  解码后编回必须与原文逐字节相同（节点会拒的我们不能比它宽松）。JSON-RPC 客户端、BIP-32 / 39 与 xpub 解析、`Abi`、`EthAddress`、`Hex` 自写（策略比库严），测试里与库对拍。**测试是我们的，实现可以是库的。**
+- **已知答案必须来自原始文本**：规范向量用浅克隆取原文逐字核对，不经任何转述（一次经模型转述的 BIP-32 向量抄错了一个字母）。

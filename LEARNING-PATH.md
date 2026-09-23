@@ -2,7 +2,7 @@
 
 > 一个加密支付网关。目的不是做出产品，是**用一个真实到会咬人的项目，把正确性、安全、部署这三件事练成肌肉记忆**。
 >
-> 创建于 2026-08-12。
+> 创建于 2026-08-12。现在的状态见第九节，进度记录见第六节。
 
 ---
 
@@ -11,20 +11,17 @@
 **chainpay = 一个加密货币收付款网关。**
 
 ```
-商户                      chainpay                     链 / 交易所
+商户                      chainpay                     链
  │                           │                            │
- │  ① 创建收款单             │                            │
+ │  ① 申请收款地址           │                            │
  │ ─────────────────────────>│                            │
- │  <── 返回充值地址 ────────│                            │
- │                           │                            │
- │                           │  ② 监听链上到账             │
+ │  <── 返回收款地址 ────────│                            │
+ │                           │  ② 索引链上到账、入账       │
  │                           │ <──────────────────────────│
- │  <── webhook 通知 ────────│                            │
- │                           │                            │
  │  ③ 发起提现               │                            │
  │ ─────────────────────────>│  ④ 签名 + 广播交易          │
  │                           │ ──────────────────────────>│
- │  <── webhook 通知 ────────│  <── 确认 ────────────────  │
+ │  （商户回调 webhook：未做，商户轮询查询接口）            │
 ```
 
 你在这个系统里**同时扮演两个角色**：
@@ -32,34 +29,17 @@
 | 角色 | 你是谁的什么 | 要学什么 |
 |---|---|---|
 | **上游** | 商户调用你的 API | **怎么当一个成熟的服务商**——照币安 / OKX 的规范设计 |
-| **下游** | 你调用链 / 交易所 | **怎么正确对接一个你不控制的系统**——重组、超时、重复推送 |
+| **下游** | 你调用链上节点 | **怎么正确对接一个你不控制的系统**——重组、超时、节点撒谎 |
 
-> **这正是 flow-pay 教你的东西的镜像。** 在 flow-pay 里，你是 OSL 的下游，被一个不成熟的服务商反复教育。
-> 在 chainpay 里，你要**自己成为那个服务商**——而"怎么当好服务商"的标准答案，币安和 OKX 已经完整写在他们的 API 文档里了。
+> 这正是 flow-pay 教你的东西的镜像：在 flow-pay 里你是服务商的下游，在 chainpay 里你要**自己成为那个服务商**。
 
 ---
 
-## 二、为什么选这个方向（而不是别的）
+## 二、为什么选这个方向
 
-我评估过几个候选，这个方向胜出的理由是**它能自动制造你需要的那种 bug**。
+**一个人 + AI 搭出来的项目，几乎必然"能跑但学不到东西"。** flow-pay 里的教训——随机 ID 撞号、check-then-act、并发双花、缓存回填旧值——没有一个是写代码时发现的，全是被现实咬出来的：真实并发、真实的钱、真实的外部系统、真实的部署。一个人写的 CRUD，这些一个都没有。
 
-### 从零搭项目的最大陷阱
-
-**一个人 + AI 搭出来的项目，几乎必然"能跑但学不到东西"。**
-
-因为你在 flow-pay 学到的那些教训——随机 ID 撞号、check-then-act、并发双花、缓存回填旧值——**没有一个是"写代码"时发现的，全是被现实咬出来的**：
-
-- 真实并发（不是你一个人点）
-- 真实的钱（错了有人损失）
-- 真实的外部系统（会超时、会重复推、会返回旧数据）
-- 真实的部署（环境和你本地不一样）
-- 真实的队友（会 review 你，会改你的代码）
-
-**你一个人写的 CRUD，这五样一个都没有。** 所以从零搭项目的核心设计问题不是"做什么功能"，是：
-
-> **怎么让这个项目自带对抗性，在没有真实用户和真实金钱的情况下，仍然会咬你。**
-
-### 区块链恰好把对抗性白送给你
+所以核心问题不是"做什么功能"，而是：**怎么让这个项目自带对抗性，在没有真实用户和真实金钱的情况下，仍然会咬你。** 区块链恰好把对抗性白送给你：
 
 | 你需要的对抗性 | 链免费提供 |
 |---|---|
@@ -68,715 +48,224 @@
 | 不可控的重放 | **区块重组（reorg）**——你以为确认的事实会被撤销 |
 | 可验证的真相 | 链上数据是公开的，**你能拿它对账，证明自己算错了** |
 | 真实的钱语义 | 转账不可逆、精度 18 位、手续费必须自己出 |
-| 零成本 | **测试网完全免费**，faucet 领币，随便炸 |
+| 零成本 | 测试网完全免费，水龙头领币，随便炸 |
 
-**最后一条"可验证的真相"是关键。** 普通 CRUD 项目里，你的数据库就是唯一真相，没人能证明你错了。
-链上项目里，**链是真相，你的库是副本**——只要写一个对账脚本，它就会持续告诉你哪里算错了。
-
-> **这就是"能抓住你的机制"。** 学习项目最缺的不是功能，是**独立于你的判官**。
+**「可验证的真相」是关键**：普通项目里库就是唯一真相，没人能证明你错了；链上项目里**链是真相，库是副本**，对账会持续告诉你哪里算错了。学习项目最缺的不是功能，是**独立于你的判官**。
 
 ---
 
-## 三、技术选型与理由
+## 三、技术选型的理由
 
-**全部取当前最新稳定版**（2026-08 核实于 Maven Central / Docker Hub / Adoptium）。
+| 层 | 选型 | 为什么是它 |
+|---|---|---|
+| 语言 / 框架 | Java 25 (LTS) + Spring Boot 4.1 | 最新的长期支持基线；代价是第一批踩坑，得自己读官方文档和源码——那正是要练的能力 |
+| 数据库 | PostgreSQL 18 | 刻意换掉 MySQL（见下） |
+| 数据访问 | Spring `JdbcClient`（账本层不用 ORM） | 账本必须看得见每一条 SQL（见下） |
+| 迁移 | Flyway | `strong_migrations` 清单能直接用 |
+| 测试 | JUnit + Testcontainers | 真 Postgres、真 Redis，不用 H2 骗自己 |
+| 链 | Ethereum Sepolia 测试网 | 免费、真实、12 秒出块 |
+| 链上编码 | web3j 的 `crypto` 模块（M4 起） | 只用它做 RLP、EIP-1559 与签名；JSON-RPC 客户端自己写（超时、封顶、错误分类、两节点核对都是策略） |
+| 上游参照 | Binance API / OKX API v5 | 学 API 设计规范 |
 
-| 层 | 选型 | 版本 | 为什么是它 |
-|---|---|---|---|
-| 语言 | **Java** | **25 (LTS)** | 当前最新 LTS。比 flow-pay 的 21 新一代 |
-| 框架 | **Spring Boot** | **4.1.0** | 最新；带 Spring Framework 7 |
-| 数据库 | **PostgreSQL** | **18** | 最新 GA（19 还是 beta）。**刻意换掉 MySQL**（见下） |
-| 数据访问 | **Spring `JdbcClient`（不用 ORM）** | 内置 | **账本层必须看得见每一条 SQL**（见下） |
-| 迁移 | Flyway | 12.4.0 | Boot 托管。`strong_migrations` 清单能直接用 |
-| 测试 | JUnit Jupiter + Testcontainers | 6.0.3 / 2.0.5 | Boot 托管。真 Postgres 跑测试，不用 H2 骗自己 |
-| 构建 | Maven | 3.9.16 | 本机已装 |
-| 容器 | Docker Compose | 29.7.2 | 本机已装 |
-| 链（M2 起） | **Ethereum Sepolia 测试网** | — | 免费、真实、12 秒出块（够慢，看得清） |
-| 链库（M2 起） | web3j | 6.0.0 | 到 M2 再加，现在不装 |
-| 上游参照 | **Binance API / OKX API v5** | — | 学 API 设计规范 |
+**为什么换成 PostgreSQL**：不是因为它"更好"，是**换一个能让你看见差异**——`NUMERIC` 的溢出报错更早；`REPEATABLE READ` 是真正的快照隔离（对比着学才知道"隔离级别"不是一个词）；部分索引与更强的 `CHECK` 能把不变量写进数据库；**DDL 能在事务里回滚**，迁移失败不留半个表。加密和金融领域它是事实标准。
 
-### 四个需要解释的选择
-
-#### ① 为什么全上最新版：好处和代价都要说清楚
-
-**好处**（你要的兼容性）：
-
-- Java 25 是 LTS，未来 4–5 年都是主流基线
-- Spring Boot 4 / Framework 7 是新一代主干，3.x 会逐步进入维护期
-- 依赖树全新，不会一开始就背技术债
-
-**代价**（必须提前知道）：
-
-> **选最新版 = 你会成为第一批踩坑的人。**
->
-> 网上的示例大多还是 Spring Boot 3.x 的写法，某些第三方库还没跟上 Framework 7。
-> 遇到问题时，StackOverflow 上可能没有答案，**得自己读官方文档和源码**。
-
-**但对这个项目来说，这个代价是划算的**——因为「读官方文档、读源码、自己判断」正是你要练的能力。
-遇到 4.x 特有的问题我会明确标注出来，不会让你以为是自己写错了。
-
-#### ② Spring Framework 7 顺手补上了你的一个知识空白
-
-我之前判断过：你在 flow-pay 的教训里有几条"现成清单填不上"，其中一条是**三态建模**——
-`undefined` ≠ `false` ≠ `null`，这三者混用是 bug 的温床，但它是类型系统实践，没有清单可抄。
-
-**Framework 7 引入了 JSpecify 的空安全注解**（`@Nullable` / `@NonNull` 有了跨生态的统一标准），
-配合 IDE 和编译期检查，能把"这个值可能不存在"变成**编译器帮你查的事**，而不是靠你记得。
-
-> 这一条到 M1 会用上：API 里"字段没传"和"字段传了 null"是**两件事**，
-> 币安/OKX 的接口设计对此有明确区分。
-
-Framework 7 还带来两个对本项目直接有用的东西：
-
-- **API 版本化支持** → M1 用
-- **内建弹性能力**（重试、并发限流注解）→ M2/M4 用，正好对上 RPC 不可靠和 nonce 串行化
-
-#### ③ 为什么换成 PostgreSQL
-
-不是因为它"更好"，是**因为换一个能让你看见差异**。
-
-| Postgres 的特性 | 学到什么 |
-|---|---|
-| `NUMERIC` 是任意精度的真十进制 | MySQL 的 `DECIMAL` 也是，但 Postgres 的溢出/舍入行为更严、报错更早 |
-| `REPEATABLE READ` 是真正的快照隔离 | MySQL 的同名级别有间隙锁的怪异行为——**对比着学才知道"隔离级别"不是一个词** |
-| `EXCLUDE` 约束、部分索引、更强的 `CHECK` | **能把不变量写进数据库**，而不是靠应用代码守 |
-| `TIMESTAMPTZ` 真的带时区语义 | MySQL 的 `TIMESTAMP` 坑很多 |
-| **DDL 可以在事务里回滚** | 迁移失败不会留下半个表——这一条 MySQL 做不到 |
-
-> 更重要的是：**你以后一定会遇到 Postgres**。加密和金融领域它是事实标准。
-
-#### ④ 为什么账本层不用 ORM
-
-这是**故意的**，而且是最重要的一个选择。
-
-你在 flow-pay 的教训清单里有一条我判定"清单填不上"的空白：**框架魔法边缘**——ORM 插件在特定版本下的行为，谁也没法提前给你清单。
-
-**账本是整个系统里唯一不能错的地方。** 在这里你会写：
-
-```java
-// 每一条 SQL 都在眼前
-long entryId = jdbcClient.sql("""
-        INSERT INTO entry (transfer_id, account_id, currency, amount)
-        VALUES (:transferId, :accountId, :currency, :amount)
-        RETURNING id
-        """)
-    .param("transferId", transferId)
-    // ...
-```
-
-而不是：
-
-```java
-entryRepository.save(entry);   // 这一行到底发了几条 SQL？加没加锁？触没触发多租户插件？
-```
-
-> **判据：越是不能错的地方，抽象越要薄。**
-> 业务 CRUD 用 ORM 没问题，**账本不行**。
-
-（M3 之后的业务层你可以引入 JPA 或 MyBatis——那时候你已经知道自己在放弃什么了。）
+**为什么账本层不用 ORM**：账本是唯一不能错的地方。`jdbcClient.sql("INSERT INTO entry …")` 每一条 SQL 都在眼前；`entryRepository.save(entry)` 这一行到底发了几条 SQL、加没加锁、触没触发多租户插件，谁也说不清。**越是不能错的地方，抽象越要薄。**
 
 ---
 
 ## 四、学习方法：每个里程碑怎么走
 
-**这是全文最重要的一节。方法比路线更重要。**
-
 ### 固定的五步循环
 
 ```
-① 先写"这一步可能怎么坏"清单     ← 写代码之前！
+① 先写"这一步可能怎么坏"清单     ← 写代码之前
 ② 写出能抓住这些坏的测试（红灯）
 ③ 实现到绿灯
-④ 对照现成清单，补你没想到的
-⑤ 复盘：清单里哪几条是你自己想到的？哪几条是抄来的？
+④ 对照现成清单，补没想到的
+⑤ 复盘：清单里哪几条是你自己想到的？
 ```
 
-**第 ① 步是关键，也是最反直觉的一步。**
-
-普通做法是：写代码 → 出 bug → 修。
-这个做法是：**先假装自己是攻击者，列出这个功能会怎么坏，再动手。**
-
-你已经有了做这件事的原料——`flow-pay-backend/docs/ai/knowledge/` 和
-`flow-pay-merchant/docs/knowledge/` 里那 313 份清单。**每个里程碑开始前，先翻对应的那几份。**
-
-### 第 ⑤ 步为什么重要
-
-**记录"哪几条是你自己想到的"，是唯一能看出你在进步的指标。**
-
-M0 的时候可能 10 条里你想到 2 条。M4 的时候如果还是 2 条，说明方法有问题；
-如果变成 7 条，说明你真的把清单内化了。
-
-**每个里程碑结束写一份 `docs/retro/M<n>.md`：**
+**第 ① 步最反直觉**：不是写代码 → 出 bug → 修，而是先假装自己是攻击者，列出这个功能会怎么坏，再动手。
+**第 ⑤ 步是唯一能看出进步的指标**：M0 时 10 条里想到 2 条，后来变成 7 条，才说明真的内化了。每个里程碑结束写一份 `docs/retro/M<n>.md`（本地，不进 git）：
 
 ```markdown
-## M<n> 复盘
-
-- 我事先想到的坏法：（列表）
-- 清单补上的：（列表）
-- 实际踩到但两边都没预料的：（列表）  ← 这些是你自己的事故簿，最值钱
+- 我事先想到的坏法：
+- 清单补上的：
+- 实际踩到但两边都没预料的：  ← 你自己的事故簿，最值钱
 - 下次要提前问的问题：
 ```
 
-### 关于 AI（也就是我）在这里的角色
+### AI 在这里的角色（2026-08-13 起）
 
-**一条硬规则：不要让我一次性生成一个里程碑的全部代码。**
-
-**因为那正好跳过了学习发生的地方。** 你学到东西的时刻，是在
-「我以为它对」和「它其实错了」之间的那个缝隙里。AI 一把生成的代码直接跳过了缝隙。
-
-| 该让 AI 做 | 该你自己做 |
-|---|---|
-| 讲解概念、原理、别人的设计为什么那样 | **写第 ① 步的坏法清单** |
-| 找资料、拉清单、配事故案例 | 写测试 |
-| 写脚手架、配置、样板代码 | **写核心逻辑**（账本、nonce、reorg 处理） |
-| Review 你写的代码，指出问题 | 决定架构取舍 |
-| 解释报错、解释新版本的行为差异 | 调试（我陪着，你主导） |
-
-> **我的定位：教练 + 资料员 + 陪练，不是代打。**
+**你不写代码，AI 写代码、写测试、跑验证；你判断方向、判断取舍、决定做什么不做什么。** 分工与讲解的规矩见 `CLAUDE.md` §0。
+学习发生在「以为它对」和「它其实错了」之间的缝隙里，所以：一次只做一步；每一步交代理由、不这么写会怎样、承重的几行；拆墙证明测试真的守着；第 ① 步 AI 只提问、不给答案。
 
 ---
 
 ## 五、里程碑
 
-| # | 里程碑 | 核心难点 | 预估 | 必做? |
-|---|---|---|---|---|
-| **M0** | 账本地基 | 并发下的正确性 | 1–2 周 | ✅ 核心 |
-| **M1** | 对外 API（照币安/OKX） | 签名、防重放、限频 | 1 周 | ✅ 核心 |
-| **M2** | 区块索引器 | **重组 reorg** | 2 周 | ✅ 核心 |
-| **M3** | 收款 Pay-In | 地址派生、确认数策略 | 1 周 | ✅ 核心 |
-| **M4** | 付款 Pay-Out | **nonce 管理**、私钥 | 2 周 | ✅ 核心 |
-| **M5** | 对账 | 三种差异的发现 | 3–5 天 | ✅ 核心 |
-| **M6** | 上线 | 部署八环节 | 3–5 天 | 建议 |
-| **M7** | 攻防复现 | 复现真实事故 | 持续 | 加分 |
-
-**总计约 2–3 个月业余时间。** 不要赶——M0 花两周是值得的，它是后面全部的地基。
-
----
+| # | 里程碑 | 核心难点 | 状态 |
+|---|---|---|---|
+| **M0** | 账本地基 | 并发下的正确性 | ✅ 08-13 |
+| **M1** | 对外 API（照币安 / OKX） | 签名、防重放、限频 | ✅ 08-16 / 09-01 |
+| **M2** | 区块索引器 | **重组 reorg** | ✅ 09-03 |
+| **M3** | 收款 Pay-In | 地址派生、入账门槛 | ✅ 09-08 |
+| **M4** | 付款 Pay-Out | **nonce 管理**、私钥 | ✅ 09-13 |
+| **M5** | 对账 | 三种差异的发现 | ✅ 09-14 |
+| **M6** | 上线 | 部署八环节；之后的进程拆分进行中 | ✅ 09-15；拆分进行中 |
+| **M7** | 攻防复现 | 复现真实事故 | 未开始 |
 
 ### M0 · 账本地基（不碰链、不碰网络）
 
-> **目标：一个在 100 线程并发下也不会算错账的复式记账账本。**
+> **目标：一个在 100 线程并发下也不会算错账的复式记账账本。** 故意不碰任何外部系统：先证明在最可控的环境里能写出不会错的账。
 
-这一步**故意不碰任何外部系统**。因为你要先证明：在最可控的环境里，你能写出不会错的账。
+**会踩到的坑**：金额用 `double`；金额拆成"整数 + 小数"两个字段（Google Ads 把 $250 算成 $25,000）；余额检查与扣款不在同一个事务 / 锁里；先 `SELECT` 再 `UPDATE` 丢失更新；幂等只在应用层查；借贷两条分录分两个事务写；转给自己；0 或负数金额；跨币种直接比较；物化余额与分录求和不一致没人发现；加锁顺序不固定导致死锁；`NUMERIC(38,18)` 溢出是截断还是报错。
 
-#### 会踩到的坑（预告，**先别看答案**）
+**学什么**：复式记账（每笔两条分录、`SUM == 0` 的不变量）；金额类型（为什么 `NUMERIC(38,18)`）；事务隔离的真实差异；悲观锁 vs 乐观锁、死锁与加锁顺序；幂等靠数据库 UNIQUE；约束下沉；实时求和 vs 物化余额。
+对照清单：`tigerbeetle/`（debit-credit、balance-invariant-transfers、correcting-transfers、TIGER_STYLE）、`falsehoods-about-prices.md`、`owasp-wstg-business-logic/04-*Process_Timing.md`。
 
-<details>
-<summary>点开前，先自己列一份清单存到 docs/retro/M0-before.md</summary>
+**事故**：Google Ads 的 $25,000 假钱（元和分两个字段拼错位）；Knight Capital（2012，部署时一台服务器没更新，45 分钟亏 4.4 亿美元，M6 再遇）。
 
-1. 金额用 `double` → `0.1 + 0.2 ≠ 0.3`
-2. 金额拆成"整数部分 + 小数部分"两个字段 → **Google Ads 把 $250 算成 $25,000 就是这么来的**
-3. 余额检查和扣款不在同一个事务/锁里 → check-then-act，并发下超额扣款
-4. `SELECT balance` 再 `UPDATE balance = ?` → 丢失更新
-5. 幂等键只在应用层查，不加 UNIQUE 约束 → 并发下重复入账
-6. 借贷两条分录分两个事务写 → 中间崩了，账不平
-7. 转账给自己 → 余额不变但产生两条分录，某些统计会翻倍
-8. 金额为 0 或负数的转账 → 没校验就能"反向转账"
-9. 跨币种转账 → 数值直接比较（flow-pay `e8fd34e` 踩过）
-10. 余额存在 `account.balance` 列，和分录求和不一致 → 没人发现
-11. 加锁顺序不固定 → 死锁
-12. `NUMERIC(38,18)` 溢出 → 悄悄截断还是报错？
-
-</details>
-
-#### 学什么
-
-| 主题 | 具体 |
-|---|---|
-| **复式记账** | 为什么每笔转账要写两条分录；借贷符号约定；`SUM == 0` 这个不变量 |
-| **金额类型** | `NUMERIC(38,18)` vs `DECIMAL(20,8)` vs `BIGINT`（分）vs `double`。为什么是 18 位小数 |
-| **事务隔离** | `READ COMMITTED` / `REPEATABLE READ` / `SERIALIZABLE` 的真实差异；丢失更新、脏读、幻读 |
-| **加锁** | `SELECT ... FOR UPDATE`（悲观）vs 版本号（乐观）；死锁与加锁顺序 |
-| **幂等** | 为什么幂等键必须是**数据库 UNIQUE 约束**而不是应用层查询 |
-| **约束下沉** | `CHECK (amount > 0)`、`CHECK (debit <> credit)`——**能让数据库守的不变量，不要交给应用** |
-| **余额** | 实时求和 vs 物化余额列；一致性怎么保证 |
-
-#### 对照清单（你已经有的）
-
-| 清单 | 位置 |
-|---|---|
-| 复式记账为什么这么设计 | `flow-pay-backend/docs/ai/knowledge/tigerbeetle/concepts/debit-credit.md` |
-| 余额不能为负这类约束 | `tigerbeetle/recipes/balance-invariant-transfers.md`、`balance-bounds.md` |
-| 记错账要冲正 | `tigerbeetle/recipes/correcting-transfers.md` |
-| 金额别用浮点 | `falsehoods/falsehoods-about-prices.md` |
-| 断言与防御式编程的纪律 | `tigerbeetle/TIGER_STYLE.md` |
-| 并发 / 竞态 / TOCTOU | `owasp-wstg-business-logic/04-*Process_Timing.md` |
-
-#### 事故配对
-
-> **Google Ads 的 $25,000 假钱**
-> 内部测试用的 $250 优惠券，被系统算成了 $25,000。根因：**金额被拆成"元"和"分"两个字段**，
-> 某段代码把两个字段拼错了位。
-> —— 索引在 `falsehoods/awesome-falsehood.md`，标题 *Twenty five thousand dollars of funny money*
-
-> **Knight Capital（2012-08-01）**
-> 部署时 8 台服务器有 1 台没更新到新代码，旧代码复用了一个被重新赋予新含义的开关位。
-> **45 分钟亏掉约 4.4 亿美元**，公司当年就被收购。
-> —— 这个案例在 M6（部署）会再出现一次。
-
-#### 验收标准（必须"能抓住你"）
-
-这一步的验收**不是"功能能跑"**，是三个机制：
-
-```
-✅ 1. 不变量检查器
-   SELECT currency, SUM(amount) FROM entry GROUP BY currency
-   → 每一行必须是 0。任何时刻跑都必须成立。
-
-✅ 2. 并发压测
-   100 个线程 × 每线程 100 次随机转账，跑完检查：
-   - 不变量成立
-   - 没有账户余额为负
-   - 转账笔数 == 预期笔数（没有丢、没有重）
-
-✅ 3. 幂等测试
-   同一个 idempotency_key 并发提交 50 次
-   → 数据库里必须恰好 1 笔
-```
-
-**这三个测试的骨架我已经写好了，是红灯状态。你的 M0 就是把它们变绿。**
-
-#### 加分题
-
-- 加一个物化的 `account.balance` 列，写测试证明它**永远**等于 `SUM(entry.amount)`
-- 把不变量写成 Postgres 的 `CHECK` 约束或触发器，让数据库自己拒绝坏数据
-- 制造一次死锁，然后修好它（提示：按账户 id 排序加锁）
-- 用 Framework 7 的 JSpecify 注解标注账本 API，让"可能为空"变成编译期可查
-
----
+**验收**：✅ 不变量检查器（每种币分录之和恒为 0，每个测试结束自动核）✅ 100 线程 × 100 次随机转账后不变量成立、无负余额、笔数不丢不重 ✅ 同一幂等键并发 50 次恰好一笔。
 
 ### M1 · 对外 API：照着币安 / OKX 的规范设计
 
-> **目标：一套商户能安全调用的 REST API。学的是"成熟服务商的 API 长什么样"。**
+> **目标：一套商户能安全调用的 REST API。学的是「成熟服务商的 API 长什么样」。** 他们的设计里每一条都是被攻击过之后加上去的。
 
-#### 为什么值得抄他们
-
-币安和 OKX 的 API 每天扛着几百万笔请求和真金白银，**他们的设计里每一条都是被攻击过之后加上去的**。你不需要重新发明，照抄就是最快的学习路径。
-
-#### 两家的签名机制对比（本节精华）
-
-**Binance：**
-
-```
-signature = HMAC-SHA256(queryString + requestBody, secretKey)
-请求头：X-MBX-APIKEY: <apiKey>
-参数里带：timestamp=<毫秒>&recvWindow=5000&signature=<签名>
-```
-
-**OKX v5：**
-
-```
-prehash = timestamp + method + requestPath + body
-OK-ACCESS-SIGN = Base64(HMAC-SHA256(prehash, secretKey))
-请求头：OK-ACCESS-KEY / OK-ACCESS-SIGN / OK-ACCESS-TIMESTAMP / OK-ACCESS-PASSPHRASE
-```
-
-**差异在哪，为什么重要：**
-
-| | Binance | OKX | 影响 |
+| | Binance | OKX v5 | 影响 |
 |---|---|---|---|
-| 签名覆盖 HTTP method | ❌ | ✅ | OKX 下把 `GET /order` 改成 `DELETE /order` 会签名失效 |
-| 签名覆盖 path | ❌（经 query 间接覆盖） | ✅ 显式 | OKX 更难被路径替换攻击 |
-| 凭证要素 | key + secret | key + secret + **passphrase** | 泄露 key/secret 还不够 |
-| 防重放 | `timestamp` + `recvWindow`（默认 5s） | `OK-ACCESS-TIMESTAMP` + 服务端偏移校验 | 两家都靠时间窗 |
+| 签名覆盖 HTTP method | ❌ | ✅ | OKX 下把 `GET` 改成 `DELETE` 签名失效 |
+| 签名覆盖 path | ❌（经 query 间接） | ✅ 显式 | 更难被路径替换 |
+| 凭证要素 | key + secret | key + secret + passphrase | 泄露 key / secret 还不够 |
+| 防重放 | timestamp + recvWindow | timestamp + 服务端偏移校验 | 两家都靠时间窗 |
 
-> **建议：实现 OKX 那一套（更严），然后写测试证明 Binance 那一套在什么情况下会被绕过。**
-> 这个对比测试本身就是最好的学习。
+还要抄的：金额全用字符串（JSON number 在 JS 里是 double）；客户端幂等键；统一响应信封；分段错误码；权重限频；一个 header 切环境。
+chainpay 的签名协议最后定为 CP2（换行分隔 + 请求体哈希 + 版本标签，见 CLAUDE.md「接口与安全」）：OKX 那样的无分隔拼接靠「每段定长」保证无歧义，而路径与请求体从来不定长。
 
-#### 还要抄的六件事
-
-| 设计 | 他们怎么做 | 为什么 |
-|---|---|---|
-| **金额全用字符串** | `"price": "0.00001234"` 不是 number | **JSON number 在 JS 里是 double**，18 位小数必然丢精度（flow-pay 的 snowflake ID 是同一个坑） |
-| **客户端幂等键** | 币安 `newClientOrderId` / OKX `clOrdId` | **让调用方决定幂等边界**，而不是你猜 |
-| **统一响应信封** | OKX：`{"code":"0","msg":"","data":[]}` | 客户端只需要一套解析逻辑 |
-| **分段错误码** | 币安 `-1xxx` 通用 / `-2xxx` 交易 | 客户端能按段做重试策略 |
-| **权重限频** | 币安每接口有 weight，响应头回 `X-MBX-USED-WEIGHT-1M` | 简单 QPS 限不住——查一次全量比查一条贵 100 倍 |
-| **一个 header 切环境** | OKX：`x-simulated-trading: 1` 走模拟盘 | 比"改 base URL"更不容易搞错 |
-
-> ⚠️ **API 细节会变。** 上面是我知识范围内的形态，动手前请查一次官方文档：
-> Binance <https://developers.binance.com> · OKX <https://www.okx.com/docs-v5/>
-
-#### 验收标准
-
-```
-✅ 重放：同一个签名请求发两次 → 第二次必须被拒
-✅ 时钟：timestamp 偏移超过 recvWindow → 必须被拒
-✅ 篡改：body 改一个字符 → 签名必须失效（这就是为什么要签 body）
-✅ 换方法：GET 改成 DELETE，签名不变 → 必须失效
-✅ 限频：超过配额 → 429 + Retry-After，并且计数是原子的
-   （回想 flow-pay 的 9f22aac：get+set 非原子，5 次上限能被并发绕过）
-✅ 幂等：同一 clientOrderId 并发提交 → 只产生一笔
-```
-
-#### 对照清单
-
-- `owasp-cheatsheets/Transaction_Authorization.md` — 敏感操作的二次验证
-- `owasp-cheatsheets/REST_Security.md`
-- `owasp-cheatsheets/Mass_Assignment.md` — 哪些字段允许客户端传
-- `owasp-cheatsheets/Insecure_Direct_Object_Reference_Prevention.md`
-- `owasp-wstg-business-logic/05-*Function_Can_Be_Used_Limits.md` — 限次
-
----
+**验收**：✅ 重放第二次被拒 ✅ 时间戳偏移超窗被拒 ✅ 改 body 一个字符签名失效 ✅ 换方法签名失效 ✅ 超配额 429 且计数原子 ✅ 同一幂等键并发只产生一笔。
+对照清单：`owasp-cheatsheets/` 的 Transaction_Authorization、REST_Security、Mass_Assignment、Insecure_Direct_Object_Reference_Prevention；`owasp-wstg-business-logic/05-*Function_Can_Be_Used_Limits.md`。
 
 ### M2 · 只读上链：区块索引器
 
-> **目标：把 Sepolia 测试网上的 ERC-20 转账，可靠地索引进你的库。**
->
-> **这是整条路线上最难、也最值钱的一节。**
+> **目标：把 Sepolia 上的 ERC-20 转账可靠地索引进库。** 这是整条路线上最难、也最值钱的一节：**区块重组是 check-then-act 的终极形态**——以为区块 100 确认了、给用户加了钱，链回滚后那笔转账从未发生。
 
-#### 为什么最值钱
+**学什么**：JSON-RPC（`eth_blockNumber` / `eth_getLogs` / 回执）；Transfer 事件的 topics 与 data；确认数与 `safe` / `finalized` 标签；用块哈希而不是块号做身份、发现重组怎么回滚；书签断点续传；RPC 不可靠（旧数据、多节点不一致、限频、超时、静默漏日志）；`eth_getLogs` 的范围上限。前置知识与出处在 `docs/knowledge/m2-block-indexer.md`。
 
-因为**区块重组（reorg）是 check-then-act 问题的终极形态**：
+**事故**：Ethereum Classic 51% 攻击（2019，重组双花已确认的充值）；Bitcoin v0.8 分叉（2013，两条链并存约 6 小时）。教训：**没有绝对的「最终确认」，已确认要当成可撤销的状态。**
 
-```
-你以为的：区块 100 确认了 → 这笔转账是事实 → 入账
-现实：     链回滚了 → 区块 100 变成另一个区块 → 那笔转账从未发生
-           但你已经给用户加过钱了
-```
-
-**你在 flow-pay 学到的所有"先检查后行动"的教训，在这里会以最纯粹的形态重现一次。**
-
-#### 学什么
-
-| 主题 | 具体 |
-|---|---|
-| JSON-RPC 基础 | `eth_blockNumber` / `eth_getBlockByNumber` / `eth_getLogs` / `eth_getTransactionReceipt` |
-| 事件日志 | ERC-20 `Transfer` 事件的 `topic0`；`topics` vs `data`；indexed 参数 |
-| **确认数** | 为什么不能看到就入账；不同金额用不同确认数 |
-| **重组** | 用 `blockHash` 而不是 `blockNumber` 做主键；发现重组后怎么回滚 |
-| 游标推进 | 断点续传；崩溃后不漏块不重复 |
-| RPC 不可靠 | 节点返回旧数据；多节点不一致；限频；超时 |
-| 批量与分页 | `eth_getLogs` 的区块范围上限；大范围查询超时 |
-
-#### 事故配对
-
-> **Ethereum Classic 51% 攻击（2019-01）**
-> 攻击者重组了链，**双花了已被交易所确认入账的充值**。多家交易所损失。
-> 根因：确认数设置得太低，以为"确认了"就是最终的。
-
-> **Bitcoin v0.8 分叉（2013-03-11）**
-> 客户端版本升级导致共识分裂，**两条链并存约 6 小时**，期间存在真实的双花窗口，
-> 交易所被迫暂停充值。
-
-> **教训是同一个：区块链没有"最终确认"这个绝对概念，只有"重组概率随确认数下降"。**
-> 你的系统必须把"已确认"当成一个**可撤销**的状态，而不是终态。
-
-#### 验收标准
-
-```
-✅ 幂等重放：把游标手工回退 1000 个区块重跑
-   → 数据库最终状态必须和回退前完全一致
-
-✅ 模拟重组：手工改掉某个区块的 blockHash
-   → 系统必须发现，并回滚该区块之后的所有派生数据
-
-✅ 崩溃恢复：索引到一半 kill -9
-   → 重启后不漏块、不重复
-
-✅ RPC 撒谎：mock 一个返回旧 blockNumber 的节点
-   → 游标不能倒退
-
-✅ 对账：随机抽 100 个区块，链上 log 数 == 库内记录数
-```
-
-#### 知识补充（2026-09-02 已完成）
-
-**这一块原有的 313 份清单没有覆盖。** 已从 web 采集并本机实测，落在
-`docs/knowledge/m2-block-indexer.md`（按"谁在什么时候读"组织，每条带出处）。要点：
-
-- JSON-RPC 的 `safe` / `finalized` 标签（合并后才有）：Sepolia 实测分别落后 35 / 66 个区块
-- EIP-20 原文：Transfer **MUST** 含零值；铸币从 `0x0` 是 **SHOULD**；`decimals` **OPTIONAL**；调用方 **MUST** 处理 `false`
-- weird-erc20：fee-on-transfer / rebasing / no-revert-on-failure / uint256.max 转账 → **事件 value ≠ 实际到账**
-- 提供商 `eth_getLogs` 上限各不相同（2 000 区块 / 10 000 条 / 50 区块…），且会**静默漏日志**
-- 确认数：Binance 12，OKX 入账 32、**提现更高**；PoS 最终性 ≈ 2 epoch ≈ 12.8 分钟
-- 重组事实：信标链 7 块（2022-05）、ETC 100+ 块（2019-01，$1.1M）、ETC 7 000+ 块（2020-08）
-- 索引器重组模式：存 hash+parentHash → 找共同祖先 → 回滚派生数据 → 重放；外部副作用回滚不了；Envio 默认最大回滚 200 块
-- **一条清单里没有、从 uint256 与 `NUMERIC(38,18)` 直接推出来的坑**：整数部分只有 20 位，装不下大额代币的原始单位
-- 选型：web3j 5.0.3 已用 Jackson 3（不与 Boot 4 冲突）但拖 OkHttp/RxJava2/WebSocket/**AWS KMS SDK**；裸 JSON-RPC + 30 行解码是更薄的路
-
-「这一步会怎么坏」的提问在 `docs/retro/M2-before.md`（20 问，只问不答）。
-
-#### 进度
-
-- ✅ **M2-①**（2026-09-02）裸奔版：`JsonRpcClient` + `EthRpc` + `TransferLogDecoder`，Sepolia 实测解码正确；离线测试 + 环境变量门控的探针
-- ✅ **M2-②**（2026-09-02）落库 + 书签：V9（`chain_transfer_log` / `indexer_cursor`）、`BlockIndexer`（事件与书签同事务、锁后重读、网络在事务外、重组与解码失败即停）、11 条契约测试对着验收标准写；两面墙（去掉事务 → 崩溃测试红；去掉重读 + 带期望值的 UPDATE → 慢实例把书签推回去）；Sepolia 落库探针对账：链上 3 条 = 库里 3 条
-- ✅ **M2-③**（2026-09-02）三态确认：V10（单行 `chain_head` + 视图 `chain_transfer_confirmation`，等级算出来不存，ORPHANED 不出现，confirmations 夹到 0）、`ChainHeadTracker`（finalized 倒退或换哈希即停；safe / latest 倒退保留旧值；乱序拒绝）、`ChainIndexerScheduler`（放书签 → 刷新头 → 推批到追平；瞬时失败 RETRY_LATER，结构性失败 HALTED 且不再碰节点；配了 `start-block` 才自动放书签）；15 条测试先红后绿；两面墙（去掉 finalized 倒退检查 → 红；视图不过滤 ORPHANED → 红）；Sepolia 落库探针打印三个头与等级分布
-- ✅ **M2-④**（2026-09-02）重组回滚：V11 审计表 `chain_reorg`（depth 生成列，只增）、`ReorgRecovery`（候选 = 书签之下有日志的块 + finalized 头，降序问链找祖先；标废、退书签、记审计同一事务；锁内核对号和哈希；地板 finalized）、写入改成复活型 upsert、轮询 REORGED；FakeChain 学会真正的分支切换（日志跟着分支走）；9 条测试先红后绿；两面墙（标废挪到事务外 → 同生同死测试红；upsert 改回 DO NOTHING → 翻回来测试红）
-- ✅ **M2-⑤**（2026-09-03）RPC 不信任：JsonRpcClient 整段超时 + 正文封顶（假节点滴流 / 无限正文两条测试）；BlockIndexer 窗口对半分、翻倍回、单块仍败即停；V12 审计表 `chain_reconcile` + 书签 `start_block`；`LogReconciler` 抽样对账（回执为事实源，两个节点都点头才补录 / 标废，否则 disputed）；`ChainHeadTracker` 用审计节点核对 finalized；21 条测试先红后绿；三面墙（补录不要主节点点头 → 红；抽样不以 finalized 为界 → 红；正文不封顶 → 红）；Sepolia 探针：主节点 publicnode、审计节点 tenderly 真实对账
-- ✅ **M2-⑥**（2026-09-03）代币谎言：V13 白名单 `chain_token`（预置 LINK，decimals 0..18）；第一次 `eth_call`——`Abi`（选择器、地址编码、uint / string 解码，已知答案从 ABI 规范手写）、`Erc20Calls`（decimals / symbol / balanceOf，问不到返回空）；`TokenAmounts.toLedger` 精确换算、装不下就 `AmountOverflowException`；`TokenRegistry` 登记时问链、使用前核对；轮询第一次推批前核对代币；34 条测试先红后绿；两面墙（不查整数位 → 红；不核对 decimals → 红）；探针问真实 LINK：decimals 18、symbol LINK
-- ✅ **M2-⑥ 补丁**（2026-09-03）两个评审代理（Java 质量、安全）独立审 ⑥ 的改动，各自抓到同一处：`Abi.decodeString` 把对方给的 32 字节长度字先收窄成 int 再检查——2^31 抛 ArithmeticException、2^30 乘 2 溢出成负数绕过边界检查，两者都不是调用方接的 IllegalArgumentException；改成先在 BigInteger 上和实际字节数比。同一轮还抓到：`TokenRegistry.register` 先查再插（check-then-act 第 8 次，在自己刚写的代码里）→ `INSERT … ON CONFLICT DO NOTHING` 让主键裁决；symbol / note 没有长度上限 → Java 侧 64 / 500 + V14 CHECK；「核对代币时节点瞬时失败应 RETRY_LATER」没有测试守着 → FakeChain 加 `beforeCall` 钩子补上，拆墙（先标记再核对）证明它能红。新增 `Erc20CallsTest` 钉住「问不到 vs 没问到」的分界。红 41 跑 5 败 1 错 → 绿。教训：评审要独立于作者，两个独立评审撞到同一处 = 高置信；不可信的数先在大整数上比完再收窄
-- ✅ **真环境验收演练**（2026-09-03，开发库 + Alchemy 主节点 + tenderly 审计节点）：把书签从 11626939 手工退到 11625939（1000 块）重放，重放到 11626143 时对 JVM `kill -9`（上一秒书签还在变，正处一次轮询中间），重启后继续追到 N。回退前后比对：范围 (R, N] 32 行、范围 ≤ R 16 行，两段行数与整行 md5 一字不差；`chain_reorg` 与 `chain_reconcile` 均 0 → 0；非 CANONICAL 行 0；两次运行零告警。验收标准「幂等重放」「崩溃恢复」至此有了真环境证据，不只靠 FakeChain
-- ✅ **M2-⑥ 补丁 2**（2026-09-03）用提问模板全面自查（5 个子代理按节分派 + 主会话实验），两条严重都先在只读克隆里受控复现再修：① **撕裂的快照**——取一批要问节点三次，父哈希只在第一次核对，重组落在三次之间就把旧分支的行留成 CANONICAL、视图判 FINAL；修法是落库前三道归属核对（块号在范围内、每条日志的块哈希等于该块的头、重读 block(from) 未变），撒谎的节点塞进来的范围外 / 哈希不符的日志也被同一道门挡住。② **对账只比坐标不比金额**——`LogCoordinate` 只装坐标，同坐标不同金额判「干净」，复活型 upsert 只改 status 让第一次写入的说法永远留下；修法是比整条载荷，内容不同一律 disputed 且代码不改金额，重放遇到同坐标不同内容就停下。8 条测试先红后绿（红灯即拆墙）；FakeChain 加 `beforeBlock` / `injectIntoGetLogs`。教训：只核对了容器（区块头、坐标）没核对内容；测试集合缺的永远是「有，但内容不一样」那个输入；动钱的边界（M3 入账）还要再核一次，不把正确性押在索引器一处
-- ✅ **M2-⑥ 补丁 3 · 第一组「白名单与归属」**（2026-09-04）质询扫描七条「中」里的第一组。白名单原来只挂在轮询器的一个入口上、检查结果缓存到进程寿命、写入路径信节点按地址过滤、主代码没有任何地方写 DISABLED：有关卡，但一个入口、活到进程结束、绕过静默。修成三层：V15 给事件表与书签表加指向 `chain_token` 的外键（谁都绕不开）；`BlockIndexer` 落库前比对每条日志的合约地址（`injectIntoGetLogs` 模拟不按地址过滤的节点）；轮询每轮 `requireUsable`、上链核对每进程一次。书签加 `token` 列并回填（白名单恰好一枚时无歧义，多枚则迁移停下由人定），配置换币沿用书签名 = 停下。4 条测试先红后绿。教训：判断一道关卡的效力问三个数字——挂在几个入口、检查结果活多久、绕过时会不会报错
-- ✅ **M2-⑥ 补丁 3**（2026-09-04）质询扫描的第二到第五组「中」：① 可观测出口——V16 `indexer_state`，停机落库、重启不算恢复、人改回 RUNNING 才算；连续瞬时失败与审计跳过到阈值 = DEGRADED 每轮报错；401/403 单列为 `RpcAuthException` 直接停下；只读接口 `GET /admin/v1/indexer`；运行手册 `docs/runbook/chain-indexer.md`。② 翻译层——`EthRpc` 缺字段指名拒绝，`EthRpcTest` 喂真实 Sepolia 响应，`ChainIndexerBootSmokeTest` 让容器真装配一次。③ 审计独立与密钥——`RpcEndpoint` 不回显 URL，同主机的审计节点拒绝启动，启动日志写明单/双节点。④ 守卫——对账阶段 finalized 分歧要从轮询器停下、幻影被主节点确认要留 disputed、重组恢复的两条未测分支、十批上限、`ControllerBoundaryTest`。红 12 → 绿；两面墙（catch 扩到 RuntimeException、去掉主节点点头）各自变红
-
-**M2 六步全部完成（2026-09-02 至 09-03）。** 复盘 `docs/retro/M2.md`（§3 第 ⑤ 步：M2-before 的 20 问哪几条是自己想到的）由用户写。
-
----
+**验收**：✅ 书签回退 1000 块重放，结果一字不差（真环境做过）✅ 模拟重组能发现并回滚派生数据 ✅ 索引到一半 `kill -9`，不漏块不重复 ✅ 节点返回旧块号时书签不倒退 ✅ 抽样对账：链上日志数 = 库内记录数。
 
 ### M3 · 收款 Pay-In
 
 > **目标：真的从测试网转一笔进来，余额正确增加。**
 
-#### 学什么
+**学什么**：HD 钱包（BIP-32 / 44，xpub 只看不花）；一址一单 vs 地址复用；memo 链（丢弃 memo = 收不到账的地址）；最小入账额与灰尘；确认数是风险与体验的取舍；代币的坑（扣费代币、rebasing、失败返回 `false` 不 revert）。规划与取舍在 `docs/knowledge/m3-payin.md`。
 
-- **HD 钱包**：BIP-32 / BIP-44 派生路径；从一个种子派生无限地址
-- **一址一单 vs 地址复用**：各自的优劣和归属难题
-- **memo 链**：XRP / XLM / EOS 靠 memo 归因——**flow-pay 的 `65372f8a` 已经踩过**（丢弃 memo = 收不到账的地址）
-- **最小入账金额**：灰尘攻击；手续费超过金额的入账
-- **确认数策略**：小额 3 个确认，大额 30 个——**这是风险与体验的取舍，不是技术问题**
-- **代币的坑**：
-  - fee-on-transfer token（转 100 到账 98）
-  - rebasing token（余额自己会变）
-  - 老 ERC-20 转账失败返回 `false` 而不 revert
-
-#### 验收标准
-
-```
-✅ 从 Sepolia faucet 领币 → 转到你派生的地址 → 余额正确增加
-✅ 同一笔 tx 被索引两次 → 不能双记
-✅ 确认数不够时余额不可用，够了才可用
-✅ 转入未支持的代币 → 不能崩，要有明确处理
-✅ 转入 0 或极小金额 → 按策略处理，不能产生负手续费
-```
-
-#### 规划与前置知识（2026-09-04 / 09-06）
-
-`docs/knowledge/m3-payin.md`：M2 铺好的路、代码里已下的判决、地址派生（xpub 只看不花）、归属模式、
-FINAL 门槛、镜像账户 `chain:custody:<TOKEN>`、金额换算、`balanceOf` 第二意见、分步 ⓪–⑥。
-「这一步会怎么坏」30 问在 `docs/retro/M3-before.md`，只问不答。
-六个取舍（2026-09-06 由用户拍板，按建议）：系统角色现在升；一户一币一址；BouncyCastle 自写派生；
-离线小工具产 xpub；币种名用 symbol 并对 ACTIVE 代币唯一；`balanceOf` 核对要求相等。
-
-#### 进度
-
-- ✅ **M3-⓪**（2026-09-06）地基：系统权限从「会话变量开关」变成「连接身份」。`db/init/01-roles.sql` 加第二个登录角色 `chainpay_system`（BYPASSRLS、非超级用户、非属主）；V17 只授权（账本三表可读写不可删，merchant 与链表只读，序列可用）并在角色缺失时用一句中文说清怎么办；`ledger/system/SystemLedger`：独立 Hikari 池 + 自己的事务模板 + 绑在系统连接上的一份账本，对外只有 `inTransaction(...)`，建池即自检身份。故意不做成第二个 `DataSource` / `JdbcClient` bean（Boot 自动配置会整体退让）。测试 6 条先红后绿（身份、免会话变量看全表、跨租户记 DEPOSIT、回调抛异常整体回滚、系统身份也删不了账本、配错身份拒绝启动）+ `ControllerBoundaryTest` 加禁 `SystemLedger`。两面墙：去掉 BYPASSRLS → 六条在装配阶段全被拒；拆掉事务模板 → 回滚那条红。全套 237 跑 0 败 0 错 2 跳。**一处操作失误记下来**：恢复墙一时用了 `git checkout`，把同一轮还没提交的角色定义一起抹掉，墙二第一次全错是因为角色不存在——未提交的改动只能用反向编辑恢复，`git checkout` 只回到已提交版本
-- ✅ **M3-①a**（2026-09-07）地址派生核心（零私钥）：`chain/wallet`——`Keccak256`（BouncyCastle 的 Keccak，不是 JDK 的 SHA3-256）、`EthAddress`（公钥 → 地址、EIP-55 校验和）、`Base58Check`、`Secp256k1`、`ExtendedPublicKey`（xpub 解析 / 序列化 / **CKDpub**）、`DepositAddressDeriver`（账户层 xpub → 0/i，深度不是 3 就拒绝）；私钥数学 `ExtendedPrivateKey` / `Bip39` 只给 `XpubTool` 与测试，`WalletBoundaryTest` 扫源码守着；`tools/xpub.sh` 断网算 xpub。已知答案全来自规范原文：BIP-32 向量 1 与 2、EIP-55 八个地址、BIP-39 两条向量（passphrase TREZOR）、Hardhat 公开助记词的前三个地址（m/44'/60'/0'/0/i）。14 条先红后绿；两面墙：EIP-55 阈值 8 改 7 → 校验和与 Hardhat 地址红；CKDpub 去掉 + K_par → 公钥派生向量与 Hardhat 红、纯私钥派生仍绿。全套 251 跑 0 败 0 错 2 跳。**教训**：第一次经 WebFetch 的概括模型取向量，m/0'/1/2' 的 xprv 被抄错一个字母（m → M），Base58Check 一验就露馅；改为 curl 取原文、脚本逐字核对全部 12 个常量。已知答案的来源本身也要可信，转述一次就不算原文。表、RLS、分配服务在 ①b
-- ✅ **M3-①b**（2026-09-07）收款地址分配：V18 `deposit_address`（address 主键小写、`UNIQUE (merchant_id, token)` 一户一币一址、`UNIQUE (derivation_index)`、外键指向 merchant / chain_token / account、RLS 策略同账户表、序列取号、系统角色只读）+ `chain_token` 上 ACTIVE symbol 的部分唯一索引（取舍 ⑤）；`chain/deposit`：`DepositConfig`（设了 `CHAINPAY_DEPOSIT_XPUB` 才装配，启动日志打 xpub 指纹与 0/0 地址）、`DepositAddressService.allocate`（白名单核对 → 商户核对 → 已有即返回 → 确保账户 → 取序号 → 派生 → `insertIfAbsent`，输给并发的一方读回赢家；地址主键冲突 = xpub 配错，报出）。测试基类钉入 Hardhat 账户层 xpub，于是「商户申请地址 → 库里那一行」整条链路有已知答案：序号 0 就是 Hardhat 的第一个地址。9 条先红后绿（首次分配、幂等、八线程并发恰好一行、**确定性插队**、RLS 三个方向、白名单拒绝、停用商户拒绝、地址被占用报 xpub、ACTIVE symbol 唯一）；两面墙：去掉 ENABLE ROW LEVEL SECURITY → 租户边界那条红；去掉 ON CONFLICT → **第一次没红**——八线程那条实际是串行撞上去的，第一个提交完别的才到「先查」，全走了「已有即返回」，等于没守东西。补了一条确定性的插队测试（A 取走序号 0 后停住，B 先插入提交，A 的插入被吞掉、读回 B 的地址、序号 0 作废；预建账户避免 A 未提交的账户行把 B 卡成死锁）才红。**不强制交错顺序的并发测试证明不了任何事。**全套 261 跑 0 败 0 错 2 跳
-- ✅ **M3-②**（2026-09-07）入账：V19 `deposit`（`transfer_log_id` 唯一 = 一条日志只处理一次，`transfer_id` 唯一 = 一笔转账只属于一条入账，CHECK 只允许 CREDITED 带 transfer_id、HELD 必须有原因，RLS 商户只读，系统身份可写）；`DepositPoster`：核对在事务外（两个节点的块头哈希与 finalized 都点头才算 FINAL，同一轮复用）→ 判决纯计算（零值忽略、溢出 HELD）→ 系统池一个事务里**先占坑再动钱**（POSTING 占坑 → `ledger.transfer` 幂等键为链上坐标、借 `chain:custody:<SYMBOL>` 贷商户账户、occurred_at 为区块时间 → CREDITED）；`DepositPostingScheduler` 独立于索引器，30 秒一轮。测试 14 条先红后绿，链是 FakeChain 但日志由真的 BlockIndexer 索引、链头由真的 ChainHeadTracker 刷新、地址由真的分配服务派生：记账与三张表、没到 FINAL 不记、重放无害、过期候选不双记、审计节点分歧 HELD 且下一笔照记、主节点改口 HELD、瞬时失败提前结束下一轮照记、溢出 HELD、零值忽略、陌生地址不是候选、DISABLED 地址不是候选、崩在记账后整个事务回滚（连镜像账户都不留）、RLS、**另一个实例已判 HELD 则一分钱不记**。两面墙：顺序换成先记账再占坑 → 最后那条红；去掉审计节点哈希核对 → 审计分歧那条红。全套 275 跑 0 败 0 错 2 跳。**记下一处脚手架失误**：FakeChain 要先有块才能挂日志，13 条一起错在 `addTransfer`，和业务无关
-- ✅ **M3-③**（2026-09-07）策略与例外：V20 `chain_token.min_deposit`（账本单位，0 = 不限）与状态词表加 HELD_ERROR / APPROVED；`DepositPoster` 判决顺序：两节点块头与 finalized → 零值 → 溢出 → 灰尘 → **balanceOf 第二意见**（两个节点在那一块的余额都必须等于事件累计的转入减转出，对不上或问不到 = HELD_BALANCE_MISMATCH）；失败分瞬时（节点、数据库 → 这一轮提前结束）与结构性（这一笔 HELD_ERROR 带异常原文，队列继续）；人工路径：HELD → 人改 APPROVED 并留名留因 → 任务下一轮 `UPDATE … WHERE status = 'APPROVED'` 原子重占坑、同一幂等键记账，记不上改回 HELD_ERROR。FakeChain 学会按块高回答余额；测试脚手架抽成 `AbstractDepositPostingTest`，`pay()` 挂日志的同时在两条链上定义该块余额。10 条先红后绿（余额相等照记、扣费代币 HELD、审计余额不同 HELD、问不到 HELD、问余额瞬时失败重试、灰尘拒绝与边界、结构性异常 HELD_ERROR 不卡队列、数据库瞬时失败重试、核准后照记且不再核对、核准行原子重占坑）；② 的崩溃用例改成新契约（回滚后 HELD_ERROR，核准后照记）。两面墙：去掉余额比对 → 扣费代币那条红；去掉最小入账额 → 灰尘那条红。全套 285 跑 0 败 0 错 2 跳。运行手册 `docs/runbook/deposit.md`
-- ✅ **M3-④**（2026-09-07）商户收款接口（照币安 / OKX 的 deposit-address 与 deposit-history）：`POST /api/v1/deposit-addresses`（幂等，EIP-55）、`GET /api/v1/deposit-addresses`、`GET /api/v1/deposits?token&status&limit`（已处理的行 UNION 在路上的钱，PENDING 带 level 与 confirmations，金额字符串，HELD 不露原因）、`GET /api/v1/deposits/balance?token`（available 与 pending）；错误码 2008 `TOKEN_NOT_SUPPORTED`；`DepositQueryRepository` 走应用连接、整段在 asMerchant 里，链表没有 RLS 但每条查询都经地址表连接。测试 5 条真 HTTP 真签名先红后绿（幂等申请与 EIP-55、白名单外 400/2008 与不成形 400/2001 与匿名 401、列表 PENDING/CREDITED 与 level/confirmations 与别的商户看不到与过滤、余额 available/pending 记账前后、HELD 不露原因）。两面墙：在路上那一段不经地址表 → 别的商户看到了 acme 的转账，红；列表接口不进 asMerchant → RLS fail-closed 自己也查不到，红。全套 290 跑 0 败 0 错 2 跳
-- ✅ **M3-⑤**（2026-09-08）真环境演练：管理接口发凭证 → `tools/api.py`（会签名的 curl，凭证只从环境变量来）申请 LINK 地址（序号 0 = MetaMask 的 Account 1，所以付款方是水龙头合约）→ 水龙头打 25 LINK → 商户接口 SEEN（10:24:03 UTC）→ SAFE（10:35:38）→ FINAL（10:42:10）→ CREDITED（10:45:57），pending 25 变 available 25，账本 transfer 13 加两条分录。两条演练：① 对 `entry` 表持 EXCLUSIVE 锁，让入账事务在占坑、建镜像账户、写转账之后卡在写分录，`kill -9`，数据库整体回滚（三张表 0 改动），重启 31 秒恰好记一次；第一版锁在 `transfer` 上，占坑那条 INSERT 就被外键的 RowShareLock 挡住——外键让锁传导到引用表。② 书签退回 11659777 重放：820 块重放后范围内 155 行 md5 不变、无标废无新增，deposit / transfer / entry / 余额全不变，`ledger_invariant` 0 违反（三层唯一约束：日志坐标、transfer_log_id、幂等键）。真环境送上门的三件事：Tenderly 中断 23 分钟（第 30 次失败降级、恢复后自动回 RUNNING）、深度 3 的重组自动退 3 块重放、Alchemy 免费层 getLogs 限 10 块让「对半分再翻倍」震荡（追块每轮 60 到 100 块，为完成演练把开发库书签前跳 31k 块；改进方向记在 CLAUDE.md，未动代码）。另一个发现：入账任务与索引器共用单线程调度器，一个卡住另一个也停（M6）。README 加「手工调商户接口」
-
-- ✅ **M3-⑤ 补丁**（2026-09-09）演练暴露的三道取舍题，修两道、推一道：① getLogs 窗口记住失败过的尺寸、向它二分逼近（`knownTooLarge` / `knownGood`，收敛在上限上后每批只问一次，连续成功 100 批才忘掉天花板试探一次），真环境实测追块从每轮 32 到 75 块变成稳定的 100 块、零失败调用；② `spring.task.scheduling.pool.size: 4`（每个 `@Scheduled` 任务至少一条线程）+ 系统连接 `lock_timeout` 5s（Hikari `connectionInitSql`）。**红灯里最值钱的一条**：PostgreSQL 等锁超时抛 SQLSTATE 55P03，Spring 7 翻成 `UncategorizedSQLException`（非瞬时），入账任务据此把那笔记成 HELD_ERROR——加了超时反而让每次等锁变成一张工单；于是系统池的 JdbcTemplate 装翻译器把 55P03 翻成 `CannotAcquireLockException`（瞬时）。③「追赶不受每轮 10 批限制」推到 M6（停机恢复那一族）。5 条新测试先红后绿（固定上限 10 块 60 批失败 ≤ 8 且停在 10；上限解除后满一个周期才试探；等锁 1 秒即抛瞬时异常；池里连接带 lock_timeout；账本被锁时入账 retryLater 不 HELD、放锁后照记；一个调度任务卡住别的照跑），四面墙各红了该红的（翻倍回去 → 3 红；不设超时 → 3 红；不翻译 55P03 → 2 红且日志出现 HELD_ERROR；线程池 1 → 1 红）。全套 295 跑 0 败 0 错 2 跳
-
-- 🔒 **M0–M3 安全扫描与补丁**（2026-09-09）按 `question` 技能 + OWASP 清单派 4 个代理分维度扫 7,875 行主代码与 20 个迁移，逐条回读核实，15 条发现（`docs/knowledge` 未单独存档，计分在 QuestionSkillForAi 的 `questions.md`）。修了 14 条（第 15 条监听地址与日志级别留 M6）：V22（判官授权系统角色 + 拒绝盲跑的 `ledger_judge()`；`to_address` / `from_address` 部分索引与三个外键索引；`deposit` / `deposit_address` / `payout` / `payout_address` 补 FORCE；七条租户策略包成 `(SELECT …)`）；`BlockIndexer.persist` 与 `indexer_cursor` 守卫比号也比哈希；转账与收款地址接口 `@Valid` + 四类形状错误映射 400/2001；nonce 格式检查挪到验签之前且限定十六进制；凭证未命中做诱饵解密等耗时；入账块哈希 `equalsIgnoreCase`；`logIndex` 范围检查与 `Hex` 字符集；对账解码失败记 disputed 不停机；`http://` 只给回环与内网；`XpubTool` 无终端拒绝；`SystemLedger` 启动跑判官。真实启动时又撞上一条：开发库索引器自 08:11 起 HALTED，原因是 Alchemy 各后端头不一致（`eth_blockNumber` 已看到 11666704，`getLogs` 说超出链头），带 code 的错被一路减半到单块后按「不是范围问题」停机——链头两块以内的单块失败改判瞬时并恢复窗口状态（`TIP_TOLERANCE_BLOCKS`），两条测试钉住「链头附近瞬时、远离链头仍停机」。18 条新测试先红后绿（含三个新守卫：`SchemaGuardTest` 扫 `pg_class`/`pg_views`/`pg_policies`/EXPLAIN，`ControllerBoundaryTest` 扫 `@RequestBody`，`LedgerJudgeTest` 用属主塞一条单边分录让判官报出来），五面墙各红了该红的。**第一条的教训**：一个验证「今天能跑通」不等于它在验证任何东西，判官能查通只是超级用户绕过 RLS 的副作用，换成托管数据库的属主它会静默把坏账报成平账——由此给提问模板补了 T12「换个身份、换个环境再问一遍」。两条是 08-31 报过未修的原样复发（`9.1`、`7.9`），技能加了「对照上一轮扫描日志标未修」的规则
-- 🔧 **扫描补丁的补丁 · 判官视图与余额视图**（2026-09-21）① 核实 V22 留下的口子：判官函数只查调用者，而两个判官视图没开 `security_invoker`、按**主人**的身份读表——把主人换成受行级安全约束的角色（托管数据库的样子），同一本坏账以系统身份调判官报 0 行（`LedgerJudgeTest` 先红后绿，逐个视图断言）；补 `security_invoker` 后主人是谁不再影响结论，`SchemaGuardTest` 守「每个视图都按调用者执行」，两处逐个拆墙都红。② 删掉只做转发的 `account_balance` 视图（V2 物化余额列之后它只剩原样转发），`balanceOf` 直接读 `account.balance`。开发阶段直接改旧迁移（V1 / V2 / V6 / V10 / V17 / V22，用户定）：开发库的校验和因此对不上，用户定**重建、数据保留**——导出 25 张业务表的数据，另存迁移管不到的两张 RLS 实验表（连结构）与它们的登录角色（角色属于集群，`pg_dump` 不带）→ 删卷 → 新代码 `--migrate-only` 建库 → 同一个事务里清掉 V13 的种子行再灌回。核对四样：27 张表行数逐一相同（4698 行）；序列不落后，其中收款地址派生序号的 `is_called` 保住了（丢了它，下一个收款地址会重用序号 0）；以系统角色登录跑判官 0 行；新旧结构快照的 diff 只差这次改的几处——最后一样证明的是测试证明不了的事：库里没有迁移之外的东西被弄丢。
-- 🔧 **金额的边界**（2026-09-21）贴代码复盘账本入口的 `validate` 时读出三处，逐条实测核实（同镜像、1 GB、同 JVM 参数的一次性实例，签名请求）：① 拒绝「小数超过 18 位」时用 `toPlainString` 把金额写全放进报错——`1E-999999999`（12 个字符）写全是 10 亿个字符，一个请求就内存耗尽、进程按 `-XX:+ExitOnOutOfMemoryError` 退出（退出码 3）；`1E-100000000` 单个请求回 100 MB 的报错，三个并发同样退出；拼那条报错要 450–500 MB 堆（前缀的中文让整串每字符 2 字节），加内存没用（`1E-2147483646` 给 8 GB 也是 `too large to fit in a String`）。② 只查小数位不查整数位：`1e20` 落到数据库 numeric field overflow，回 500 + 9001（段位约定「可以重试」）。③「18」写了四份（账本、`TokenAmounts`、提现与限额两个正则）：临时工作树里把账本那份放宽到 19 被 `ApiContractTest` 抓住，收紧到 17 全套 612 条全绿——边界只钉了一侧。顺带测出：一百万位的普通写法光 `new BigDecimal` 就 11 秒；整数位用 int 算，`1E+2147483647` 得 −2147483648，从检查底下钻过去；`100E+2147483647` 去零抛 `ArithmeticException`。修法：`LedgerAmounts`——金额的容量（18 / 20）与对外写法（两个正则）只写这一份：转账 `PLAIN_DECIMAL` 只管写法（两段各 ≤ 64 位，范围仍由账本回 2004，M1.5 的契约不变），提现与限额 `FITTING_DECIMAL` 与原来的正则一字不差、只是改成引用常量；`TokenAmounts` 的两个别名去掉，四个文件直接引用（当天先把正则拆到 common/web 的 `AmountFormat`，用户看出两者是同一个概念、这样拆下去收口的类会散落各处，合回一个，并定下规矩「收口按概念，不按层」，写进 CLAUDE.md）。账本入口按位数拒绝、报错只说几位，整数位按 long 算，去零溢出当整数位超长。守卫：`LedgerAmountBoundsTest` 11 条、`ApiContractTest` 加 17 条（1e20、15 种写法、百万位）、`ControllerBoundaryTest`「控制器解析的每个金额都带 LedgerAmounts 的正则」、`SchemaGuardTest`「每个带小数位的列都正好是账本上限」。先红 13 条后绿，全套 642 条；七处逐个拆墙都有测试红（其中拆掉转账的格式正则后，`1E-999999999` 进了账本也只是 2004——两层互不依赖）。真跑修好的镜像：`1E-999999999` → 400 + 2001、191 ms、实例照常；三个并发照常；`1e20` → 400 + 2004；百万位 → 71 ms 回 2001；日志 0 行 ERROR。按同一条规矩还没收口的地址正则与「金额写成字符串」，次日一起收了，见下一条。同一次检查里发现的冻结账户问题（商户能用转账接口把自己冻结账户里的钱挪回可用）等用户选方案，未动。
-- 🧹 **收口 · 一个概念一个家**（2026-09-22）用户看出前一天拆出去的两个收口类语义相同，定下「收口按概念，不按层」，接着要「都一起收了」。清点比预想的多：地址的形状 `0x[0-9a-fA-F]{40}` 在 Java 里抄了六份（`Abi`、`EthAddress` 两处、`ChainIndexerProperties`、`BlockIndexer`、`WithdrawalController`，`PayoutAdminController` 还借用了后者的常量）；金额写成字符串散在七处——三个控制器、账本 4001 的消息、入账零头的原因、对账的差异文字，外加待核准列表在 SQL 里用 `::text` 另写了一份，对账还有一处 `String.valueOf` 把 1 wei 写成 `1E-18`，和别处的写法不一样。收法：地址归 `EthAddress`（`SHAPE` 给注解、`isWellFormed` 给代码，正则预编译一次——索引器每条日志都要问）；金额归 `LedgerAmounts`——`requireFits` 是全项目唯一判「装不装得下」的地方（账本入口抛 `LedgerException`、链上换算抛 `AmountOverflowException`、提现申请回 400，各给各的异常，提现申请顺带补上了整数位检查），`text` 是唯一把金额写成字符串的地方、写之前先判装得下（装不下是程序错，不会再去展开一个巨数）。**先钉后改**：待核准列表的金额写法在改动前先加断言钉住（`"1.000000000000000000"`），改完仍绿、输出一字不差；收款、提现的响应本来就有测试钉着原文。守卫：新类 `SingleHomeGuardTest`（`{40}` 只许在 `EthAddress`；`toPlainString()` 只许在 `LedgerAmounts`；SQL 里不许把金额 `::text`），`EthAddressTest` 钉住 `SHAPE` 与 `isWellFormed` 对每个样本答案一致，新类 `LedgerAmountsTest` 钉住写法与「装不下不许写」。先红（两条收口规则）后绿，全套 651 条；七处逐个拆墙都有测试红——其中「待核准改回 SQL 的 `::text`」输出一模一样、钉写法的测试照样绿，只有守卫里 SQL 那条规则抓得住，那条规则就是拆墙之前为它加的。库里 8 个 CHECK 约束各写一份的小写地址正则当时没收，留给用户定——用户随后要求一起收，见下一条。
-- 🧹 **收口 · 库里的地址形状**（2026-09-22）8 个 CHECK 各抄一份 `^0x[0-9a-f]{40}$`（V9 三列、V13、V18、V21 三处；存库的规范写法一律小写，和 Java 的输入写法是两件事）。原打算用 `DOMAIN`（把 8 列的类型改成 `eth_address`），动手前想到一个隐患：改列类型会让运行中实例已缓存的预编译语句失效。在一次性 PostgreSQL 容器里用 pgjdbc 42.7.11（驱动默认设置）实测：自动提交模式下驱动悄悄重试一次、什么都看不出来；**放进事务**（应用的定时任务都在事务里）后，迁移后第一次执行必报 SQLSTATE 0A000「cached plan must not change result type」——Spring 不把它当瞬时错误，索引器会当结构性错误停机、状态落库，而部署脚本恰好是在旧版本还跑着时先迁移。改用函数 `is_eth_address` + 8 个调用它的 CHECK（V28，同名重建）：不改列类型、不动视图；同一实验里缓存的查询、缓存的 INSERT 在事务里都照常，新约束照样拒大写。清点地址类的列时又发现注资登记表的 `token` 既没有 CHECK 也没有外键（同表的 `hot_wallet` 有，别的表的 `token` 都指向白名单），V28 补上外键。守卫（`SchemaGuardTest` 两条）：库里只有 `is_eth_address` 写着这个正则、约束都调它；17 个地址类的列每个都有守——自带这个 CHECK，或外键指向这样的列。先红后绿；四处拆墙都有测试红；全套 653 条。真跑：旧应用不停，在开发库上迁移（71 毫秒），结构 diff 只差函数、8 个约束的定义与那条外键；之后 2 分半应用 0 行 ERROR / WARN、0 次 0A000，索引器书签推进 43 块，`work` 组全 UP。迁移后恰好没有新的链上转账（最新一行比迁移早 14 秒），所以「旧应用缓存的 INSERT 在新约束下写入」由隔离实验覆盖，不算真跑覆盖。规矩写进 CLAUDE.md：迁移里改列类型不满足「上一版代码也能跑」。
-- 🧹 **删掉通用转账接口与按 id 查余额**（2026-09-22）讲解冻结账户时冒出来的问题：提现途中钱冻在 `user:<商户>:<币>:frozen`，而通用转账接口的账户 id 与 `code` 都来自请求体、授权只问「这账户是不是你的」——冻结账户**确实是商户的**。商户自己拼一笔「冻结 → 可用」的 `WITHDRAWAL_REVERSE`，链上的币照发，账本余额一分没少，可以反复做。实测到「余额不足 4001」那一步（说明授权与业务类型两道门都已放行，只差账户里有钱），整条双花链没实测。排查其余 26 个接口：**这个毛病是独一份的**——全仓库只有这一处把客户端字符串转成账本枚举，只有这一处让客户端选借贷双方，其余商户接口都是「服务端推导账户」的专用接口形状。用户选删接口而不是加限制；顺带删掉按 id 查余额（它要账本的内部主键，而系统从不告诉商户这个主键，**没有真实调用者**），连带删掉唯一调用方是它的 `AccountAccessService`——授权从此只剩 RLS 一道，因为「这个账户 id 是谁的」这个问题本身没有了。守卫是承重的那种：`ControllerBoundaryTest` 扫源码，任何 controller 里出现 `TransferCode` / `ledger.transfer(` 就红。**最值得记的一课**：删接口会制造**空转测试**——两条「不存在与无权必须不可区分」的测试在接口消失后两边都拿到 404、body 一样，**照样绿但什么都不证明**；45 条失败的测试会喊，这两条不会。46 处测试逐条重新安置：靶子换成白名单接口，金额格式换到提现接口（边界回 2001，账本侧的 2004 归服务层测试），跨租户改到唯一还收 id 的 disable 接口（RLS 让「不是你的」和「不存在」都是改 0 行，结构性不可区分），「幂等键按商户分命名空间」与「币种不符」分别下移到租户隔离与账本建模测试。**V29 顺手收权限**：`transfer` / `entry` 上两个角色都有 UPDATE 而全仓无人使用——「账本只追加」原来只靠纪律，现在靠权限；`account` 的整行 UPDATE 收成列级 `UPDATE (balance)`，`allow_negative`、`merchant_id` 从此只有属主能改。
-- ✅ **签名协议 CP2**（2026-09-09）扫描第五条的另一半：nonce 前置只修了「定长论证没被强制」，路径与请求体之间的边界靠碰巧。换成 `"CP2" LF ts LF nonce LF method LF path LF sha256hex(body)`：换行没有任何一段可能含有，请求体换成哈希后最后一段也定长，映射成为单射；版本标签进串受签名保护，下次可并存过渡。三处副本同改（服务端、测试助手、`tools/api.py`）；`HmacKnownAnswerTest` 换成 Python 独立算出的两个 CP2 向量（POST 含非 ASCII、GET 空体），并加一条「路径末尾挪进请求体、拼接串相同但规范串不同」的测试——它先把缺陷钉成事实再验收修法；真实启动：`tools/api.py` 签名的请求 200，按旧拼法签的同一请求 401
-- 🔒 **两个会话同时改一棵工作树的教训**（2026-09-09）：扫描补丁与 M4-⓪ 在同一工作区并行，迁移编号、策略、脚手架、文档四处重叠。处置：扫描补丁整体存档撤出、等 M4-⓪ 提交后重放到它之上。以后并行做事给其中一方开独立的 git worktree
-
-- ✅ **M3-② 补丁 · 两个节点的 finalized 不同步**（2026-09-15）复盘 `DepositPoster` 时发现：入账那道门要求「块号 ≤ 两个节点各自的 finalized」，但库里的 FINAL 跟的是主节点，索引器对审计节点只核对哈希、不要求它自己的 finalized 也到了。两家节点更新 finalized 差几秒，落在这个窗口里的正常入账被判 `HELD_NODE_DISAGREE` 并占坑，审计节点追上来之后再也不是候选，只能靠人核准——而核准走的是「不再核对」的路径。受控复现两条（慢半拍永久 HELD；答不出反而自愈）后改成：差距在 `chainpay.deposit.finality-tolerance-blocks`（默认 64）以内 = 延后不占坑，超出 = HELD 叫人去看节点；`DepositPoster` 多一种「这一轮先不判」的判决，`PostingResult` 多一个 `deferred` 计数。4 条新测试（延后自愈、节点卡住 HELD、视图超前 HELD、容忍值来自配置）+ 配置绑定与装配的源码扫描；拆墙四处，其中「装配传的是不是配置」只有源码扫描抓得住。。**审核补两处**（2026-09-15，另一会话的修复经本会话审核）：不认识的错误码只延后这一笔、不再结束整轮（候选按块号升序，一个老块答不上来曾会拖住后面所有入账两分半）；入账 HALTED 后调度器关内存闸门、不再碰节点，重启才再试（与索引器、发送任务口径一致）。改 2 条测试、加 1 条，两面墙各红
-
-**M3 ⓪ 到 ⑤ 全部完成（2026-09-06 至 09-08），演练补丁 09-09，安全扫描补丁 09-09；⑥ webhook 推迟到 M5 之后。**
-
-#### M4 进度
-
-- 📝 **规划与前置知识**（2026-09-09）`docs/knowledge/m4-payout.md`：账户与 nonce、EIP-1559 交易的字段、gas 三个数、RLP 与签名（RFC 6979、low-s、yParity、from 从签名恢复）、交易的一生（回执 status 0 也是上链、同 nonce 只能一笔、广播按内容幂等）、热钱包与冷钱包、复式记账视角的出账（冻结 / 结算 / 解冻）、风控；六步规划与十条取舍（用户按建议定）。动手前的 30 问在 `docs/retro/M4-before.md`（本地）
-- ✅ **M4-⓪**（2026-09-09）地基：V21 拆掉会话变量那道门（五张表策略去掉 `is_system_scope()`、函数删除，`TenantScope.asSystem` 删除，M0 测试脚手架改走 `SystemLedger`）+ 四张表（`hot_wallet`：`next_nonce` 是意图、无 RLS、应用角色连读都没有；`payout`：以冻结开始、`freeze_transfer_id NOT NULL UNIQUE`、settle / reverse 互斥且与状态一一对应、幂等键按商户唯一、RLS 商户只看只插；`payout_tx`：原文先落库、`tx_hash` 唯一、MINED ⇔ 带块、**部分唯一索引 (hot_wallet, nonce) WHERE MINED**；`payout_address` 白名单）+ 系统角色无 DELETE。`PayoutStatus` / `PayoutTxStatus` 显式转换表（BROADCAST 没有到 FAILED 的边：广播后只有回执能宣布结局）。`PayoutLedger` 三笔账本流 `WITHDRAWAL_FREEZE`（商户连接、asMerchant）/ `WITHDRAWAL` / `WITHDRAWAL_REVERSE`（系统身份），「结算过的不能再解冻」由冻结账户不许为负守。23 条先红后绿（状态机 5、账本流 6、表与权限与拆门 12）；三面墙：门装回去 → 红；去掉部分唯一索引 → 红；冻结账户允许为负 → 红。全套 318 跑 0 败 0 错 2 跳。真实启动：V21 落到开发库，带门的策略 5 → 0
-- ✅ **M4-①**（2026-09-09）签名，零网络：`Rlp`（编码 + 解码；解码拒绝单字节带前缀、短内容用长形式、长度前导零、截断、尾部多字节；`toInteger` 拒绝前导零）、`Eip1559Transaction`（九个字段构造时校验；载荷 `0x02‖RLP(9)`、签名哈希、原文 `0x02‖RLP(12)`、交易哈希、拆回）、`Ecdsa`（BouncyCastle + RFC 6979 的 k、low-s、yParity 由恢复二选一定、`recoverAddress` = 节点从签名恢复 from）、`HotWalletSigner`（唯一持钥者，只露地址与签名）、`HotWalletDerivation` / `HotWalletTool` / `tools/hotwallet.sh`（硬化账户 1'）、`PayoutConfig`（设了 `CHAINPAY_PAYOUT_HOT_WALLET_KEY` 才装配）、`tools/check-secrets.sh` + 放行表。已知答案逐字取自原文并记提交号（浅克隆）：RLP 官方 28 例、EIP-155 正文算例（RLP + Keccak + 确定性签名一次证明，(r, s) 逐位相同）、ethereum/tests 类型 2 向量（拆开、编回逐字节相同、发送方恢复一致、前导零反例被拒）、keyaddrtest。90 条先红后绿（RLP 58、EIP-155 5、私钥→地址 2、类型 2 向量 4、类型 2 交易 5、ECDSA 边界 4、签名器 4、派生 3、扫描 4、边界 1）。四面墙：随机 k → 3 红；去掉 low-s → 1 红（**EIP-155 向量仍绿，它的 s 碰巧是小的；抓住的是 24 条消息那条——单个向量证明不了「永远」**）；接受前导零 → 1 红；扫描脚本关掉私钥规则 → 1 红。全套 432 跑 0 败 0 错 2 跳。**改判**（同日）：用户提出「不重复造轮子」，把 RLP / EIP-1559 编码 / 签名与恢复换成 web3j 6.0.0 `crypto` 模块的薄包装（不拿 `core`，排除 EIP-4844 原生库；测试一行不动，对库一次全绿；三个类从 487 行降到 326 行薄包装；M3 的 BIP/xpub 不动，JSON-RPC 客户端不动）。原则记入 CLAUDE.md §7：原语与协议编码用库，策略与业务自己写；测试是我们的，实现是库的
-- ✅ **M4-②**（2026-09-09）编号与发送：`ChainReader` 加四个只读方法（计数、估 gas、费率、按哈希查）+ `ChainSender.sendRawTransaction`，`EthRpc` 实现两者；`FakeChain` 学会内存池（按内容识别 already known、nonce too low、同编号 underpriced）。`HotWalletRepository`（`FOR UPDATE`、`ON CONFLICT DO NOTHING`、带期望值的编号 +1）、`PayoutSendRepository`、`FeePolicy`（小费地板、2 × 基础费 + 小费 ≤ 上限、估算 × 1.2 ≤ 上限）、`PayoutSender.sendOnce()` 三段（对账 N = C + U → 重发 SIGNED → 排队的：事务外估 gas 取费率、事务里锁行签名落库、提交后广播、回答分三类）、`PayoutSendScheduler` / `PayoutSendConfig`（私钥 + 主节点都有才装配）。17 条先红后绿（发送 12：一笔、十笔连续、双实例不重号、提交后广播前崩溃重发同一份原文、already known 当成功、链超前停发、估 gas revert 判失败并解冻、费率超上限等、insufficient funds 停发到人恢复、首次从链上计数起步、双实例同一笔 revert 只解冻一次、双实例同时重发不撞；EthRpc 合同 5）。三面墙：跳过对账 → 红；already known 当拒绝 → 红；**去掉热钱包行锁 → 仍绿，再去掉编号守卫 → 三跑仍绿**——两个线程按同样顺序抢同一笔提现，在提现行上就串行了，这条测试证明的是「不重不漏」，证明不了行锁本身。拆墙时挖出两处双实例竞态（同一笔 revert 第二个实例炸、同一份原文两个实例重发第二个炸），补两条红灯后修（锁提现行看状态；BROADCAST 谁先改谁算）。全套 448 跑 0 败 0 错 2 跳。真实启动：一次性私钥装配，首轮对账向 Sepolia 问计数并插入 hot_wallet 行
-- 🔧 **清点补丁**（2026-09-10）：用技能第十二节「手写 vs 引库」对 M0–M4-② 全量自查（三个没有写作上下文的代理 + 主会话独立读）。结论：没有一处该整段换库——BIP-32/39、Base58、地址派生的手写有具体理由（库缺功能），已写进 CLAUDE.md §7；该改的是「引了没清点」：abi 模块 179 类 0 引用而 M4-② 又内联了第三份 calldata、tuweni 拖进 5.7 MB 零引用、bcprov 被钉得比库声明的旧。越界挖出最有后果的一条（6.10）：库连不上在 Spring 里是 NonTransient，索引器据此 HALTED 落库、入账记 HELD_ERROR。先红后绿 7 条（405 / 404 不回 500、库连不上 RETRY_LATER、连接池拿不到连接不进 HELD、配置约束 3），对拍与向量 3、4 首跑即绿是验收。规矩：新依赖进树那天回头清点（技能 12.11）
-- ✅ **M4-③**（2026-09-10）追踪、结算、卡单：`ChainReader.transactionReceipt` + `EthRpc` 翻译；`PayoutTracker.trackOnce()` 两段（BROADCAST 问回执 → MINED / REPLACED / DROPPED；MINED 核 FINAL → 重组退回 / 审计不同意等 / 结算或解冻）；`PayoutSender` 加第三段「加价」（`FeePolicy.bump`：max(市价, 旧 × 125%)，超上限等）与重发 DROPPED、nonce too low 认兄弟；`PayoutTrackScheduler`；`payout_tx` 多列进 `PayoutAttempt`；仓库加 markMined / unmine / replaceSiblings / findSettlement / markConfirmed / markFailedFromMined。11 条先红后绿（追踪 10：回执→MINED 不动钱、FINAL 且两节点一致→结算、status 0→FINAL 后解冻、没 FINAL 等、审计不同意等、重组退回再上链只结算一次、节点忘了→DROPPED→重发、卡住加价→旧的 REPLACED→新的上链→结算、加价超上限等、节点不可达提前结束；EthRpc 回执合同 1）。四面墙：不看 finalized → 红；不问审计节点 → 红；重组不退回 → 红；加价不保证 +25% → 红（节点拒 underpriced）。一处测试写错顺序被自己抓住：同一轮先 BROADCAST 后 MINED，块已 finalized 时当轮就结算，第二轮自然是 0。全套 470 跑 0 败 0 错 2 跳。真实启动：一次性私钥装配出「追踪任务已装配」，发送首轮插入 hot_wallet 行、追踪首轮无事可做不出声；调度线程 5。Docker 掉线期间开发库连不上，索引器状态表仍是 RUNNING——上一个补丁在真实故障里第一次兑现
-- ✅ **M4-④**（2026-09-10）白名单、限额、提现接口：V23 `payout_limit`；`WithdrawalRepository`（商户连接：白名单、幂等键、当日汇总、插行、冻结余额）+ `WithdrawalService`（申请的硬顺序：代币 → 金额 → 锁商户行 → 幂等 → 平台地址 → 白名单 → 账户 → 限额定状态 → 冻结 → 插行）+ `PayoutApprovalService`（系统身份：核准、拒绝 + 解冻、限额）+ 两个控制器；余额接口加 `frozen`；错误码 2009 / 2010 / 4004。9 条 HTTP 先红后绿（钱从 M3 的真实路径进来再申请出去）：登记幂等且租户隔离、平台地址与畸形地址拒绝、申请冻结与余额、幂等重放与冲突、白名单/停用/平台地址拒绝且一分不冻、余额不够与小数位、三种转人工、核准与拒绝与 4004 与 401、列表带链上哈希且租户隔离。三面墙：不查平台地址 → 红；当日汇总把等核准的算上 → 红；没定限额直接放行 → 红。两处测试自己写错被抓住：五笔合计超过种子余额、当日汇总的口径。全套 479 跑 0 败 0 错 2 跳。真实启动：V23 落到开发库；用 acme 的演练凭证只读探三个商户接口（白名单空、提现空、余额带 frozen=0，可用 25 LINK 是 M3-⑤ 那笔）；管理接口待核准列表为空，无令牌 401
-- 🔧 **④ 补丁**（2026-09-11）：讲「为什么平台自己的收款地址永远拒绝」时发现热钱包自己的地址没拦——提到它是 to == from 的交易，编号照用、gas 照付、账本记「付出去了」而链上什么都没变。`WithdrawalService` 注入 `Optional<HotWalletSigner>`，有就把它的地址一并拒绝（2010）。2 条先红后绿。演练手册 `docs/runbook/payout-drill.md`：准备清单 + 正常路径 + 五种故障（revert 退款、并发编号、别处用钥匙停发、转人工核准、kill -9 重发），卡单加价真环境造不出，由测试守
-- 🔧 **⑤ 前置**（2026-09-11）：用户问「热钱包和收款钱包该不该两套助记词」→ 讲清硬化派生的隔离与两套种子多买的是爆炸半径；用户选了离线生成，做 `Mnemonic`（熵 → 词、校验位、`SecureRandom` 生成）+ `MnemonicTool` / `tools/mnemonic.sh`（没有终端就拒绝）。词表 bitcoin/bips 620871a 逐字入库核 sha256；已知答案 trezor/python-mnemonic b57a5ad 的 5 条熵 → 词。4 条先红后绿；扫描脚本抓到向量里的全零熵，逐值放行并注明
-- ✅ **M4-⑤**（2026-09-13）真环境演练：Sepolia 上 5 笔真实提现走完申请 → 签名 → 广播 → 回执 → FINAL → 结算（首笔 13 分 35 秒；一轮签四笔编号连续；超限转人工核准；拒绝解冻）。终态账本与链上一致：可用 18、镜像 −18、热钱包 18 LINK，判官 0 行。跳过：别处用钥匙（用户不想把私钥导进 MetaMask）；造不出：热钱包 LINK 不够、kill -9 窗口、卡单——由测试守。意外：领币贴错地址、水龙头主网门槛、`confirmed_at` 未写
-
-#### M5 进度
-
-- 📝 动手前的 22 问在 `docs/retro/M5-before.md`（本地）；规划与七条取舍在 `docs/knowledge/m5-reconciliation.md`
-- ✅ **M5**（2026-09-14）对账：V24 `audit_run` / `audit_finding`（只追加）；`AuditRepository`（脚下的块、地址与热钱包、入账三方、出账三方、托管总量的三项、判官）；`AuditService` 五条检查 + 分叉拒判 + 每轮落行；`AuditScheduler`（每小时）；`AuditController`（GET 状态含 stale、POST 立刻跑）；`confirmed_at` 补写。12 条先红后绿（11 条服务：干净 OK、日志被标非主分支 → 假账、删入账行 → 漏账、改小金额 → 算错、合约余额少 → 假账 + 托管差额、审计节点不同意 → DISPUTED、热钱包发出无尝试 → 别处用钥匙、CONFIRMED 无日志 / 日志金额错、节点不可达 → FAILED 落行、finalized 分叉 → 拒判、stale 三态；1 条 HTTP）。三面墙：不问审计节点 → 红；分叉上照样对账 → 红；不核提现的链上日志 → 红。**真实首轮抓住了对账自己的设计漏洞**：Docker 停两天后索引器落后 4300 块，对账站在 finalized 上、日志只到书签，报出 7 处假差异——补一条测试（索引器落后时站在书签上），F 改为 min(finalized, 书签)，V25 给系统角色读书签。全套 498 跑 0 败 0 错 2 跳。真实启动三轮：① 站在 finalized 上、书签落后 4300 块 → 7 处假差异（修）；② 站在书签 11698160 → OK；③ 索引器追平后站在 finalized 11700301 → DIFF 1 处：CUSTODY_TOTAL +25 LINK——水龙头直接打给热钱包的 25 LINK，账本一无所知的外部注资，判官如实报出（v1 只报不登记，注资登记记 M6）
-- ✅ **M6-⓪**（2026-09-14）健康检查：`spring-boot-starter-actuator` 入树（分组 / 探针 / 状态映射 / db、redis 指示器引库，判定自己写）；`ops/health` 四个指示器（索引器、热钱包、判官、系统池）+ `Statuses.DEGRADED`；`SystemLedger.ping()` / `bindMetrics()`；`application.yml` management 段：回环管理端口 8096、三个组 liveness / readiness（db + systemDb）/ work（indexer + hotWallet + audit + redis）、DEGRADED 排序与 200。19 条先红后绿（12 条指示器判定不起容器：三个「没配 = UNKNOWN」、索引器三态、热钱包三态与细节无密钥、判官四态与从没跑过、系统池通与不通；7 条真 HTTP：liveness 不要令牌、readiness 列两个池、work 列四个部件、**主端口上没有 /actuator**、管理端口只绑回环、细节无密码无连接串、两个池的指标都在）。四面墙：探针放回主端口 → 2 红；readiness 不看系统池 → 红；系统池不绑指标 → 红；HALTED 算 UP → 红。全套 517 跑 0 败 0 错 2 跳。真实启动：Tomcat 起两个端口（8095 / 8096），`liveness` UP；`readiness` UP（db + systemDb，系统池 2 条连接）；`work` **503 DOWN**——audit DOWN（上次 run 7 DIFF，1 处差异，就是那 +25 LINK）、indexer UP RUNNING、hotWallet UP、redis UP：判官报的差异第一次不再只躺在日志里，而是让整台机器的 work 组变红；主端口 `/actuator/health` 404；8096 只监听 127.0.0.1；`hikaricp.connections` 两个 pool 标签（主池 10、系统池 2）；探针正文 grep 不到 password / jdbc: / 节点主机名
-- ✅ **M6-①**（2026-09-14）容器化：`Dockerfile`（两阶段、四层 COPY、非 root、HEALTHCHECK 打 readiness）、`.dockerignore`（第一条 `env/`）、compose `app` 服务（密钥只从 env_file、端口只绑回环、去能力 / 禁提权 / 只读根 / 限内存 / 限进程、依赖健康的中间件、自动重启）、`tools/image-check.sh`（打完镜像扫：非 root、HEALTHCHECK、无私钥形态、env 里每个密钥值 grep 不到、无 env 目录）、`tools/admin.sh`。3 条守卫先红后绿（扫 Dockerfile / .dockerignore / compose 三个文件，形状同 ControllerBoundaryTest）；五面墙：USER root → 红；Dockerfile 里 ENV 放密码 → 红；compose 端口绑 0.0.0.0 → 红；compose 里放令牌 + 去掉 read_only → 红；.dockerignore 漏 env/ → 红。全套 520 跑 0 败 0 错 2 跳。真跑：镜像 552 MB（依赖层 49 MB、应用层 0.5 MB），`image-check.sh` 13 项全 ✓（9 个密钥值都不在镜像里）；`docker compose up -d app` 9 秒 healthy；容器内 uid 999 `chainpay`、`CapEff` 全零、`NoNewPrivs 1`、`/app` 只读、`/tmp` 可写；三组探针在容器内回环上答（work 仍因判官 DIFF 而 503）；宿主 8095 上 `/actuator` 404、8096 不可达；索引器 RUNNING、书签 11701750 已追平；**崩溃演练**：容器内 `kill 1`，Docker 按 `unless-stopped` 自动拉起，RestartCount 1、9 秒后再次 healthy。**真跑抓到的事**：① 宿主打发布端口的管理接口 401——源地址是 Docker 网桥网关不是回环，控制面的第二层在容器化后按设计生效，于是有了 `tools/admin.sh`；② 这台机器容器内出网走代理隧道，TLS 偶发断手（apt 一次、Maven 一次），重跑即过；③ 首次构建拉 Maven 镜像 + 依赖约 6 分钟，第二次 106 秒（`~/.m2` 缓存挂载）
-- ✅ **M6-②**（2026-09-14）停机恢复：① 追赶按时间封顶（`catch-up-budget` 5m，每 50 批一行进度；`ChainIndexerScheduler` 测试用注入的表证明预算用完就收、下一轮接着追）；② 注资登记（V26 `hot_wallet_funding` 只追加、`HotWalletFundingService` 四道门、`POST/GET /admin/v1/hot-wallet/fundings`，请求体没有金额字段；对账等式加「已登记注资」，登记过但日志被翻掉的另报）；③ `CHAINPAY_BIND_ADDRESS`（默认回环，容器 0.0.0.0）与 `CHAINPAY_LOG_LEVEL`（默认 INFO）。11 条先红后绿（追赶 2、注资服务 6、注资接口 1、对账 2）+ 2 条守卫断言；四面墙：追赶不看预算 → 红；注资不核 finalized → 红；不核发起方 → 红；等式不加注资 → 红。全套 531 跑 0 败 0 错 2 跳。真跑：**书签回退 2000 块**（两节点一致的哈希 + 旧值守卫）后一轮 200 批约 4 分钟追平、重放插入 0 行（旧法约 8 分钟）；**登记水龙头的 25 LINK**（金额、块、logIndex 全从日志读出）后对账 **OK、0 处差异**，M5 起一直红的那条 CUSTODY_TOTAL 消失，`work` 组第一次 200 全 UP；容器里 8095 绑所有网卡、8096 绑回环、日志 0 行 DEBUG
-- ✅ **M6-③**（2026-09-14）告警：`ops/alert`（`Observation` / `Alert` / `AlertPolicy` 只在变化时叫、`WebhookSender` 四种载荷、`AlertScheduler` 读 `HealthEndpoint.healthForPath("work")`、`AlertProperties` / `AlertConfig` 永远装配）；yml `chainpay.alert`；调度线程池 8。12 条先红后绿（策略 5：变化才叫 / 没送到再叫 / DEGRADED 与坏态间变化 / UNKNOWN 不是事 / 部件独立且站着的问题首轮叫；出口 6：generic 形状 / 三家聊天形状 / 非 2xx 与连不上 = 没送到 / 没配只打日志 / 描述只有主机名 / 🔴🟢；装配 1）。三面墙：每轮都叫 → 红；UNKNOWN 算事 → 红；非 2xx 算送到 → 红。全套 543 跑 0 败 0 错 2 跳。真跑：宿主起一个假接收端（`host.docker.internal:9911`），容器里 `docker compose stop redis` 后 **12 秒**收到 🔴「redis UP → DOWN｜error=Redis command timed out」，Redis 停着的 35 秒内没有第二条，`start redis` 后收到 🟢「DOWN → UP｜version=8.10.0」；应用日志里 webhook 只出主机名
-- ✅ **M6-④**（2026-09-14）部署脚本与回滚演练：`deploy/deploy.sh`（八环节，失败即停，验证不过自动回滚）、`deploy/rollback.sh`（换标签、up、再验）、`Migrate`（`--migrate-only`：只起数据源 + Flyway 的最小上下文）、compose 永远跑 `chainpay:current`、Flyway 容忍未来版本。7 条先红后绿（守卫 4：八环节顺序 / 回滚脚本 / current 默认值 / 未来版本容忍；只迁移 3：已迁移的库 0 且 0 任务 / 坏迁移非 0 且历史表无痕 / 未来版本仍 0）。三面墙：去掉未来版本容忍 → 守卫红（Flyway 默认已容忍，Migrate 测试仍绿——显式写下是钉住）；迁移挪到切换之后 → 红；迁移失败也回 0 → 红。全套 550 跑 0 败 0 错 2 跳。真跑：**演练 A** 放一条坏迁移 V27 → 脚本在 ④ 停：`current` 没动、容器仍 healthy、历史表里没有 V27（PostgreSQL 的 DDL 是事务的，失败整体回滚）；**演练 B** 部署 ④ 47 秒（迁移一步 34 秒是最小上下文的启动 + 校验）→ `rollback.sh` 换回 ③ 镜像 9 秒 healthy（那个镜像里连 `Migrate` 类都没有，照样起）→ 再部署 ④ 45 秒；镜像标签的账本：`current` / `previous` / `failed` / `<sha>-dirty`
-- 🔧 **M6-④ 补丁 · 部署脚本的标签与失败路径**（2026-09-18）复盘 `deploy.sh` 时发现五处：① 脏工作区一律叫 `<sha>-dirty`，两份不同的改动撞同一个标签，「已有就跳过构建」会把旧镜像当成这一次部署出去；② 传旧提交时标签写的是那个提交、构建的却是工作区；③ 第一次部署失败无处可退，current 仍指着坏镜像被 restart 反复拉起；④ 配置检查 `source` 之后全部密钥留在脚本环境里，后面每个 docker 子进程都继承；⑤ 开着 pipefail，「挑几行给人看」的 grep 一行没匹配上就会掐断部署（潜伏：Flyway 的 INFO 行总在）。修法：构建上下文一律来自 git tree（`git archive`），标签 `<sha>-dirty.<tree 前 7 位>`；工作区快照用空暂存区按内容算——复制 index 会让 git「同一秒内改动」的防护失效（同一秒改、下一秒打快照，实测 5 次漏判 4 次）；首次失败停机、坏镜像改叫 failed、摘掉 current；检查放进子 shell；两处 grep 带 `|| true`；迁移日志成功即删；成功后打出 work 组总状态。脚本拆成函数、被 source 时不跑 main，`DeployScriptTest` 用假 docker 逐环验证（9 条，拆墙逐条变红）；运维手册删掉「先 source env」。全套 601。
-- ✅ **M6-⑤**（2026-09-14）控制面：V27 `admin_user` / `admin_session` / `admin_action`；`admin/`（domain、repository、`AdminAuthService` 可注入时钟、`@Sensitive` + `AdminReauthInterceptor`、`AdminAuthController` 登录 / 退出 / 再认证 / 改口令 / 我是谁）；`AdminAuthFilter` 重写（回环 + 无代理头 + 会话，`finally` 里记审计）；`AdminBootstrap --create-admin`；`spring-security-crypto`（Argon2id）；错误码 3002；静态令牌与 `chainpay.admin-token` 全部删除；六个旧测试改用 `adminSessionToken()`；`tools/admin.sh` 改成 login / reauth / logout。11 条先红后绿（规则 6：散列存储 / 失败不可区分与锁定 / 闲置与绝对过期 / 再认证与退出 / 口令策略与改口令踢会话 / 登录审计；接口 4：登录用退出与旧头不认 / 失败与代理头 / 敏感操作 403 → reauth 放行 / 每次调用留行；引导 1）。四面墙：不比对口令 → 2 红；拦截器不看再认证 → 红；不看闲置超时 → 红；没会话也放行 → 2 红。全套 561 跑 0 败 0 错 2 跳。真跑：新镜像 `--migrate-only` 到 V27 → `--create-admin ops`（口令走环境变量，写进 gitignore 挡住的 `env/admin.env`）→ 切换 9 秒 healthy → `tools/admin.sh login ops`（口令走 stdin）→ `GET /admin/v1/indexer` 200 → 把 `reauth_at` 拨回 6 分钟 → `approve` **403 + 3002** → `reauth` → 同一请求过门（4004，那笔不存在）→ 旧的 `X-CP-ADMIN-TOKEN` 头 401 → `admin_action` 七行（含 403、409、401）→ 库里口令 `$argon2id$` 开头、会话表里 grep 不到令牌明文
-- 🔧 **M6-④/⑤ 补丁 · 入口的一次性模式**（2026-09-18）讲 `ChainpayApplication` 时发现：`main` 只精确比对 `--migrate-only` / `--create-admin`，写错一个字（`--migrate_only`、`--migrate-only=true`、`--create-admin=ops`）会被 Spring 当成没人认识的配置项，静默起完整应用——另起 JVM 实测，横幅与「Starting ChainpayApplication」都打了出来；两个模式同时出现时先出现的生效、另一个悄悄忽略；分派写在 `main` 里，`System.exit` 让它没有任何测试。修法：分派抽成 `oneShot`（只决定、只跑那一件事、返回退出码），以 `--migrate` / `--create` 开头的其它写法与两者同时出现一律退出码 2、什么都不跑；`ChainpayApplicationTest` 10 条，其中一条另起 JVM 真跑 `main`、守那行 `System.exit`，三处修复逐一拆墙各自变红。运维手册与 `tools/admin.sh` 里建第一个管理员改成 `read -rs`：口令放环境变量防得住 `ps`，写在命令行上防不住 shell 历史。
-- ✅ **M6-④ 演练 · 部署 98a580a 与回滚**（2026-09-18）真环境把两个补丁走一遍：部署（真构建 9 秒，全程 46 秒，9 秒就绪）→ `deploy/rollback.sh` 退回 `542b3d1-dirty`（9 秒就绪）→ 再部署（镜像已在，「标签由内容决定」，**跳过构建**，37 秒）。第 ④ 步用的就是修过的入口（`--migrate-only`，库在 V27 只校验）。上线后等首轮定时任务：3 分钟 0 条 ERROR / WARN，work 组五项全 UP（含新的 `deposit`），**对账 OK（run 56，finalized 11729775）**——健康检查说自己好，对账证明账是对的。回滚后 `current` 与 `previous` 指向同一个镜像：标签账本只记一层历史，往前走的那版记在 `failed` 里；演练完把 `failed` 摘掉（只去名字，镜像还挂在 `current` 上），免得它和在跑的版本指着同一个镜像让人误读。
-- 📝 **进程拆分 · 讲解、对标与九条取舍**（2026-09-22 / 23）用户要「参考主流项目一步步教并实践」。先讲前三层（讲解页「chainpay 分舱图」：钥匙矩阵、一笔提现穿过两个进程、发布顺序、谁停了谁还能干活），再两轮浅克隆对标：通用项目（Twelve-Factor、Airflow、Sentry 自托管、Mastodon、GitLab chart、Fineract），以及用户追加要求的金融与交易所（Peatio / OpenDAX、OpenCEX、BTCPay、Bitcart、Web3Signer、FireFly Signer、BitGo Express、Hyperswitch、Mojaloop、Kill Bill、Blnk、geth 交易池），22 个仓库、每条对到文件与行号。三个结论：没有一个默认按组件分数据库账号（交易所也一样，OpenDAX 全用 `root`）；单独的签名服务不核业务、谁来都签；执行一侧复核，金融平台都做、开源交易所都不做。核对时找到交接文档漏掉的两处，都是「worker 信 web 写进库里的行」：应用角色能往提现表插「放行」的行、发送任务签名前不复核（坑 4）；能插、能改收款地址，入账不重新派生（坑 5）——拆分移走了钥匙，没移走下指令的权力。用户问「别人都不拆数据库账号，我们还拆吗」：拆，不拆 web 就握着系统角色，能自己写核准标记、往账本插转账，复核核什么都核得过（Peatio 就是这个形状）。九条取舍按建议定下，新增 8（worker 不信 web 写的行：出金签名前复核、入金记账前重新派生）与 9（签名进程这次不拆、留接缝，KMS / 多签写成上主网的前提）；步骤改为 ⓪–⑧。
-- ✅ **进程拆分 ①**（2026-09-23）进程角色：同一个镜像起成 `web` / `worker`，`SPRING_PROFILES_ACTIVE` 恰好一个；每个角色一张禁用名单（环境变量名 + 配置键 + 它能干什么），web 七项、worker 一项（属主口令第 ⑤ 步加）；守卫是静态、最高优先级的 BeanFactoryPostProcessor，在造任何 bean 之前核对，报错只写变量名。compose 的 `app` 设 `worker`，测试基类 `@ActiveProfiles({"test", "worker"})`。顺带收口：「密钥形态的变量名」只在 `tools/image-check.sh` 写一份（补上告警地址与探针地址——此前两份副本一起漏了），Java 测试经 `SecretNames` 读；探针的节点地址挪到 `env/probe.env.example`（应用从不读它们，原来整份跟着 `env/local.env` 进了容器）。27 条新测试：`ProcessRoleTest` 13（纯逻辑）、`ProcessRoleBootTest` 10（真的应用、真的 application.yml，系统环境整份换成假的、库与 Redis 指向端口 1，逐项设运维真会设的环境变量，断言根因是守卫、报错不含值）、`EnvInventoryTest` 4（样例 = 清单、清单判为密钥的 = 镜像扫描按值查的、禁用名单 = 清单里不许拿的）。先红（桩：什么都不查，19 条里 11 败 3 错；没有守卫时应用一路走到建连接，撞上故意指的空端口）后绿。七处拆墙都有测试红，最有教益的两处：守卫写成普通 bean → 启动测试 10 条全红，根因是 `Connection refused`（晚了就等于没有）；名单上的配置键拼错一个字 → 从名单派生的单元测试照样绿，只有起真应用的那条红。拆墙自己也踩了坑：`rsync -a` 恢复源文件连旧修改时间一起恢复，只改 shell 脚本的那轮 Maven 沿用了上一轮的旧类、多红一条；清掉 target 重跑后只剩该红的。全套 674 条 0 败 0 错 2 跳。真跑：部署 57 秒，镜像扫描第一次按值查告警地址与探针地址；容器日志「进程角色：worker（禁用名单 1 项，环境里一项都没有）」、0 行 ERROR / WARN；演练用同一份环境起 web → 拒绝启动、点名六个变量，一个连接池都没建；不给角色 → 拒绝启动；两份输出里逐个比对，一个密钥值都没有。演练时看出报错里各项之间的顿号和说明文字里的顿号混在一起，分隔改成分号：重跑全套仍是 674 条全绿，再部署 52 秒，演练一的报错按分号逐项分开、仍没有任何密钥值。
- 复盘 `docs/retro/M3.md`（§3 第 ⑤ 步：M3-before 的 30 问哪几条是自己想到的）由用户写。
-
----
+**验收**：✅ 水龙头领币转到派生地址，余额正确增加（真环境：SEEN → SAFE → FINAL → CREDITED）✅ 同一笔被索引两次不双记 ✅ 没到 FINAL 余额不可用 ✅ 未支持的代币不崩 ✅ 零或极小金额按策略处理。
 
 ### M4 · 付款 Pay-Out
 
-> **目标：从你的热钱包签名并广播一笔转账。**
->
-> **难点是 nonce——这是并发问题最纯粹的形态。**
+> **目标：从热钱包签名并广播一笔转账。难点是 nonce——并发问题最纯粹的形态。**
 
-#### 为什么 nonce 是终极并发题
+每个地址的交易必须按 nonce 严格顺序上链：三个线程同时读到 nonce = 5，只有一笔能上链；跳号（发了 5 和 7 没发 6），7 永远 pending，后面全部卡死。**nonce 的真相在链上，不在你的库里，没有数据库事务能救你。**
 
-以太坊每个地址的交易必须**按 nonce 严格顺序上链**。
+**学什么**：nonce 管理（`pending` vs `latest`、跳号恢复）；EIP-1559 的两个费率与估算失败；卡单的加速与替换；私钥管理（绝不进代码、镜像、日志）；提现风控（白名单、限额、人工核准、冷却期）；广播幂等。规划与十条取舍在 `docs/knowledge/m4-payout.md`。
 
-```
-你并发发 3 笔提现：
-  线程 A 读到 nonce = 5，构造交易
-  线程 B 读到 nonce = 5，构造交易   ← 撞了
-  线程 C 读到 nonce = 5，构造交易   ← 又撞了
+**事故**：Ronin Bridge（2022，约 6.25 亿美元）：9 个验证者私钥里 5 个被攻破，第 5 个来自一个本应临时、却一直没撤销的授权。**临时授权必须有过期时间。**
 
-结果：只有一笔能上链，另外两笔永久失败
-更糟：如果 nonce 跳号（发了 5 和 7，没发 6），
-      7 会永远 pending，后面所有交易全部卡死
-```
-
-**这是 check-then-act 的最纯形态，而且没有数据库事务能救你**——nonce 的真相在链上，不在你的库里。
-
-#### 学什么
-
-| 主题 | 具体 |
-|---|---|
-| **nonce 管理** | `pending` vs `latest` 的差异；本地 nonce 池；跳号恢复 |
-| gas | EIP-1559 的 `maxFeePerGas` / `maxPriorityFeePerGas`；估算失败 |
-| **卡单** | pending 太久怎么办：加速（同 nonce 更高 gas）/ 取消（同 nonce 转 0 给自己） |
-| **私钥管理** | 绝不进代码、绝不进镜像（**呼应 Docker 那讲：镜像的层是可以扒出来的**） |
-| 提现风控 | 地址白名单、二次验证、限额、冷却期——**学 OKX 的提币流程** |
-| 幂等广播 | 同一笔业务提现不能广播两次 |
-
-#### 事故配对
-
-> **Ronin Bridge（2022-03）约 6.25 亿美元**
-> 9 个验证者私钥里的 5 个被攻破。其中 4 个来自一次社工，第 5 个来自
-> **一个本应临时授权、但一直没撤销的权限**。
->
-> **教训：私钥管理 + 权限的生命周期。临时授权必须有过期时间。**
-
-#### 验收标准
-
-```
-✅ 并发 10 笔提现 → nonce 不能冲突，全部上链
-✅ 进程被 kill 后重启 → 不能重复广播已发出的交易
-✅ 手工制造 nonce 跳号 → 系统必须能检测并恢复
-✅ gas 不足导致卡单 → 能加速或取消
-✅ 私钥不在代码里、不在镜像里、不在日志里（写个检查脚本）
-✅ 提现到未白名单地址 → 必须拒绝
-```
-
----
+**验收**：✅ 并发多笔提现编号不冲突、全部上链（真环境一轮四笔连续）✅ kill 后重启不重复广播（先落库再广播）✅ 编号不一致能检测并停发 ✅ 卡单能加价替换 ✅ 私钥不在代码、镜像、日志里（扫描脚本）✅ 提现到未登记地址被拒。
 
 ### M5 · 对账
 
-> **目标：一个每天跑的脚本，能发现链上和库内的任何不一致。**
->
-> **这一节最短，但它是前面所有里程碑的判官。**
-
-#### 三种差异
+> **目标：一个定时跑的任务，能发现链上和库内的任何不一致。** 这一节最短，但它是前面所有里程碑的判官。
 
 | 差异 | 含义 | 通常原因 |
 |---|---|---|
-| 链上有，库内无 | **漏账** | 索引器漏块、代币未支持、确认数逻辑错 |
+| 链上有，库内无 | **漏账** | 索引器漏块、代币未支持、确认逻辑错 |
 | 库内有，链上无 | **假账**（最危险） | 重组没回滚、手工改库、重复入账 |
-| 两边都有，金额不符 | **算错** | 精度、fee-on-transfer、手续费归属 |
+| 两边都有，金额不符 | **算错** | 精度、扣费代币、手续费归属 |
 
-#### 事故配对（这个案例太完美了）
-
-> **Crypto.com 误转事件（2021）**
-> 本该退给一位用户约 100 澳元，实际转出约 **1047 万澳元**——退款金额栏被填成了账号。
-> **关键不是转错，是没人发现：直到 7 个月后的例行审计才查出来。**
->
-> **教训：没有对账，错误不会自己浮出来。** 系统会安静地错下去，直到有人从外部发现。
-
-#### 验收标准
-
-```
-✅ 手工往库里注入一笔链上不存在的入账 → 对账必须报出来
-✅ 手工删掉一笔链上存在的入账 → 对账必须报出来
-✅ 手工改小一笔金额 → 对账必须报出来
-✅ 对账任务失败本身要告警（"没跑"和"跑了没问题"必须能区分）
-```
-
-> 最后一条是 flow-pay 教你的：**沉默不等于正常。**
-
----
+**事故**：Crypto.com 误转（2021）：本该退约 100 澳元，转出约 1047 万澳元——**关键不是转错，是 7 个月后的例行审计才发现。**
+**验收**：✅ 注入不存在的入账被报出 ✅ 删掉存在的入账被报出 ✅ 改小金额被报出 ✅ 「没跑」和「跑了没事」能区分。规划与取舍在 `docs/knowledge/m5-reconciliation.md`。
 
 ### M6 · 上线
 
-> **目标：把它真的部署到一台机器上，走完部署八环节。**
+> **目标：把它真的部署起来，走完部署八环节：构建 → 配置 → 密钥 → 迁移 → 分发 → 切换 → 验证 → 回滚。** 规划在 `docs/knowledge/m6-launch.md`。
 
-复用你刚学的那一讲：构建 → 配置 → 密钥 → 迁移 → 分发 → 切换 → 验证 → 回滚。
-
-重点补上 flow-pay 缺的那几格：
-
-```
-✅ 健康检查端点，且能区分"活着"和"能干活"
-✅ 迁移失败 → 部署必须中止，不能带着半个 schema 启动
-✅ 密钥从环境注入，镜像里 grep 不到
-✅ 一条能回滚的路径，并且真的演练一次
-✅ Dockerfile 有 .dockerignore、有非 root USER、有 HEALTHCHECK
-```
-
----
+✅ 健康检查能区分「活着」和「能干活」 ✅ 迁移失败 → 部署中止，旧版本照跑 ✅ 密钥从环境注入，镜像里 grep 不到 ✅ 能回滚，并且真的演练过 ✅ 非 root、有 HEALTHCHECK、有 `.dockerignore` ✅ 控制面换成管理员体系。
+**之后：进程拆分（进行中）**——对外的 web 与握重钥匙的 worker 分成两个进程，见 `docs/knowledge/m6-process-split.md`。
 
 ### M7 · 攻防复现（持续）
 
-> **目标：拿真实事故，在自己的系统上复现一遍。**
+> **目标：拿真实事故，在自己的系统上复现一遍。** 读事故报告，问：「这个如果发生在我的系统上，会怎样？」
 
-到这一步你已经有一个完整的系统了。现在去读事故报告，然后问：**"这个如果发生在我的系统上，会怎样？"**
-
-资料源：
-
-- **rekt.news** — 加密领域事故编年史，按损失金额排序
-- **Immunefi** 的漏洞披露报告
-- 各交易所的事后分析（post-mortem）
-- **慢雾（SlowMist）区块链黑客事件档案库** — 中文，覆盖全
-
-方法：挑一起事故 → 读根因 → 在自己系统里找同构的地方 → **写一个测试证明你有/没有这个问题**。
+资料源：rekt.news、Immunefi 的漏洞披露、各交易所的事后分析、慢雾（SlowMist）区块链黑客事件档案库。
+方法：挑一起事故 → 读根因 → 在自己系统里找同构的地方 → **写一个测试证明你有 / 没有这个问题**。
 
 ---
 
-## 六、你已有的清单怎么用
+## 六、进度记录
 
-你在 flow-pay 两个仓库里已经下载了 **313 份**参考资料。**对这个项目 80% 可直接复用：**
+每步一行：做了什么、最值得记的一条。细节在提交信息里（`git show <提交>`），规矩在 `CLAUDE.md`。
 
-| 里程碑 | 直接可用的清单 |
+| 日期 | 步 | 做了什么 | 最值得记的 | 提交 |
+|---|---|---|---|---|
+| 08-13 | M0 | 复式记账账本：幂等、原子、并发下不超支；物化余额与三个判官 | 判官要**自动到场**（每个测试结束都核），写了不传唤等于没有 | 9644a8a eed8314 |
+| 08-14 – 16 | M1 ①–⑤ | HTTP 接口 → 认证 → 授权 → 签名 → 限流 | 每加一层防护之前，先演示上一层挡不住什么 | 625111e … 671e246 |
+| 08-31 – 09-01 | M1 补完、M1.5 | 限流计数搬到 Redis；发凭证流程；租户隔离下沉到数据库（RLS）；信封、分段错误码、nonce 防重放；包结构重整 | 多实例下进程内计数就失效了 | 07fa065 cc1a0e8 7cc366b 6ba5866 |
+| 09-01 – 02 | 质询扫描补丁 | 应用改用普通角色连库；请求体有界读取；限流绕过；签名已知答案；补空转测试 | 应用以超级用户连库时 RLS 形同虚设，而测试照样全绿 | 6f1eba2 … 2f75f3e |
+| 09-02 | M2 ①–④ | JSON-RPC 与 Transfer 解码 → 落库与书签 → 三态确认 → 重组回滚 | 重组回滚：**多退不伤，少退要命** | bc5f7c7 … 4e113eb |
+| 09-03 | M2 ⑤⑥ | RPC 不信任；代币白名单、手写 ABI；真节点暴露的四处；真环境回退 1000 块重放 + kill -9 | 不可信的数先在大整数上比完再收窄；评审要独立于作者 | 6780897 95ed313 4bb06df c5c65eb |
+| 09-04 – 06 | M2 补丁 | 一批的归属、对账比载荷；可观测出口与翻译层；白名单由数据库守 | 只核对了容器（坐标）没核对内容；判断一道关卡问三个数：几个入口、结果活多久、绕过会不会报错 | ca59fd2 97234e2 d83afa5 |
+| 09-07 | M3 ⓪① | 系统权限变成连接身份（`chainpay_system`）；地址派生（零私钥）与分配 | 经概括模型转述的向量抄错一个字母；不强制交错顺序的并发测试证明不了任何事 | 5642589 1852b2c 8a1aa30 |
+| 09-07 – 08 | M3 ②③④ | 入账：先占坑再动钱、两节点核对、`balanceOf` 第二意见；商户收款接口 | 顺序换成先记账再占坑，别的实例已判 HELD 的那笔也会被记账 | a3ba24f a9fcabe 06a92f8 |
+| 09-08 | M3 ⑤ | 真环境演练：一笔 Sepolia LINK 走到 CREDITED；kill -9 同生同死；演练补丁 | 外键会把锁传导到引用表；**加超时要问：超时会被翻成哪一类** | da9d9cc a46765f |
+| 09-09 | 安全扫描、CP2 | M0–M3 扫描 15 条修 14 条；签名协议 CP2 | 「今天能跑通」不等于在验证任何东西：判官能查通只是超级用户的副作用 | 1227843 bc92c4a |
+| 09-09 | M4 ⓪① | 提现地基（拆掉会话变量那道门、四张表、显式状态机）；签名（零网络），随后换成 web3j 薄包装 | 单个向量证明不了「永远」；原语与协议编码用库，测试是我们的 | 1ab7f9e e12495e |
+| 09-10 | M4 ②③ | 编号与发送（先落库再广播）；追踪、结算、卡单；清点补丁 | 双实例测试证明不了热钱包行锁；新依赖进树那天回头清点手写的 | 5caa6e1 1d1bcf3 cfef769 |
+| 09-11 | M4 ④ | 白名单、限额、提现接口；热钱包地址不能当提现目标；离线助记词工具 | 讲解时才发现热钱包自己的地址没拦 | 384f2e5 6252202 |
+| 09-13 | M4 ⑤ | 真环境 5 笔提现，首笔 13 分 35 秒（上链 13 秒、等 finalized 13 分） | 给热钱包充币前先核对地址 | — |
+| 09-13 – 14 | M5 | 对账：五条检查，只报不改 | 证据和事实必须是同一个时刻的：F = min(finalized, 书签) | 23a05d4 |
+| 09-14 | M6 ⓪–④ | 健康检查；容器化；停机恢复与注资登记；告警；部署八环节与回滚演练 | 探针不带令牌，只能放回环端口；迁移只前进 | f5f25d0 98d2beb 2f0c364 5f8c02f 543bf03 |
+| 09-15 | M6 ⑤ 与重构 | 控制面换成管理员体系；系统池 bean 化；索引器写入类；入账 finalized 容忍与 HALTED 闸门 | 能配钥匙的钥匙吊销不掉；两个 `defaultCandidate = false` 是承重墙 | 1ab3dc2 542b3d1 fdd0cc9 59843bd |
+| 09-16 – 18 | 部署补丁 | 镜像扫描覆盖元数据；标签由内容决定；一次性模式只认精确写法 | 「没找到密钥」和「根本没扫」在输出上一模一样 | 4ea375a 6c64242 98a580a |
+| 09-21 – 22 | 收口与收权限 | 判官视图按调用者执行；金额与地址各收一处；删掉通用转账接口；账本三表只追加 | 任何把外来数据格式化进输出的地方都要问最长多长；删接口会制造空转测试 | 62f92ee b1e0c9c 4f04124 |
+| 09-22 – 23 | 进程拆分 ⓪ | 讲解、对标 22 个仓库、九条取舍定下 | **只拆进程不拆权力，等于没拆** | 3e928cd |
+| 09-23 | 进程拆分 ① | 进程角色：恰好一个 web / worker，禁用名单上的凭证出现就拒绝启动 | 时机本身是安全属性；名单要从使用者那一侧去测 | e3a5f81 |
+
+---
+
+## 七、已有的清单怎么用
+
+flow-pay 两个仓库里有 313 份参考资料，**不要复制过来，直接读那边的路径**（一份资料只维护一处）：
+
+| 里程碑 | 可用的清单 |
 |---|---|
-| M0 账本 | `tigerbeetle/`（25 份，全部）、`falsehoods-about-prices.md` |
+| M0 账本 | `tigerbeetle/`、`falsehoods-about-prices.md` |
 | M1 API | `owasp-cheatsheets/` 的 Transaction_Authorization、REST_Security、Mass_Assignment、Authentication、Session_Management |
-| M2 索引器 | ⚠️ **需要新下载** |
-| M3 收款 | `falsehoods-about-IBANs.md`（银行账户思路可迁移）、`owasp-wstg-business-logic/` |
-| M4 付款 | `owasp-cheatsheets/Secrets_Management.md`、`Key_Management.md`、`Cryptographic_Storage.md` |
+| M2 索引器 | 清单里没有，自己整理在 `docs/knowledge/m2-block-indexer.md` |
+| M3 收款 | `owasp-wstg-business-logic/` |
+| M4 付款 | `owasp-cheatsheets/` 的 Secrets_Management、Key_Management、Cryptographic_Storage |
 | M5 对账 | `tigerbeetle/recipes/correcting-transfers.md` |
-| M6 上线 | `owasp-cheatsheets/Docker_Security.md`、`CI_CD_Security.md`、`correctness/strong-migrations-*.md` |
-
-**建议：不要复制过来，直接读那边的路径。** 一份资料只维护一处。
+| M6 上线 | `owasp-cheatsheets/` 的 Docker_Security、CI_CD_Security、Database_Security；`correctness/strong-migrations-*.md` |
 
 ---
 
-## 七、明确不要做的事
+## 八、明确不要做的事
 
 | ❌ 不要 | 为什么 |
 |---|---|
-| **用主网真钱** | 测试网免费且完全够学。真钱只会让你不敢试错 |
-| **一开始就写智能合约** | 那是另一条完整的技能树。先把后端做对 |
-| **先做用户系统 / 后台 / KYC** | 那些是 CRUD，你在 flow-pay 已经会了 |
-| **让 AI 一次生成整个里程碑** | 直接跳过学习发生的地方（见第四节） |
-| **先搭前端** | 用 curl 和测试就够了。前端等 M5 之后再说 |
-| **同时学新语言** | Java 你已经在学了。别同时开 Go/Rust 战场 |
-| **追求功能完整** | **一个只支持 USDT 但绝对不会算错的系统，价值远超十个币种但会错账的系统** |
+| **用主网真钱** | 测试网免费且完全够学；真钱只会让你不敢试错。上主网之前，私钥要先交给 KMS 或多签（进程拆分取舍 9） |
+| **一开始就写智能合约** | 那是另一条完整的技能树，先把后端做对 |
+| **先做用户系统 / KYC / 前端** | 那些是 CRUD，flow-pay 已经会了；用 curl 和测试就够 |
+| **一次做完一个里程碑** | 直接跳过学习发生的地方；一次一步，每步讲清楚 |
+| **追求功能完整** | 一个只支持一种代币但绝对不会算错的系统，价值远超十个币种但会错账的系统 |
 
 ---
 
-## 八、现在的状态与下一步
+## 九、现在的状态与下一步
 
-**已完成（本次）：**
-
-- ✅ 项目骨架，Java 25 + Spring Boot 4.1.0
-- ✅ PostgreSQL 18 的 docker-compose（端口绑 `127.0.0.1`）
-- ✅ M0 的账本 schema（`V1__ledger.sql`）
-- ✅ **三个红灯测试**：不变量、并发、幂等
-
-**你的第一步：**
-
-1. 读 `README.md`，把环境跑起来
-2. **确认三个测试都是红的**
-3. 在写代码之前，**自己写一份 M0 的"会怎么坏"清单**，存到 `docs/retro/M0-before.md`
-4. 然后我们对答案，再开始实现
-
-> **第 3 步不要跳过。** 它是这整份路线里唯一能测出你在进步的东西。
+- **已完成**：M0–M6；进程拆分 ⓪（九条取舍）与 ①（进程角色）。开发实例在本机 docker compose 里跑（容器 `chainpay-app`，worker 身份），连 Sepolia 的两个节点。
+- **下一步**：进程拆分 ② → ⑧（`docs/knowledge/m6-process-split.md` 第三节）：web 查平台地址改走是 / 否函数 → worker 不信 web 写的行（签名前复核、记账前重新派生）→ 装配拆开 → 属主口令只在迁移那一步 → env / compose / 部署脚本 → 真跑演练 → 文档。然后 M7。
+- **你的复盘**（`docs/retro/`，本地）：M2–M5 的复盘与 M6 拆分的 before 17 问由你写。
+- **拆分之后再做的**：TOTP 二次验证、提现冷却期、管理员的增删与停用；商户回调（webhook）；热钱包余额上限告警；按在途笔数给发送封顶；冻结账户的库层写入检查（你定先不做）。

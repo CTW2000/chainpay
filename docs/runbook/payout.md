@@ -1,7 +1,7 @@
-# 付款（M4）操作手册：热钱包停发了怎么办
+# 付款运行手册
 
-> 适用范围：M4-②（编号、签名、广播）与 M4-③（回执、结算、卡单）。
-> 规矩不变：**人永远不手工碰账本表**（`account` / `transfer` / `entry`）。
+> 给运维看的：热钱包停发、提现卡住、等核准，看到哪句该做什么。
+> **人永远不手工碰账本表**（`account` / `transfer` / `entry`），也不手工改 `payout` 的状态。
 
 ## 一、先看哪里
 
@@ -15,27 +15,24 @@ SELECT status, count(*) FROM payout GROUP BY status ORDER BY 1;
 -- 尝试按状态计数；SIGNED 正常只存在几毫秒，BROADCAST 超过几分钟看第七节
 SELECT status, count(*) FROM payout_tx GROUP BY status ORDER BY 1;
 
--- 上链了但还没结算的：等哪一步（块号 vs 两个节点的 finalized）
-SELECT t.payout_id, t.nonce, t.block_number, t.reverted, t.updated_at FROM payout_tx t WHERE t.status = 'MINED' ORDER BY t.block_number;
+-- 上链了但还没结算的：等哪一步（块号 vs finalized）
+SELECT payout_id, nonce, block_number, reverted, updated_at FROM payout_tx WHERE status = 'MINED' ORDER BY block_number;
 ```
 
-日志里每轮一行：`发送：看了 N 笔，签 …、广播 …、重发 …、判失败 …`；停发时每轮一行 ERROR `热钱包停发，等人处理：…`。
+发送任务每轮一行 `发送：看了 N 笔，签 …、广播 …、重发 …、加价 …、判失败 …`；停发时每轮一行 ERROR `热钱包停发，等人处理：…`。
 
-## 二、停发（`hot_wallet.status = 'HALTED'`）的四种原因
+## 二、停发（`hot_wallet.status = 'HALTED'`）的原因
 
 | `halt_reason` 开头 | 发生了什么 | 该做什么 |
 |---|---|---|
-| `链上已上链 C 笔，超过本库分出去的编号 N` | **有人在别处用了这把私钥**（或者有人拿这把钱包在别的工具里发了交易） | 先当泄露处理：查链上多出来的那几笔是谁发的、发去哪；确认只是有人误用后，把 `next_nonce` 改成链上计数（见第三节），再恢复。确认是泄露：换钱包（新私钥进环境变量、旧钱包的余额转走），旧行留着作证据 |
-| `编号 N 超过链上 C 笔与未终结尝试 U 之和` | 有分出去的编号没有对应的尝试记录——正常路径做不到，多半是人手工改过 `hot_wallet` 或 `payout_tx` | 查 `payout_tx` 里 `nonce` 的空洞；缺的那些编号要么在链上（那 C 应该更大，重新对账），要么真的没发过——这时 `next_nonce` 改回 C + U，再恢复 |
-| `节点拒绝广播编号 n（insufficient funds …）` | 热钱包的 **ETH** 不够付 gas（LINK 够不够在估 gas 时就会暴露，不会走到这里） | 往热钱包地址充 Sepolia ETH，然后恢复。尝试留在 SIGNED，恢复后的第一轮会原样重发，编号不变 |
+| `链上已上链 C 笔，超过本库分出去的编号 N` | **有人在别处用了这把私钥**（或者有人拿这把钱包在别的工具里发了交易） | 先当泄露处理：查链上多出来的那几笔是谁发的、发去哪。确认只是误用：把 `next_nonce` 改成链上计数（第三节），再恢复。确认是泄露：换钱包（新私钥进环境变量、旧钱包的余额转走），旧行留着作证据 |
+| `编号 N 超过链上 C 笔与未终结尝试 U 之和` | 有分出去的编号没有对应的尝试记录——正常路径做不到，多半是人手工改过 `hot_wallet` 或 `payout_tx` | 查 `payout_tx` 里 `nonce` 的空洞：缺的编号要么在链上（那 C 应该更大，重新对账），要么真的没发过——这时 `next_nonce` 改回 C + U，再恢复 |
+| `节点拒绝广播编号 n（insufficient funds …）` | 热钱包的 **ETH** 不够付 gas（LINK 不够在估 gas 时就暴露，走不到这里） | 往热钱包地址充 Sepolia ETH，然后恢复。尝试留在 SIGNED，恢复后第一轮原样重发，编号不变 |
 | `编号 n 已被链上另一笔用掉（nonce too low），而节点不认识我们这笔` | 同第一行：这个编号被别处的一笔用掉了 | 同第一行 |
+| `节点拒绝了我们的凭证` | RPC 的 key 失效或被撤销（HTTP 401 / 403）。它不会自己好，所以不当瞬时失败重试 | 换 `CHAINPAY_CHAIN_RPC_URL` 里的 key → 重启 → 按第三节改回 ACTIVE。签好的原文留在 SIGNED，恢复后原样重发，编号不变 |
 
 其它带错误码的拒绝（节点不认这笔交易的形状、gas 太低等）也走停发，原文在 `halt_reason` 里。
-
-**第五种（2026-09-16 加）：`halt_reason` 以「节点拒绝了我们的凭证」开头。** RPC 的 key 失效或被撤销（节点回 HTTP 401 / 403）。
-和网络抖动不同，它不会自己好，所以不再当成瞬时失败一轮轮重试，而是直接停发、把钱包标 HALTED，让告警叫人。
-**做什么**：换 `CHAINPAY_CHAIN_RPC_URL` 里的 key → 重启进程 → 按第三节把钱包改回 ACTIVE。已经签好的原文留在库里（状态 SIGNED），恢复后原样重发，编号不变。
-**一个边界**：热钱包那一行是第一次成功对账时才建的。如果一笔都还没发过就撞上凭证被撤销，没有行可标，这时叫人的是索引器——它接住同一个异常并落 HALTED。
+热钱包那一行在第一次成功对账时才建：一笔都没发过就撞上凭证被撤销时没有行可标，叫人的是索引器（同一个异常，落它自己的 HALTED）。
 
 ## 三、恢复：唯一的办法是人把状态改回去
 
@@ -57,33 +54,34 @@ UPDATE hot_wallet SET next_nonce = <链上计数 或 C + U>, updated_at = now() 
 ## 四、不是停发的两种「不动」
 
 - 日志 `发送这一轮提前结束，下一轮再来：费率超上限…`：链上基础费涨过了 `chainpay.payout.max-fee-gwei`。申请留在 QUEUED，什么都不用做；真要现在发，临时调高上限重启。
-- 日志 `…节点失败…`：主节点没回答。下一轮自动重试；连续出现看 `docs/runbook/chain-indexer.md` 的节点一节。
+- 日志 `…节点失败…`：主节点没回答。下一轮自动重试；连续出现看 `chain-indexer.md` 第二节。
 
 ## 五、SIGNED 的尝试卡着不动
 
-正常情况下不会：每轮开头都重发。如果卡着，看第二节——多半是钱包停发了。**不要手工把 SIGNED 改成别的状态**：原文已经签好，改状态不会让链忘记它。
+正常情况下不会：每轮开头都重发。卡着多半是钱包停发了（第二节）。**不要手工把 SIGNED 改成别的状态**：原文已经签好，改状态不会让链忘记它。
 
 ## 六、判失败（FAILED）的提现
 
-估 gas 就 revert（最常见：热钱包的 LINK 不够）的提现会直接 FAILED、写 `failure_reason`、解冻退回商户可用余额，编号没分出去。往热钱包转 LINK 后，商户重新申请即可；**已 FAILED 的不会自动重发**。
+估 gas 就 revert（最常见：热钱包的 LINK 不够）的提现直接 FAILED、写 `failure_reason`、解冻退回商户可用余额，编号没分出去。
+给热钱包补上 LINK 后商户重新申请即可（从外部地址转入的要登记注资，见 `audit.md` 第五节）；**已 FAILED 的不会自动重发**。
 
-## 七、追踪与卡单（M4-③）
+## 七、追踪与卡单
 
-追踪任务每 `track-interval`（15s）一轮，日志 `追踪：看了 N 个尝试，上链 …、结算 …、判失败 …、丢弃 …、作废 …、重组退回 …、等 FINAL …`。
+追踪任务每 `track-interval`（15 秒）一轮，日志 `追踪：看了 N 个尝试，上链 …、结算 …、判失败 …、丢弃 …、作废 …、重组退回 …、等 FINAL …`。
 
 | 看到什么 | 发生了什么 | 该做什么 |
 |---|---|---|
-| 提现 MINED 很久不 CONFIRMED，日志每轮 `等 FINAL` | 块还没被两个节点 finalized（Sepolia 约 15 分钟） | 等。`SELECT block_number` 对照 `GET /admin/v1/indexer` 里两个节点的 finalized |
-| 每轮 WARN `审计节点对块 N 的哈希意见不同` | 两个节点对那块看法不一致：审计节点落后、或真的分叉 | 同索引器 runbook 的 disputed 处理：区块浏览器裁决；审计节点恢复后自动结算，不用改状态 |
-| WARN `所在的块 N 被重组：退回 BROADCAST` | 主节点换了分支，那笔交易退回内存池 | 不用做：下一轮会重新等回执；同一笔只会结算一次（幂等键） |
+| 提现 MINED 很久不 CONFIRMED，日志每轮 `等 FINAL` | 块还没被两个节点 finalized（Sepolia 约 15 分钟） | 等。那一笔的 `block_number` 对照 `tools/admin.sh GET /admin/v1/indexer` 的 `finalizedBlock` |
+| 每轮 WARN `审计节点对块 N 的哈希意见不同` | 两个节点对那块看法不一致：审计节点落后、或真的分叉 | 同 `chain-indexer.md` 的 disputed 处理：区块浏览器裁决；审计节点恢复后自动结算，不用改状态 |
+| WARN `所在的块 N 被重组（…）：退回 BROADCAST 继续等` | 主节点换了分支，那笔交易退回内存池 | 不用做：下一轮重新等回执；同一笔只会结算一次（幂等键） |
 | WARN `节点忘了…DROPPED，发送任务下一轮原样重发` | 节点重启、内存池清空 | 不用做：编号不变、原文重发 |
-| WARN `卡了超过 …：加价重发，总费率 A → B` | 广播超过 `stuck-after` 没上链，同编号发了替身 | 不用做：谁先上链谁算，另一笔自动 REPLACED。频繁出现 = `priority-floor-gwei` 太低或链在涌堵 |
+| WARN `卡了超过 …：加价重发，总费率 A → B` | 广播超过 `stuck-after`（3 分钟）没上链，同编号发了替身 | 不用做：谁先上链谁算，另一笔自动 REPLACED。频繁出现 = `priority-floor-gwei` 太低或链在拥堵 |
 | 每轮 WARN `费率超上限：加价后 …` | 链上基础费太高，替身发不出 | 等费率回落；真要现在发，临时调高 `max-fee-gwei` 重启。旧的那笔仍在池里排队，没有损失 |
-| 提现 FAILED，原因 `链上执行失败（回执 status 0…）` | 交易上链但合约 revert（最常见：热钱包 LINK 不够；或收款合约拒收） | 钱已解冻退回商户；gas 已扣在热钱包 ETH 里。查热钱包 LINK 余额，商户重新申请 |
+| 提现 FAILED，原因 `链上执行失败（回执 status 0…）` | 交易上链但合约 revert（最常见：热钱包 LINK 不够；或收款合约拒收） | 钱已解冻退回商户；gas 已扣在热钱包的 ETH 里。查热钱包 LINK 余额，商户重新申请 |
 | `payout_tx` 里同一编号多行：一行 MINED、其余 REPLACED | 加价替换的正常痕迹 | 不用做。**同编号绝不会有两行 MINED**（部分唯一索引守着） |
 | 停发原因 `…费率不够（underpriced）…有人在别处用了这把私钥` | 节点里那个编号的交易费率比我们记的高，不是我们发的 | 按第二节第一行当泄露处理 |
 
-## 八、核准与限额（M4-④）
+## 八、核准与限额
 
 ```sql
 -- 等人核准的
@@ -92,12 +90,13 @@ SELECT p.id, m.code, t.symbol, p.to_address, p.amount, p.created_at FROM payout 
 SELECT * FROM payout_limit;
 ```
 
+核准、拒绝、改限额都是敏感操作：先 `eval "$(tools/admin.sh login <用户名>)"`，5 分钟内 `tools/admin.sh reauth` 过（`ops.md`「控制面」）。
+
 | 看到什么 | 发生了什么 | 该做什么 |
 |---|---|---|
-| 一笔提现 PENDING_APPROVAL | 超单笔上限、当日自动放行额度用完、或这种代币没定过限额 | 看收款地址与商户历史；`POST /admin/v1/payouts/{id}/approve` 进队列，或 `POST …/reject {reason}` 解冻退回。钱在等待期间冻着 |
-| 所有申请都进 PENDING_APPROVAL | 这种代币没有 `payout_limit` 行 | `PUT /admin/v1/payout-limits/{token} {perTxMax, dailyMax}`（当日 ≥ 单笔）。没定过 = 一律人工是有意的 |
+| 一笔提现 PENDING_APPROVAL | 超单笔上限、当日自动放行额度用完、或这种代币没定过限额 | 看收款地址与商户历史；`tools/admin.sh POST /admin/v1/payouts/<id>/approve` 进队列，或 `tools/admin.sh POST /admin/v1/payouts/<id>/reject '{"reason":"…"}'` 解冻退回。钱在等待期间冻着 |
+| 所有申请都进 PENDING_APPROVAL | 这种代币没有 `payout_limit` 行 | `tools/admin.sh PUT /admin/v1/payout-limits/<代币地址> '{"perTxMax":"…","dailyMax":"…"}'`（当日 ≥ 单笔）。没定过 = 一律人工是有意的 |
 | 商户说「提现被拒 2010」 | 目标是平台自己的收款地址（任何商户的） | 不放行：那是内部转账，不是提现；让商户换地址 |
 | 商户说「提现被拒 2009」 | 目标没登记或已停用 | 让商户先 `POST /api/v1/withdrawal-addresses` 登记 |
 
-核准与拒绝只改状态和账本，**不碰私钥**；核准后的那笔和普通申请一样由发送任务处理。人永远不手工改 `payout` 的状态。
-
+核准与拒绝只改状态和账本，**不碰私钥**；核准后的那笔和普通申请一样由发送任务处理。

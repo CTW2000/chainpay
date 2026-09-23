@@ -13,7 +13,7 @@
 | `reason` | 为什么（截到 2000 字） |
 | `since` | 从什么时候起处于这个状态（状态不变时不动） |
 
-**只读接口** `GET /admin/v1/indexer`，和其它管理接口同一道门（本机 + 管理员令牌）：
+**只读接口** `GET /admin/v1/indexer`，和其它管理接口同一道门（本机回环 + 管理员会话）：
 
 ```bash
 tools/admin.sh GET /admin/v1/indexer          # 先 eval "$(tools/admin.sh login <用户名>)"
@@ -39,15 +39,15 @@ tools/admin.sh GET /admin/v1/indexer          # 先 eval "$(tools/admin.sh login
 | 节点拒绝了我们的凭证（HTTP 401 / 403） | key 失效或被撤销，重试永远没用 | 到提供商控制台换 key，更新 `CHAINPAY_CHAIN_RPC_URL`（或审计的那个）；改回 RUNNING、重启 |
 | 代币未登记 / 代币已停用 / decimals 不一致 | 白名单、配置、链三者不一致 | 核对 `chain_token` 与 `chainpay.chain.token-address`；决定是改表还是改配置；改回 RUNNING、重启 |
 | 没有书签，也没配 chainpay.chain.start-block | 第一次启动没告诉它从哪开始 | 配 `CHAINPAY_CHAIN_START_BLOCK`（当前链头减几百，十进制，不能是未来的块）；改回 RUNNING、重启 |
-| 单块 N 的日志也取不到 | 提供商在这个高度答不出（归档范围、套餐限制）。**链头两块以内**的单块失败不算——那是负载均衡的各后端头不一致（"block range extends beyond current head block"），2026-09-09 起按瞬时处理、自动下一轮再来，不会走到这一行 | 换提供商；改回 RUNNING、重启 |
+| 单块 N 的日志也取不到 | 提供商在这个高度答不出（归档范围、套餐限制）。**链头两块以内**的单块失败不算——那是负载均衡的各后端头不一致（"block range extends beyond current head block"），按瞬时处理、下一轮再来，不会走到这一行 | 换提供商；改回 RUNNING、重启 |
 | 节点返回了错误的区块 / …缺少字段… / 不是数组 | 节点返回的形状不对 | 换节点，或向提供商报障；改回 RUNNING、重启 |
 | 日志块 N 的哈希与区块头不符 / 答非所问 | 节点前后不一致或塞入了不属于这批的日志 | 一次是瞬时（自动重试）；反复出现就换节点 |
-| 数据库连不上、连接池耗尽、事务开不出来 | 库抖一下、主从切换、Hikari 池满。2026-09-10 起按瞬时处理（`TransientDbFailure`）：这一轮 RETRY_LATER，连续 N 次才 DEGRADED，**不会 HALTED** | 看库与连接池；恢复后自动回 RUNNING |
+| 数据库连不上、连接池耗尽、事务开不出来 | 库抖一下、主从切换、Hikari 池满。按瞬时处理（`TransientDbFailure`）：这一轮 RETRY_LATER，连续 N 次才 DEGRADED，**不会 HALTED** | 看库与连接池；恢复后自动回 RUNNING |
 | 连续 N 次瞬时失败（DEGRADED） | 网络、限流、提供商故障 | 看 `lastTick` 的 detail 与 `consecutiveFailures`；不用改状态，恢复后自动回 RUNNING |
 | 审计节点连续 N 次答不出（DEGRADED） | 审计节点挂了或落后 | 检查 `CHAINPAY_CHAIN_AUDIT_RPC_URL`；恢复后自动回 RUNNING |
-| `disputedBlocks > 0` | 两个节点对某块的日志意见不同（有无或内容）；或某个节点的回执里有一条解不了的日志（2026-09-09 起记 disputed 而不是停机，原因在 WARN 日志里） | `SELECT * FROM chain_reconcile WHERE disputed > 0`，用区块浏览器裁决；解不了的日志看该轮 WARN「回执里有一条解不了的日志」并核对节点 |
-| 追块很慢（每轮只前进约 `batch-blocks` × 10 以内）且日志里没有 ERROR | 提供商限制了 `eth_getLogs` 的块范围（Alchemy 免费层 10 块，HTTP 400 / code -32600「Under the Free tier plan…」）。窗口会自己收敛到上限、每批只问一次（2026-09-09 起），但每轮仍最多 10 批 | 不是故障。稳态不受影响（Sepolia 每分钟 5 块）；要快就换套餐、换提供商；落后很远又等不起时按第五节前跳书签；「追赶不受每轮 10 批限制」是 M6 的题 |
-| `lastTickAt` 长时间不动，进程还活着 | 2026-09-09 起索引器与入账任务各有线程、系统连接等锁 5 秒就放弃，这一现象不该再出现；出现即是新 bug | 先看线程转储里 scheduling-* 线程在做什么，再 `SELECT pid, wait_event_type, query FROM pg_stat_activity WHERE usename = 'chainpay_system'` |
+| `disputedBlocks > 0` | 两个节点对某块的日志意见不同（有无或内容）；或某个节点的回执里有一条解不了的日志（记 disputed 而不是停机，原因在 WARN 日志里） | `SELECT * FROM chain_reconcile WHERE disputed > 0`，用区块浏览器裁决；解不了的日志看该轮 WARN「回执里有一条解不了的日志」并核对节点 |
+| 追块很慢，日志里没有 ERROR | 提供商限制了 `eth_getLogs` 的块范围（Alchemy 免费层 10 块，HTTP 400 / code -32600「Under the Free tier plan…」）。窗口会自己收敛到上限、每批只问一次；追赶按时间封顶（`catch-up-budget`，默认 5 分钟），下一轮接着追 | 不是故障。稳态不受影响（Sepolia 每分钟 5 块）；要快就换套餐或提供商；落后很远又等不起时按第五节前跳书签 |
+| `lastTickAt` 长时间不动，进程还活着 | 每个定时任务各有线程、系统连接等锁 5 秒就放弃，这一现象不该出现；出现即是新 bug | 先看线程转储里 scheduling-* 线程在做什么，再 `SELECT pid, wait_event_type, query FROM pg_stat_activity WHERE usename = 'chainpay_system'` |
 
 ## 三、恢复
 
@@ -78,7 +78,7 @@ SET last_block_number = <N>, last_block_hash = '<两个节点一致的哈希>', 
 WHERE name = 'sepolia:link:transfer' AND last_block_number = <旧值>;   -- 带旧值做守卫，UPDATE 0 就说明书签又动了
 ```
 
-回退是重放：日志行按（块哈希，日志序号）唯一，已有的行不会再插一次，`deposit` 与账本不受影响（M3-⑤ 实测）。
-追赶按时间封顶（M6-②，`chainpay.chain.catch-up-budget` 默认 5 分钟）：落后时一轮里连续推批到追平或预算用完，日志每 50 批一行「追赶中」；Alchemy 免费层 10 块一批约 1.2 秒，2000 块一轮 4 分钟追平（2026-09-14 实测）。
+回退是重放：日志行按（块哈希，日志序号）唯一，已有的行不会再插一次，`deposit` 与账本不受影响。
+追赶按时间封顶（`chainpay.chain.catch-up-budget`，默认 5 分钟）：落后时一轮里连续推批到追平或预算用完，日志每 50 批一行「追赶中」；Alchemy 免费层 10 块一批，2000 块约 4 分钟追平。
 前跳是放弃一段历史：跳过的块里如果有到收款地址的转账，它们永远不会入账，而且之后该地址的 `balanceOf` 会和事件累计对不上、进 HELD——只在确认没有已分配地址有活动时做（开发库），生产不做。
 

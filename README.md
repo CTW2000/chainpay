@@ -1,247 +1,141 @@
 # chainpay
 
-加密支付网关 —— **学习项目**。完整的学习路线在 [LEARNING-PATH.md](LEARNING-PATH.md)。
-
-当前进度：**M0 · 账本地基**（三个判官测试是红的，等你实现）。
+加密支付网关——**学习项目**。学习路线与进度见 [LEARNING-PATH.md](LEARNING-PATH.md)，项目规约见 [CLAUDE.md](CLAUDE.md)，出了事怎么办见 `docs/runbook/`。
 
 ---
 
 ## 环境
 
-| 组件 | 版本 | 状态 |
+| 组件 | 版本 | 在哪 |
 |---|---|---|
-| Java | **25 (LTS)** | 已装在 `~/.local/jdk-25` |
-| Spring Boot | **4.1.0**（Spring Framework 7.0.8） | pom 已配 |
-| PostgreSQL | **18** | 通过 Docker |
-| Flyway | 12.4.0 | Boot 托管 |
-| Testcontainers | 2.0.5 | Boot 托管 |
-| Maven | 3.9.16 | 已装 |
-| Docker | 29.7.2 | Docker Desktop |
-
-### 每次开工前
+| Java | **25 (LTS)** | `~/.local/jdk-25` |
+| Spring Boot | **4.1.0**（Spring Framework 7.0.8） | pom |
+| PostgreSQL / Redis | **18** / 8.10 | Docker |
+| Flyway / Testcontainers | 12.4.0 / 2.0.5 | Boot 托管 |
+| Maven / Docker | 3.9 / Docker Desktop | 本机 |
 
 ```bash
-export JAVA_HOME=~/.local/jdk-25/Contents/Home
+export JAVA_HOME=~/.local/jdk-25/Contents/Home      # 写进 ~/.zshrc 更省事；flow-pay 用的是 JDK 21，别混
 ```
 
-想省事就写进 `~/.zshrc`。注意：**flow-pay 用的是 JDK 21**，两个项目的 `JAVA_HOME` 不一样。
-
----
-
-## 跑起来
-
-### 1. 启动 Docker Desktop
+## 跑测试
 
 ```bash
 open -a Docker
+mvn test
 ```
 
-### 2. 跑测试（不需要手工起数据库）
+Testcontainers 自己拉起 PostgreSQL 18 与 Redis，跑完销毁，不依赖开发库。两个 Sepolia 探针默认跳过（要节点地址，见 `env/probe.env.example`）。
+
+## 用容器跑（标准跑法）
+
+应用和中间件都在 docker compose 里；密钥只在 `env/local.env`（被 `.gitignore` 挡住），镜像里 grep 不到。
 
 ```bash
-JAVA_HOME=~/.local/jdk-25/Contents/Home mvn test
+cp env/local.env.example env/local.env      # 第一次：按说明填真实值
 ```
-
-Testcontainers 会自己拉起一个 PostgreSQL 18 容器，跑完自动销毁。
-**第一次会拉镜像，慢一些（约 2 分钟）；之后几秒。**
-
-预期结果——**四个测试全部失败**，且失败原因都是：
-
-```
-java.lang.UnsupportedOperationException: M0：transfer 由你来实现
-```
-
-**这是正确状态。** 如果你看到别的错误，说明环境有问题，先解决环境。
-
-### 3. 配环境变量、把应用跑起来（可选）
-
-应用读的每个环境变量都列在 `env/local.env.example` 里，带说明和生成命令：
 
 ```bash
-cp env/local.env.example env/local.env      # 填真实值；这个文件被 .gitignore 挡住
-set -a; source env/local.env; set +a
-JAVA_HOME=~/.local/jdk-25/Contents/Home mvn spring-boot:run
+deploy/deploy.sh                            # 构建 → 配置检查 → 镜像扫描 → 迁移 → 打标签 → 切换 → 验证，不过就回滚
 ```
 
-四个变量故意没有默认值（数据库密码、系统连接密码、AES 密钥、管理员令牌），不设就起不来——配错了就起不来，好过带着默认密钥上生产。
-链节点地址不设时索引器整个不装配，应用照常启动。
-
-**M3-⓪ 起应用用两个数据库角色**：`chainpay_app`（普通角色，RLS 生效）和 `chainpay_system`（BYPASSRLS，只给入账这类系统任务）。
-两者都由 `db/init/01-roles.sql` 在容器**首次建库**时创建。已有的数据卷不会重跑初始化脚本，第一次升到 V17 之前要手工补一次：
-
 ```bash
-docker exec chainpay-postgres psql -U chainpay -d chainpay -c "CREATE ROLE chainpay_system LOGIN PASSWORD 'chainpay_system_dev' BYPASSRLS"
+deploy/rollback.sh                          # 退回上一版
 ```
 
-不补的话 V17 会用一句中文告诉你该做这件事，应用不会带着半个 schema 起来。
+- **不要先 `source env/local.env`**：脚本自己在子 shell 里读，读完即丢。
+- 容器以 `worker` 角色跑（compose 的 `SPRING_PROFILES_ACTIVE`）；角色与禁用名单见 `docs/runbook/ops.md`「进程角色」。
+- 健康探针只在容器内回环的 8096 上：`docker exec chainpay-app curl -s http://127.0.0.1:8096/actuator/health/readiness`。
+- 管理接口从宿主打会 401（源地址不是回环），一律用 `tools/admin.sh`。
 
-**M3 收款地址的 xpub 怎么来**（服务端没有私钥，只拿账户层 xpub 派生地址）：断网，用你的测试网助记词跑一次
+## 在宿主上直接跑（调试用）
 
 ```bash
-JAVA_HOME=~/.local/jdk-25/Contents/Home mvn -q compile   # 断网前编译好
-tools/xpub.sh                                            # 按提示输入助记词，不回显
+set -a; . env/local.env; set +a
+SPRING_PROFILES_ACTIVE=worker mvn spring-boot:run
 ```
 
-它只打印 `CHAINPAY_DEPOSIT_XPUB=…` 和前三个地址；前三个地址必须和 MetaMask 里同一助记词的前三个账户一致，一致才说明配进去的 xpub 是你钱包的那一支。助记词不进参数、不进环境变量、不进任何文件。
+- **必须给角色**：没有 `SPRING_PROFILES_ACTIVE`，或给了 web 却带着 worker 的凭证，应用拒绝启动并点名变量。
+- 四个变量故意没有默认值：`CHAINPAY_DB_PASSWORD`、`CHAINPAY_FLYWAY_PASSWORD`、`CHAINPAY_SYSTEM_DB_PASSWORD`、`CHAINPAY_SECRET_KEY`。配错了就起不来，好过带着默认密钥上生产。
+- 节点地址、xpub、热钱包私钥不设时，对应的模块整个不装配，应用照常启动。
+- 两个数据库角色（`chainpay_app` 受行级安全约束、`chainpay_system` 给系统任务）由 `db/init/01-roles.sql` 在数据卷**首次建库**时创建。
 
-**手工调商户接口**（M3-⑤ 真环境演练走的就是这条路）：先用管理接口给商户发一把凭证，`secret` 只在这一次响应里出现；
-然后用签名客户端 `tools/api.py`（纯标准库，CP2 规范串的拼法与 `ApiCredentialService.prehash` / 测试里的 `SignedRequests` 一字不差，改协议要三处同改；CP2 = 版本标签、五段各占一行、请求体换成 SHA-256）：
+## 密钥与工具
+
+**收款地址的 xpub**（服务端没有收款私钥，只拿账户层 xpub 派生地址）：断网，用测试网助记词跑一次。
 
 ```bash
-eval "$(tools/admin.sh login ops)"                       # M6-⑤：先登录（口令不回显）；发凭证是敏感操作，再认证
-tools/admin.sh reauth
+mvn -q compile                                           # 联网时先编译好
+```
+
+```bash
+tools/xpub.sh                                            # 断网后跑；按提示输入助记词，不回显
+```
+
+它只打印 `CHAINPAY_DEPOSIT_XPUB=…` 和前三个地址，前三个地址必须和钱包里同一助记词的前三个账户一致。
+
+**热钱包私钥**（服务端唯一的私钥）：断网，用**另一句**助记词，或同一句的硬化账户 `m/44'/60'/1'/0/0`。
+
+```bash
+tools/mnemonic.sh                                        # 断网生成一句新的 12 词助记词，只显示一次
+```
+
+```bash
+tools/hotwallet.sh                                       # 按提示输入助记词；私钥只打印一次
+```
+
+把 `CHAINPAY_PAYOUT_HOT_WALLET_KEY=…` 粘进 `env/local.env` 后清屏；给打印的地址领 Sepolia ETH（付 gas）并转入 LINK。**绝不能用收款树的普通子私钥**：xpub 加任意一个子私钥 = 父私钥。
+
+**私钥检查**：提交前、打镜像后、导出日志时跑，命中就退出 1、只打印前 6 位。
+
+```bash
+tools/check-secrets.sh                                   # 扫仓库；也可以传目录：tools/check-secrets.sh /path/to/logs
+```
+
+**手工调商户接口**：先用管理接口给商户发一把凭证（`secret` 只在这一次响应里出现），写进 `env/drill.env`（`CHAINPAY_API_KEY`、`CHAINPAY_API_SECRET`），再用签名客户端 `tools/api.py`。
+
+```bash
+eval "$(tools/admin.sh login ops)" && tools/admin.sh reauth
 tools/admin.sh POST /admin/v1/merchants/1/credentials '{"label":"drill"}'
 ```
 
-把响应里的 `apiKey` / `secret` 写进 `env/drill.env`（`CHAINPAY_API_KEY`、`CHAINPAY_API_SECRET`，可选 `CHAINPAY_API_BASE`；被 `env/*.env` 挡在 git 外），
-凭证只从环境变量进脚本，不进参数、不进 shell 历史：
-
 ```bash
-set -a; source env/drill.env; set +a
-tools/api.py POST /api/v1/deposit-addresses '{"token":"0x779877A7B0D9E8603169DdbD7836e478b4624789"}'
-tools/api.py GET  '/api/v1/deposits?token=0x779877A7B0D9E8603169DdbD7836e478b4624789&limit=5'
-tools/api.py GET  '/api/v1/deposits/balance?token=0x779877A7B0D9E8603169DdbD7836e478b4624789'
+set -a; . env/drill.env; set +a
+tools/api.py GET '/api/v1/deposits/balance?token=0x779877A7B0D9E8603169DdbD7836e478b4624789'
 ```
 
-**M4 热钱包的私钥怎么来**（服务端唯一的一把私钥，签付款交易用）：断网，用**另一句**助记词，或与收款树同一句——工具走硬化账户 `m/44'/60'/1'/0/0`，和收款树（账户 0'）互相推不出：
+`tools/api.py` 的签名串与服务端、测试助手三处必须一字不差（CLAUDE.md「接口与安全」）。
 
-```bash
-tools/mnemonic.sh                                        # 断网生成一句新的 12 词助记词（热钱包专用），只显示一次
-tools/hotwallet.sh                                       # 按提示输入助记词，不回显；私钥只打印一次
-```
-
-把打印的 `CHAINPAY_PAYOUT_HOT_WALLET_KEY=…` 粘进 `env/local.env` 后清屏。给它打印的地址领 Sepolia ETH（付 gas）并转入 LINK。绝不能用收款树的普通子密钥：xpub 加任意一个子私钥 = 父私钥 = 全部收款地址。
-
-**它活着吗、能干活吗**（M6-⓪）：探针在只绑回环的管理端口 8096 上，不要令牌；三个组分别答「进程在不在」「能不能接请求」「能不能干活」，怎么读见 `docs/runbook/ops.md`：
-
-```bash
-curl -s http://127.0.0.1:8096/actuator/health/readiness
-```
-
-**私钥检查**：提交前、打镜像后、导出日志时跑一遍，命中就退出 1 且只打印值的前 6 位：
-
-```bash
-tools/check-secrets.sh                                   # 扫仓库（git 跟踪 + 未忽略的文件）
-```
-
-```bash
-tools/check-secrets.sh /path/to/logs /path/to/unpacked-image-layer   # 扫任意目录
-```
-
-公开的测试密钥逐值列在 `tools/check-secrets.allow` 里并注明来源；新加一把要说清楚它为什么可以公开。
-
-### 3b. 用容器跑（M6-① 起的标准跑法）
-
-应用和中间件一起在 compose 里跑；密钥仍只在 `env/local.env`，镜像里 grep 不到：
-
-```bash
-set -a; source env/local.env; set +a
-deploy/deploy.sh                       # 八环节：构建 → 配置 → 密钥 → 迁移 → 打标签 → 切换 → 验证 → 不过就回滚
-deploy/rollback.sh                     # 退回上一版
-```
-
-管理接口从宿主打发布端口会 401（源地址不是回环），用 `tools/admin.sh GET /admin/v1/indexer`；细节见 `docs/runbook/ops.md`。
-
-### 4. 想手工连数据库看看（可选）
-
-```bash
-docker compose up -d
-```
+## 连开发库
 
 ```bash
 psql "postgresql://chainpay:chainpay_local_dev@127.0.0.1:5433/chainpay"
 ```
 
-这个是本地开发库，和测试用的容器是两回事——测试不依赖它。
-
----
-
-## 目录结构
+## 目录
 
 ```
 chainpay/
-├── LEARNING-PATH.md            ← 学习路线，先读这个
-├── README.md                   ← 你在这
-├── CLAUDE.md                   ← 项目规约（AI 和你都要遵守）
-├── docker-compose.yml          ← 本地 Postgres 18
-├── pom.xml
-├── docs/
-│   └── retro/                  ← 每个里程碑的复盘（gitignore，本地保留）
-└── src/
-    ├── main/
-    │   ├── java/com/chainpay/
-    │   │   ├── ChainpayApplication.java
-    │   │   └── ledger/service/
-    │   │       ├── LedgerService.java       ← 契约都写在 javadoc 里
-    │   │       └── LedgerServiceImpl.java   ← ★ M0 你要写的地方
-    │   └── resources/
-    │       ├── application.yml
-    │       └── db/migration/V1__ledger.sql  ← 账本 schema，读一遍
-    └── test/java/com/chainpay/
-        ├── support/AbstractPostgresTest.java
-        └── ledger/LedgerInvariantTest.java  ← ★ 三个判官
+├── CLAUDE.md / LEARNING-PATH.md   规约 / 学习路线与进度
+├── docs/knowledge/                每个里程碑的前置知识与取舍
+├── docs/runbook/                  出了事怎么办
+├── docs/retro/                    复盘（gitignore，本地）
+├── deploy/                        部署与回滚脚本
+├── tools/                         离线密钥工具、管理与商户客户端、镜像与密钥扫描
+├── db/init/                       首次建库时建角色
+├── env/                           env 样例（真实的 *.env 不进 git）
+└── src/main/resources/db/migration/   迁移（执行过的只能往前加，不能改）
 ```
 
 ---
 
-## 你的第一步（不要跳）
+## 已经踩过的三个版本坑
 
-**不要打开 `LedgerServiceImpl.java` 就开始写。**
+都是「选最新版」的代价。共同教训：**报错信息指向的位置，往往不是根因所在的位置。**
 
-1. 读 [LEARNING-PATH.md](LEARNING-PATH.md) 第四节「学习方法」
-2. 读 `V1__ledger.sql`——注释里解释了每个约束为什么存在
-3. 读 `LedgerService.java` 的 javadoc——三条契约
-4. **在 `docs/retro/M0-before.md` 里写下你认为这个账本会怎么坏**
-5. 写完之后，再展开 LEARNING-PATH.md 里 M0 那份折叠的清单对答案
-
-> 第 4 步是这个项目里唯一能测出你在进步的东西。
-
----
-
-## 已经踩过的三个版本坑（留作记录）
-
-搭这个骨架时真实遇到的，都是「选最新版」的代价：
-
-**① Testcontainers 2.x 改了 Maven 坐标**
-
-```xml
-<!-- 1.x（网上示例几乎都是这个） -->
-<artifactId>postgresql</artifactId>
-<artifactId>junit-jupiter</artifactId>
-
-<!-- 2.x（正确） -->
-<artifactId>testcontainers-postgresql</artifactId>
-<artifactId>testcontainers-junit-jupiter</artifactId>
-```
-
-报错是 `'dependencies.dependency.version' ... is missing`，看起来像版本号忘了写，
-实际是坐标不存在所以 BOM 匹配不上。**Java 包名没变，只有 Maven 坐标变了。**
-
-**② Spring Boot 4 把自动配置拆成了独立模块**
-
-只加 `flyway-core` 只得到 Flyway 库本身，**拿不到 Spring 的 `FlywayAutoConfiguration`**。
-必须显式加 `org.springframework.boot:spring-boot-flyway`。
-
-**这个坑的现象特别隐蔽**：应用正常启动、数据源连得上、日志里一个错误都没有，
-只是**一张表都没建**，直到第一条 SQL 报 `relation "entry" does not exist`。
-
-**③ PostgreSQL 18 的官方镜像改了推荐挂载点**
-
-```yaml
-# 17 及以前（网上示例几乎都是这个）
-- chainpay-pgdata:/var/lib/postgresql/data
-
-# 18+（正确）
-- chainpay-pgdata:/var/lib/postgresql
-```
-
-沿用旧路径会让容器**反复重启**，日志里说
-`there appears to be PostgreSQL data in ... (unused mount/volume)`。
-改动的原因是让将来的 `pg_upgrade --link` 不跨挂载点边界。
-
-注意 Testcontainers 的测试**不受影响**——它不挂持久卷，所以 `mvn test` 一直是好的，
-只有 `docker compose up` 才炸。**「测试通过」和「本地能跑」是两件事**，
-这正好是前面讲部署时那条「测试环境验证不了生产产物」的微缩版。
-
-> 三个坑的共同教训：**报错信息指向的位置，往往不是根因所在的位置。**
-> ① 看起来是"版本号忘了写"，② 看起来是"SQL 写错了"，③ 看起来是"数据损坏了"。
+1. **Testcontainers 2.x 改了 Maven 坐标**：`postgresql` → `testcontainers-postgresql`、`junit-jupiter` → `testcontainers-junit-jupiter`。
+   报错是 `'dependencies.dependency.version' ... is missing`，看起来像忘了写版本号，其实是坐标不存在、BOM 匹配不上。Java 包名没变。
+2. **Spring Boot 4 把自动配置拆成了独立模块**：只加 `flyway-core` 拿不到 `FlywayAutoConfiguration`，必须显式加 `spring-boot-flyway`。
+   现象很隐蔽：应用正常启动、一个错误都没有，只是一张表都没建，直到第一条 SQL 报 `relation "entry" does not exist`。
+3. **PostgreSQL 18 的官方镜像改了推荐挂载点**：卷挂 `/var/lib/postgresql`，不再是 `/var/lib/postgresql/data`。
+   沿用旧路径容器会反复重启（`there appears to be PostgreSQL data in ... (unused mount/volume)`）。Testcontainers 不挂卷所以测试一直是好的——**「测试通过」和「本地能跑」是两件事**。

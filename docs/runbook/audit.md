@@ -1,12 +1,12 @@
-# 对账（M5）操作手册：看到差异该做什么
+# 对账运行手册
 
 > 对账是判官不是修理工：它只报，不改。**人也不手工改账本表**；修正走各模块自己的人工路径。
 
 ## 一、先看哪里
 
 ```bash
-tools/admin.sh GET  /admin/v1/audit              # 上次结论、stale、差异清单
-tools/admin.sh POST /admin/v1/audit/run   # 立刻跑一轮
+tools/admin.sh GET  /admin/v1/audit          # 上次结论、stale、差异清单（先 eval "$(tools/admin.sh login <用户名>)"）
+tools/admin.sh POST /admin/v1/audit/run      # 立刻跑一轮
 ```
 
 ```sql
@@ -16,7 +16,7 @@ SELECT check_name, kind, subject, expected, actual, detail FROM audit_finding WH
 
 日志：每轮一行；有差异每条一行 ERROR；没跑完一行 ERROR。
 
-## 二、三种结论
+## 二、结论
 
 | `status` | 含义 | 该做什么 |
 |---|---|---|
@@ -37,21 +37,21 @@ SELECT check_name, kind, subject, expected, actual, detail FROM audit_finding WH
 | DEPOSIT_LEDGER · MISSING_IN_LEDGER | FINAL 够久的收款日志没有入账行 | 入账任务停了；有人删了入账行 | 看入账任务日志；任务在跑就等下一轮；入账行被删要查 |
 | PAYOUT_LEDGER · MISSING_ON_CHAIN | CONFIRMED 的提现，链上找不到它的转账 | 假账；索引器漏了那一块 | 用交易哈希查浏览器：链上有就是索引器漏了，链上没有就是假账 |
 | PAYOUT_LEDGER · AMOUNT_MISMATCH | 链上转账的金额或收款人与提现不同 | 签名前后被改过 | 立刻停发（把热钱包 HALTED），查 `payout_tx.raw_tx` 与链上交易 |
-| PAYOUT_LEDGER · MISSING_IN_LEDGER | 热钱包发出了库里没有的转账 | 有人在别处用了这把钥匙；运营手工转账 | 当泄露处理（见 `payout.md` 第二节第一行），除非能对上一次运营的手工操作 |
-| CUSTODY_TOTAL · MISSING_IN_LEDGER | 链上托管比账本能解释的多 | 运营往热钱包充币还没登记；漏账 | 能对上一次充币就**登记它**（下面「注资登记」），下一轮对账就平；对不上按漏账查 |
+| PAYOUT_LEDGER · MISSING_IN_LEDGER | 热钱包发出了库里没有的转账 | 有人在别处用了这把钥匙；运营手工转账 | 当泄露处理（`payout.md` 第二节第一行），除非能对上一次运营的手工操作 |
+| CUSTODY_TOTAL · MISSING_IN_LEDGER | 链上托管比账本能解释的多 | 运营往热钱包充币还没登记；漏账 | 能对上一次充币就**登记它**（第五节），下一轮对账就平；对不上按漏账查 |
 | CUSTODY_TOTAL · MISSING_ON_CHAIN | 链上托管比账本能解释的少 | 假账；钥匙在别处被用 | 先看 PAYOUT_LEDGER 有没有同时报 MISSING_IN_LEDGER |
-| LEDGER_JUDGE | 账本自己的不变量破了 | 手工改库 | M0 起就不该发生；查改动来源 |
+| LEDGER_JUDGE | 账本自己的不变量破了 | 手工改库 | 不该发生；查改动来源 |
 
 ## 四、对账自己错了怎么办
 
 对账在库里没有链头、两节点对 F 意见不同、节点不可达时一律 FAILED，不猜。它错报的方式只有一种：把「在路上的钱」算错方向（已 FINAL 未入账、已上链未结算）。看到 CUSTODY_TOTAL 单独报而别的检查都不报时，先核那两个数。
 
-## 注资登记（M6-②）
+## 五、注资登记
 
-运营往热钱包充币后，对账会报 CUSTODY_TOTAL / MISSING_IN_LEDGER，直到有人登记它。登记只指认「是哪一笔」，金额从索引器记下的日志读：
+运营往热钱包充币后，对账会报 CUSTODY_TOTAL / MISSING_IN_LEDGER，直到有人登记它。登记只指认「是哪一笔」，金额、块、代币从索引器记下的日志读。登记是敏感操作，先再认证：
 
 ```bash
-set -a; source env/local.env; set +a
+tools/admin.sh reauth
 tools/admin.sh POST /admin/v1/hot-wallet/fundings '{"txHash":"0x…","note":"谁、为什么充"}'
 tools/admin.sh GET  /admin/v1/hot-wallet/fundings
 ```
@@ -64,4 +64,4 @@ tools/admin.sh GET  /admin/v1/hot-wallet/fundings
 | 400 + 2010 | 发起方是平台自己的地址（收款地址或热钱包） | 那是归集，不是注资，不登记；等式里它是内部挪动 |
 | 409 + 4005 | 还没 finalized | 等十几分钟再来 |
 
-登记表只追加、没有改和删：登记错了不能撤，只能在对账里看到它被报成「登记的注资链上不认」（日志被翻掉）或把差额留在等式里；谁登记的要靠 M6-⑤ 的审计表。
+登记表只追加、没有改和删：登记错了不能撤，对账会把它报成「登记的注资链上不认」（日志被翻掉），或把差额留在等式里。谁登记的查 `admin_action`。
