@@ -21,7 +21,7 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 /**
  * 出账是「账本先扣，链上后发生」：中间那段不确定期用一个冻结账户表达。
  * 冻结走商户自己的连接与作用域（申请时），结算与解冻走系统身份（链上有结果时）。
- * 三笔都是普通的 ledger.transfer，各有幂等键——「同一笔业务只结算一次」由 M0 的唯一约束守。
+ * 三笔都是普通的 ledger.transfer，各有幂等键——「同一笔业务只结算一次」由幂等键的唯一约束守。
  */
 @SpringBootTest
 @DisplayName("M4-⓪ · 提现的三笔账本流：冻结、结算、解冻")

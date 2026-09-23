@@ -19,8 +19,8 @@ import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.node.ObjectNode;
 
 /**
- * M4-② 新增的五个方法的翻译层。诚实说明：这里的响应不是真实录制，是按 JSON-RPC 规范的形状手写的；
- * 真实节点的回答在 M4-⑤ 的演练里核对。测的是：参数怎么发出去、十六进制怎么读回来、错误怎么翻译。
+ * 发送与追踪用到的节点方法的翻译层。这里的响应不是真实录制，是按 JSON-RPC 规范的形状手写的。
+ * 测的是：参数怎么发出去、十六进制怎么读回来、错误怎么翻译。
  */
 @DisplayName("M4-② · EthRpc 翻译层：计数、估 gas、费率、广播、按哈希查")
 class EthRpcSendingTest {

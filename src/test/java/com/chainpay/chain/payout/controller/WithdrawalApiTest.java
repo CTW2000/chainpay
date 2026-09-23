@@ -30,7 +30,7 @@ import org.springframework.boot.test.web.server.LocalServerPort;
 
 /**
  * 商户提现接口：先登记白名单，再申请；申请 = 冻结 + 插行同一事务；超限或没定过限额进 PENDING_APPROVAL，管理接口核准或拒绝。
- * 钱从 M3 的真实路径进来（索引 → FINAL → 入账），再从这里申请出去。
+ * 钱从入账的真实路径进来（索引 → FINAL → 入账），再从这里申请出去。
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @DisplayName("M4-④ · 提现接口：白名单、限额、申请、核准")
@@ -53,7 +53,7 @@ class WithdrawalApiTest extends AbstractDepositPostingTest {
         evilSecret = cipher.generateSecret();
         createCredential(acmeId, "ak_acme", acmeSecret);
         createCredential(evilcoId, "ak_evilco", evilSecret);
-        pay(5, TEN_LINK);                                   // 10 LINK 走 M3 的真实路径进来：索引 → FINAL → 入账
+        pay(5, TEN_LINK);
         indexUpTo(100, 90, 50);
         poster().postOnce();
         assertThat(balanceOf("user:acme:LINK")).isEqualByComparingTo("10");
@@ -191,7 +191,7 @@ class WithdrawalApiTest extends AbstractDepositPostingTest {
         long approveMe = Long.parseLong(field(withdraw(acmeSecret, "ak_acme", DEST, "1", "w-1").body(), "id"));
         long rejectMe = Long.parseLong(field(withdraw(acmeSecret, "ak_acme", DEST, "2", "w-2").body(), "id"));
         assertThat(adminGet("/admin/v1/payouts/pending").body()).contains("\"id\":" + approveMe).contains("\"id\":" + rejectMe)
-                // 金额的写法钉在这里（2026-09-22 收口前先钉）：此前由 SQL 的 ::text 写，收口后由 LedgerAmounts.text 写，输出必须一字不差
+                // 钉住待核准列表的金额写法：经 LedgerAmounts.text 写，输出必须一字不差
                 .contains("\"amount\":\"1.000000000000000000\"").contains("\"amount\":\"2.000000000000000000\"");
 
         HttpResponse<String> approved = adminPost("/admin/v1/payouts/" + approveMe + "/approve", "");

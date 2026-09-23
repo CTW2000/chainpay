@@ -27,15 +27,13 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.PlatformTransactionManager;
 
 /**
- * M2-② 的落库探针：对着真实的 Sepolia，把最近几百个区块的 LINK 转账索引进真的 PostgreSQL。
+ * 落库探针：对着真实的 Sepolia，把最近几百个区块的 LINK 转账索引进真的 PostgreSQL。
  *
  * <p><b>默认不跑</b>：设了 CHAINPAY_SEPOLIA_RPC 才启用（理由同 {@link SepoliaProbeTest}）。
  *
  * <pre>
  *   CHAINPAY_SEPOLIA_RPC=https://ethereum-sepolia-rpc.publicnode.com mvn test -Dtest=SepoliaIndexProbeTest
  * </pre>
- *
- * <p>它验证的是 M2 验收标准里的「对账」雏形：索引过的范围内，链上有几条日志，库里就得有几条。
  */
 @DisplayName("M2-② · Sepolia 落库探针（需网络）")
 @EnabledIfEnvironmentVariable(named = "CHAINPAY_SEPOLIA_RPC", matches = ".+")

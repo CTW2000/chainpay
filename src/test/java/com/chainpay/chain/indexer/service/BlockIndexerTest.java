@@ -37,7 +37,7 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.transaction.PlatformTransactionManager;
 
 /**
- * M2-② 的契约：事件和书签同生同死、重复无害、书签只进不退、重组就停。
+ * 落库与书签的契约：事件和书签同生同死、重复无害、书签只进不退、重组就停。
  *
  * <p>链是 {@link FakeChain}（内存），库是真的 PostgreSQL——
  * 要证明的恰恰是「数据库层面」的事：事务边界、唯一约束、行锁、CHECK。
@@ -312,7 +312,7 @@ class BlockIndexerTest extends AbstractPostgresTest {
         assertThat(indexer.indexNextBatch().outcome()).isEqualTo(INDEXED);                 // 1..5
         assertThat(indexer.indexNextBatch().outcome()).isEqualTo(INDEXED);                 // 6..10，追到链头
         chain.withBlocks(11);                                                              // eth_blockNumber 的后端看到了 11
-        chain.beforeLogs(() -> {                                                           // getLogs 的后端还没有：2026-09-09 08:11 Alchemy 原话
+        chain.beforeLogs(() -> {                                                           // getLogs 的后端还没有：错误原文取自 Alchemy
             throw new JsonRpcException(-32000, "block range extends beyond current head block");
         });
 
@@ -385,7 +385,7 @@ class BlockIndexerTest extends AbstractPostgresTest {
                 .hasMessageContaining("0x");
     }
 
-    // ------------------------------------------------------------------ 一批的归属（2026-09-03 补丁）
+    // ------------------------------------------------------------------ 一批的归属
 
     @Test
     @DisplayName("★ 撕裂的快照：取日志之前链换了分支，这批作废（瞬时），什么都不写；下一批按重组处理")
@@ -481,7 +481,7 @@ class BlockIndexerTest extends AbstractPostgresTest {
         assertThat(cursor()).isEqualTo(new IndexerCursor(CURSOR, 0, FakeChain.hashOf(0)));
     }
 
-    // ------------------------------------------------------------------ 白名单由谁守（M2-⑥ 补丁 3）
+    // ------------------------------------------------------------------ 白名单由谁守
 
     @Test
     @DisplayName("★ 节点返回了别的合约的日志（不按地址过滤）：整批停下，什么都不写")

@@ -8,8 +8,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * BIP-32 的官方测试向量（bip-0032.mediawiki「Test Vectors」，2026-09-07 用 curl 取 bitcoin/bips 原文逐字核对；
- * 第一次经概括模型转述时 m/0'/1/2' 的 xprv 被抄错一个字母，Base58Check 校验和立刻不成立——已知答案必须来自原始文本）。
+ * BIP-32 的官方测试向量（bitcoin/bips 的 bip-0032.mediawiki「Test Vectors」，与原文逐字核对——
+ * 已知答案必须来自原始文本，不经任何转述）。
  * 期望值一个字符都不改。xpub 里任何一位算错，Base58Check 的校验和就对不上，整串就不同。
  */
 @DisplayName("M3-① · BIP-32 规范向量")

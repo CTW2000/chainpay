@@ -14,7 +14,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 
 /**
- * M6-② · 注资登记：运营往热钱包充的币要有一行记录，托管等式才能解释它。
+ * 注资登记：运营往热钱包充的币要有一行记录，托管等式才能解释它。
  * 金额、块、代币全部从索引器已经记下的日志里读，运营只指认「是哪一笔」——数字不由人填。
  */
 @DisplayName("M6-② · 注资登记")

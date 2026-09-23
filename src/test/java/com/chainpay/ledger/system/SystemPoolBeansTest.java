@@ -20,8 +20,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /**
- * 系统连接池与系统事务管理器是容器里的 bean（2026-09-15 由用户决定换成官方双数据源的形状）。
- * 三件事同时成立才算换对：
+ * 系统连接池与系统事务管理器是容器里的 bean（官方双数据源的形状）。三件事必须同时成立：
  * <ol>
  *   <li>它们是「非默认候选」：按类型注入 DataSource / 事务管理器的地方永远拿到主池，主连接的自动配置不退让；</li>
  *   <li>系统账本的事务就是容器里 system 的事务管理器：{@code @Transactional("system")} 里调 inTransaction，是同一条连接；</li>

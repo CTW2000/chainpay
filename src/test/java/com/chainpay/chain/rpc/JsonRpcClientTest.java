@@ -29,8 +29,8 @@ import tools.jackson.databind.ObjectMapper;
  * 只看 HTTP 状态码的客户端会把节点报错当成成功——这和我们自己 API 的设计
  * （状态码与信封一起动）正好相反，写的时候很容易按习惯写错。
  *
- * <p>M2-⑤ 加的两条守的是「读法的洞」：JDK 的请求超时只管到响应头到达，正文滴流它不管；
- * 正文没有上限，坏节点可以一直发到我们内存耗尽——M1.5 在鉴权过滤器里堵过的同一个坑。
+ * <p>最后两条守的是「读法的洞」：JDK 的请求超时只管到响应头到达，正文滴流它不管；
+ * 正文没有上限，坏节点可以一直发到我们内存耗尽。
  */
 @DisplayName("M2 · JSON-RPC 客户端")
 class JsonRpcClientTest {
@@ -143,7 +143,7 @@ class JsonRpcClientTest {
     @Test
     @DisplayName("★ HTTP 400 + JSON-RPC error 对象（Alchemy 免费档就这么报上限）—— 必须带着 code 抛出，不能当成传输失败")
     void surfacesTheErrorCodeEvenWhenHttpStatusIsNot2xx() {
-        // 2026-09-03 实测：Alchemy 免费档 eth_getLogs 超过 10 块，HTTP 400 + error.code=-32600。
+        // Alchemy 免费档 eth_getLogs 超过 10 块的回答就是 HTTP 400 + error.code=-32600。
         // 先看状态码的客户端会把 code 丢掉，对半分永远不会触发，只会每 12 秒「瞬时失败」。
         cannedStatus = 400;
         cannedResponse = "{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-32600,\"message\":\"Under the Free tier plan, you can make eth_getLogs requests with up to a 10 block range\"}}";

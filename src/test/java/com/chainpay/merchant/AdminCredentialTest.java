@@ -25,7 +25,7 @@ import org.springframework.boot.test.web.server.LocalServerPort;
  *
  * <pre>
  *   数据面  /api/...    商户日常调用   HMAC 签名认证
- *   控制面  /admin/...  开户、发钥匙   管理员令牌 + 回环地址
+ *   控制面  /admin/...  开户、发钥匙   管理员会话 + 回环地址
  * </pre>
  *
  * <p>为什么必须分开：如果商户能用自己的凭证去发新凭证，
@@ -35,8 +35,6 @@ import org.springframework.boot.test.web.server.LocalServerPort;
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @DisplayName("M1 · 发放凭证契约")
 class AdminCredentialTest extends AbstractPostgresTest {
-
-    /** 与 src/test/resources/application.yml 里的测试令牌一致。 */
 
     @LocalServerPort
     private int port;
@@ -80,13 +78,9 @@ class AdminCredentialTest extends AbstractPostgresTest {
     @Test
     @DisplayName("★ 带 X-Forwarded-For —— 拒绝，因为它说明请求经过了代理")
     void forwardedRequestsAreRejectedEvenWithCorrectToken() {
-        // ★ 这条防的是一个很隐蔽的洞 ★
-        // 管理接口靠「只能从本机调用」保护。但 nginx 通常和应用跑在同一台机器上，
-        // 于是**所有**经过 nginx 的公网请求，getRemoteAddr() 都是 127.0.0.1。
-        // 回环检查在这种部署下形同虚设。
-        //
-        // X-Forwarded-For 的存在恰好证明「这个请求被转发过」，
-        // 所以在管理接口上它不是身份信息，而是**拒绝的理由**。
+        // ★ 防一个很隐蔽的洞 ★ 管理接口靠「只能从本机调用」保护，但 nginx 通常和应用跑在同一台机器上，
+        // 经过它的所有公网请求 getRemoteAddr() 都是 127.0.0.1，回环检查形同虚设。
+        // X-Forwarded-For 的存在恰好证明请求被转发过，所以在管理接口上它不是身份信息，而是拒绝的理由。
         var response = send(HttpRequest.newBuilder()
                 .uri(URI.create("http://localhost:" + port + "/admin/v1/merchants"))
                 .header("Content-Type", "application/json")
@@ -247,11 +241,8 @@ class AdminCredentialTest extends AbstractPostgresTest {
     @Test
     @DisplayName("★ 凭证对象的 toString() 不含明文 —— 防 log.info(result) 把密钥打进日志")
     void issuedCredentialToStringHidesTheSecret() {
-        // Java 的 record 会**自动生成包含全部字段的 toString()**。
-        // 于是一句看起来人畜无害的 log.info("发放成功: {}", result)
-        // 就把密钥永久写进了日志文件 —— 写这行的人根本没意识到。
-        //
-        // 让「误用的默认行为」是安全的，比要求每个人都记得别打日志可靠得多。
+        // record 自动生成的 toString() 包含全部字段：一句人畜无害的 log.info("发放成功: {}", result)
+        // 就把密钥永久写进了日志。让「误用的默认行为」是安全的，比要求每个人都记得别打日志可靠得多。
         var record = new IssuedCredential(7L, "ak_visible", "SUPER-SECRET-PLAINTEXT");
 
         assertThat(record.toString())
@@ -283,8 +274,7 @@ class AdminCredentialTest extends AbstractPostgresTest {
 
     /**
      * 用这把凭证发一个签过名的 GET，只看它能不能进门（200 / 401）——打哪个接口不重要。
-     * 2026-09-22 前打的是余额接口，那个接口连同通用转账接口一起删了（商户接口不再收账本账户 id）；
-     * 换成白名单列表：不依赖链上配置、没有副作用、空列表也回 200。
+     * 用白名单列表：不依赖链上配置、没有副作用、空列表也回 200。
      */
     private HttpResponse<String> signedGetWith(IssuedCredential credential) {
         String path = "/api/v1/withdrawal-addresses";

@@ -23,7 +23,7 @@ import org.springframework.boot.health.contributor.Health;
 import org.springframework.boot.health.contributor.Status;
 
 /**
- * M6-⓪ · 每个指示器「什么算能干活」的判定，不起容器。
+ * 每个指示器「什么算能干活」的判定，不起容器。
  * 指示器只做判定：拿一个状态，给一个 UP / DEGRADED / DOWN / UNKNOWN 和几行细节；读状态的那一步由装配时的 lambda 给，这里用假的。
  */
 @DisplayName("M6-⓪ · 健康指示器的判定")

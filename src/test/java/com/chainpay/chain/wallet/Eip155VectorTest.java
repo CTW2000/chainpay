@@ -11,7 +11,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * EIP-155 正文里的算例（github.com/ethereum/EIPs，EIPS/eip-155.md「Example」，2026-09-09 浅克隆逐字抄录）。
+ * EIP-155 正文里的算例（github.com/ethereum/EIPs，EIPS/eip-155.md「Example」，逐字抄录）。
  * 它是旧式（类型 0）交易，但一次证明三件事：RLP 编码逐字节对、Keccak 对、用私钥签出的 (r, s) 与规范逐位相同——
  * 后者只有在 k 由 RFC 6979 确定地算出、且 s 取 low-s 时才可能成立。
  */

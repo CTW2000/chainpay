@@ -10,7 +10,7 @@ import java.util.regex.Pattern;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-/** M6-④ · 部署脚本的守卫：八个环节按顺序都在、失败即停、密钥不回显、compose 只跑 chainpay:current、Flyway 容忍未来版本（回滚时旧代码要能起）。 */
+/** 部署脚本的守卫：八个环节按顺序都在、失败即停、密钥不回显、compose 只跑 chainpay:current、Flyway 容忍未来版本（回滚时旧代码要能起）。 */
 @DisplayName("M6-④ · 部署脚本守卫")
 class DeployGuardTest {
 

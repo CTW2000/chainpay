@@ -18,10 +18,8 @@ import org.springframework.transaction.annotation.AnnotationTransactionAttribute
 import org.springframework.transaction.interceptor.TransactionAttribute;
 
 /**
- * 2026-09-15 起索引器的四段事务从手工模板改为注解（用户选），事务那一段各自搬进一个写入类：
- * BatchWriter / ChainHeadWriter / ReorgWriter / ReconcileWriter。注解靠代理生效，所以钉住三件事：
- * 容器给的是代理；每个公开方法都带 REQUIRED 的事务属性；类与方法都不是 final。
- * 用 bean 名查、不直接引用类：写入类还不存在时这条也能先红。
+ * 索引器的四段事务各在一个写入类里：BatchWriter / ChainHeadWriter / ReorgWriter / ReconcileWriter。
+ * 注解靠代理生效，所以钉住三件事：容器给的是代理；每个公开方法都带 REQUIRED 的事务属性；类与方法都不是 final。
  */
 @SpringBootTest
 @DisplayName("索引器的写入类：事务靠代理生效")

@@ -52,11 +52,7 @@ class RateLimitTest extends AbstractPostgresTest {
             .connectTimeout(Duration.ofSeconds(5))
             .build();
 
-    /**
-     * 限流只数请求，打哪个接口都一样——要的是「随便打、无副作用、能回 200」。
-     * 2026-09-22 前打的是余额接口（`/api/v1/accounts/{id}/balance`），它连同通用转账接口一起删了；
-     * 换成白名单列表：不依赖链上配置、空列表也回 200，所以不用再为这个测试建账户。
-     */
+    /** 限流只数请求，打哪个接口都一样——要的是「随便打、无副作用、能回 200」：白名单列表不依赖链上配置、空列表也回 200。 */
     private static final String TARGET = "/api/v1/withdrawal-addresses";
 
     private String acmeSecret;
@@ -93,7 +89,7 @@ class RateLimitTest extends AbstractPostgresTest {
         var rejected = signedGet();
 
         assertThat(rejected.statusCode()).isEqualTo(429);
-        // 契约从可读名改成了数字（M1.5）：名字会诱使人重命名，数字不会。
+        // 契约是数字而不是可读名：名字会诱使人重命名，数字不会。
         assertThat(rejected.body()).contains("\"code\":\"5001\"");
         // 不带 Retry-After 的话，客户端不知道该等多久，会立刻重试 ——
         // 限流反而制造了更多请求。
@@ -107,8 +103,7 @@ class RateLimitTest extends AbstractPostgresTest {
     @Test
     @DisplayName("★ 并发打满配额 —— 放行数必须恰好等于配额，不能被并发绕过")
     void concurrentRequestsCannotExceedQuota() {
-        // 这是 flow-pay 9f22aac 的形状：错误计数 get+set 非原子，
-        // 两个线程同时读到 4、同时写 5，第 6 次也被放行。
+        // 计数若是 get + set 非原子，两个线程同时读到 4、同时写 5，第 6 次也被放行。
         // 计数必须原子 —— incrementAndGet，而不是 get 之后再 set。
         final int attempts = REQUESTS_PER_MINUTE + 40;
         AtomicInteger allowed = new AtomicInteger();
@@ -189,9 +184,8 @@ class RateLimitTest extends AbstractPostgresTest {
     @Test
     @DisplayName("★ 真的连不上的 Redis —— RedisRateLimiter 自己的 catch 必须产出空 Optional")
     void realUnreachableRedisProducesEmptyOptional() {
-        // 质询扫描 5.9：上面那条降级测试用子类桩顶掉了 RedisRateLimiter，
-        // 真实的 try/catch（生产环境唯一的降级触发点）一行都没执行——
-        // 把那个 catch 改成重新抛出，测试照样全绿。
+        // 上面那条降级测试用子类桩顶掉了 RedisRateLimiter，真实的 try/catch（生产环境唯一的降级触发点）一行都没执行——
+        // 把那个 catch 改成重新抛出，它照样绿。
         // 这条用一个指向关闭端口、超时 300ms 的真实 Lettuce 连接，让那个 catch 真的跑一次。
         var config = new org.springframework.data.redis.connection.RedisStandaloneConfiguration("localhost", 1);
         var client = org.springframework.data.redis.connection.lettuce.LettuceClientConfiguration.builder()
@@ -242,16 +236,9 @@ class RateLimitTest extends AbstractPostgresTest {
     @Test
     @DisplayName("★ 合法凭证不能当重置令牌 —— 一次成功认证不归还该 IP 的失败额度")
     void aValidCredentialIsNotAResetToken() {
-        // ★ 这条测试在 2026-08-31 质询扫描后重写，值得记下来为什么 ★
-        //
-        // 第一版叫 successfulAuthClearsFailureCounter，断言「成功后失败计数清零、
-        // 可以再失败满一整轮」——那正是绕过本身，被当成正确行为钉了下来。
-        // 它的理由「正常用户不该被历史失败拖累」是真的，但只对着诚实客户端权衡过。
-        //
-        // 清单 5.12：把断言的主语从「正常用户」换成「持有一把合法凭证的攻击者」——
-        // 用自己的 key A 成功一次，就能把同一 IP 上探测别人 key B 的失败记录整桶清掉。
-        // 实测：9 坏 + 1 好循环 6 轮，54 次失败 → 401×54、429×0，设计上限是 10。
-        // 放大倍数约 108×（每轮只消耗自己 1 次配额，换 9 次免费探测）。
+        // 「成功一次就清零失败计数」只对诚实客户端权衡过。换成持有一把合法凭证的攻击者：
+        // 用自己的 key A 成功一次，就能把同一 IP 上探测别人 key B 的失败记录整桶清掉——
+        // 9 坏 + 1 好循环下去，每轮只花自己 1 次配额就换 9 次免费探测，失败上限形同虚设。
         //
         // 固定窗口计数器只该有一条重置路径：TTL 到期。攻击者控制不了时间。
         for (int i = 0; i < AUTH_FAILURES_PER_MINUTE - 1; i++) {
@@ -271,14 +258,9 @@ class RateLimitTest extends AbstractPostgresTest {
     @Test
     @DisplayName("★ 换假的 X-Forwarded-For 换不到新桶 —— 限流身份必须来自 TCP 对端")
     void spoofedForwardedForDoesNotEscapeTheFailureBucket() {
-        // 质询扫描 8.5：clientIp() 读 X-Forwarded-For 的第一段——那是客户端自己填的。
-        // 每个请求换一个假 IP，每个都是新桶，认证失败限流对攻击者不存在，且不需要凭证。
-        //
-        // 注释里的前提有两层错：① 全仓 nginx 只出现在注释里，反代不存在；
-        // ② 即使有 nginx，最常见的 $proxy_add_x_forwarded_for 是「追加」不是「覆写」，
-        //    第一段仍是客户端填的，最右边由我方代理写的那段才是真的。
-        //
-        // 信任边界属于容器配置（M6 加 nginx 时配 server.tomcat.remoteip），
+        // X-Forwarded-For 是客户端自己填的：拿它的第一段当限流身份，每个请求换一个假 IP 就是一个新桶，
+        // 认证失败限流对攻击者不存在，且不需要凭证。即使前面有 nginx，常见的 $proxy_add_x_forwarded_for 是「追加」
+        // 不是「覆写」，第一段仍是客户端填的。信任边界属于容器配置（将来加反代时配 server.tomcat.remoteip），
         // 应用代码不该自己解析一个客户端可写的头。
         for (int i = 1; i <= AUTH_FAILURES_PER_MINUTE; i++) {
             assertThat(badSignatureGetClaimingToBeFrom("10.0.0." + i).statusCode())

@@ -15,7 +15,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 /**
- * 入口的分派（2026-09-18）：一个 jar 三种用法，后两种是一次性命令——跑完交出退出码就结束，绝不能顺手起完整应用。
+ * 入口的分派：一个 jar 三种用法，后两种是一次性命令——跑完交出退出码就结束，绝不能顺手起完整应用。
  *
  * <p>{@link ChainpayApplication#oneShot} 只决定、只跑那一件事，迁移与建管理员换成计数的假动作，不连库；
  * 最后一条另起一个 JVM 真跑 {@code main}，守的是那行 {@code System.exit}——它在测试进程里调不得。

@@ -13,13 +13,13 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * M6-① · 容器文件的守卫：Dockerfile、.dockerignore、docker-compose.yml 里那几条「忘了就出事」的规矩，形状都是「某个文件里必须 / 不许出现某个字符串」，
+ * 容器文件的守卫：Dockerfile、.dockerignore、docker-compose.yml 里那几条「忘了就出事」的规矩，形状都是「某个文件里必须 / 不许出现某个字符串」，
  * 和 ControllerBoundaryTest 一样扫文本，不引依赖。镜像真的有没有密钥由 tools/image-check.sh 在打完镜像后扫（那需要 Docker，不进默认测试集）。
  */
 @DisplayName("M6-① · 容器文件守卫")
 class ContainerGuardTest {
 
-    /** 密钥形态的变量名：只在 tools/image-check.sh 写一份（进程拆分 ① 收口，此前这里抄了一份，两份一起漏掉告警地址）。 */
+    /** 密钥形态的变量名：只在 tools/image-check.sh 写一份，这里不另抄。 */
     private static final Pattern SECRET_NAME = SecretNames.inText();
 
     @Test

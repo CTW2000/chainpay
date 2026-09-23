@@ -15,8 +15,8 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
 /**
- * 扫描补丁（2026-09-09）：key 不存在时在解密与 HMAC 之前就返回，两条失败路径耗时不同，
- * 计时能确认「这个 api_key 是活的」。响应已经做到不可区分，耗时也要。
+ * key 不存在时若在解密与 HMAC 之前就返回，两条失败路径耗时不同，
+ * 计时就能确认「这个 api_key 是活的」。响应已经做到不可区分，耗时也要。
  */
 @SpringBootTest
 @DisplayName("扫描补丁 · 凭证查找的耗时不能泄露 key 是否存在")

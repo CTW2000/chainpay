@@ -12,7 +12,7 @@ import org.junit.jupiter.params.provider.MethodSource;
 import org.springframework.mock.env.MockEnvironment;
 
 /**
- * 进程拆分 ① · 进程角色的判定（纯逻辑，不起容器）。
+ * 进程角色的判定（纯逻辑，不起容器）。
  * 真的应用里守卫是不是在任何 bean 之前生效，由 {@link ProcessRoleBootTest} 证明；禁用名单的内容对不对，由 {@code EnvInventoryTest} 拿变量清单对。
  */
 @DisplayName("进程拆分 ① · 进程角色：恰好一个，凭证放错就不启动")

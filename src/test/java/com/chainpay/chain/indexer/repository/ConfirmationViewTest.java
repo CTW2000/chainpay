@@ -19,9 +19,6 @@ import org.springframework.transaction.PlatformTransactionManager;
 
 /**
  * 确认等级是<b>算出来的</b>：视图按最后一次看到的链头，给每条在链上的日志一个 SEEN / SAFE / FINAL。
- *
- * <p>要证明的四件事：三个等级各算各的；头前进时等级只升不降；被抛弃的行不出现；
- * 日志比记下的头还新时 confirmations 夹到 0。
  */
 @SpringBootTest
 @DisplayName("M2-③ · 确认等级视图")

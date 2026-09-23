@@ -18,7 +18,7 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 /**
- * M6-⓪ · 探针真的在回环的管理端口上答，主端口上没有；不要令牌；细节里没有密钥。
+ * 探针真的在回环的管理端口上答，主端口上没有；不要令牌；细节里没有密钥。
  * 这里用真 HTTP 打真 Tomcat：分组、探针、端口这些都是配置，只有真实启动才验得到。
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)

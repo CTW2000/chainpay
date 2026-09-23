@@ -11,7 +11,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 /**
- * 金额的家（2026-09-22 收口）：装不装得下只在 {@code requireFits} 判，写成字符串只经 {@code text}。
+ * 金额的家：装不装得下只在 {@code requireFits} 判，写成字符串只经 {@code text}。
  * 纯计算、不起容器；接上它的几处由各自的测试守——账本入口 {@code LedgerAmountBoundsTest}、链上换算 {@code TokenAmountsTest}、
  * 响应里的写法 {@code DepositApiTest} / {@code WithdrawalApiTest}（钉着 {@code "10.000000000000000000"} 这样的原文）。
  */
@@ -27,7 +27,7 @@ class LedgerAmountsTest {
         assertThat(LedgerAmounts.text(new BigDecimal("99999999999999999999.999999999999999999")))
                 .isEqualTo("99999999999999999999.999999999999999999");
         assertThat(LedgerAmounts.text(null)).isNull();
-        // 1 wei：String.valueOf 写成科学计数法，text 写成普通写法——收口前对账里两种写法并存
+        // 1 wei：String.valueOf 写成科学计数法，text 写成普通写法
         assertThat(String.valueOf(new BigDecimal("1E-18"))).isEqualTo("1E-18");
         assertThat(LedgerAmounts.text(new BigDecimal("1E-18"))).isEqualTo("0.000000000000000001");
     }

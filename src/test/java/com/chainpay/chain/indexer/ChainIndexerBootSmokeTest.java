@@ -42,7 +42,7 @@ import tools.jackson.databind.ObjectMapper;
  * 启动冒烟：让 Spring 容器<b>真的</b>把索引器装配一次，并证明调度注解真的起作用。
  *
  * <p>其它测试全部手工 new，从没执行过 {@code @ConditionalOnProperty}、属性绑定和 {@code @Scheduled} 这一层：
- * 条件注解的属性名、fixedDelayString 里的占位符、绑定的字段名任何一个写错，只有真实启动会发现（质询扫描 5.9）。
+ * 条件注解的属性名、fixedDelayString 里的占位符、绑定的字段名任何一个写错，只有真实启动会发现。
  * 假节点对什么都回 503，所以每次轮询都是瞬时失败——这里验证的是装配与调度，不是索引。
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
@@ -117,8 +117,8 @@ class ChainIndexerBootSmokeTest extends AbstractPostgresTest {
     }
 
     /**
-     * M3-⑤ 演练实测：入账事务等锁时 {@code chain_head} 不再更新——两个 {@code @Scheduled} 任务共用 Spring 默认的一条调度线程，
-     * 一个卡住另一个跟着停，而降级检测在轮里做，轮不跑连 ERROR 都没有。每个任务至少要有自己的一条线程。
+     * Spring 默认只有一条调度线程：一个 {@code @Scheduled} 任务卡住（比如入账事务等锁），别的任务跟着停，
+     * 而降级检测在轮里做，轮不跑连 ERROR 都没有。所以每个任务至少要有自己的一条线程。
      */
     @Test
     @DisplayName("★ 调度线程不止一条：一个定时任务卡住，别的任务照跑")

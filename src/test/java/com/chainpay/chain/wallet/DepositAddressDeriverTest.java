@@ -7,8 +7,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * 端到端的已知答案：Hardhat 的公开默认助记词，路径 m/44'/60'/0'/0/i（v2.hardhat.org 参考文档，2026-09-07 取得）。
- * 它是公开的、一文不值的助记词，可以进测试；它证明的是「派生算法对」，证明不了「配进服务器的 xpub 是你的」（M3-before 第 30 问）。
+ * 端到端的已知答案：Hardhat 的公开默认助记词，路径 m/44'/60'/0'/0/i（v2.hardhat.org 参考文档）。
+ * 它是公开的、一文不值的助记词，可以进测试；它证明的是「派生算法对」，证明不了「配进服务器的 xpub 是你的」。
  *
  * <p>链路：助记词 → BIP-39 种子（无 passphrase）→ 主密钥 → 硬化派生到账户层 m/44'/60'/0' → neuter 成 xpub →
  * <b>服务端只拿 xpub</b> → 普通派生 0/i → Keccak 地址 → EIP-55。

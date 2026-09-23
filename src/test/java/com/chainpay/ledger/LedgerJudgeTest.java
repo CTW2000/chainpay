@@ -19,12 +19,11 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
 /**
- * 扫描补丁（2026-09-09）：两个判官视图此前没授权给任何角色、没有 security_invoker，而 entry 是 FORCE RLS。
- * 它们「能查通」只因为开发库与测试库的属主恰好是超级用户；换成托管数据库的非超级用户属主，
- * 同一条语句静默返回 0 行、把坏账当平账。修法：判官以系统身份（BYPASSRLS）跑，且判官函数拒绝在看不全的身份下给结论。
+ * 判官只能以看得到全部行的身份给结论：entry 是 FORCE RLS，看不全的身份会静默返回 0 行、把坏账当平账。
+ * 所以判官以系统身份（BYPASSRLS）跑，判官函数在看不全的身份下直接拒绝。
  *
- * <p>2026-09-21 实测补：上面的修法还不够。判官函数查的是调用者，而视图默认用<b>主人</b>的身份读表——
- * 把两个视图的主人换成受行级安全约束的角色，同一本坏账判官报 0 行。补 {@code security_invoker} 后主人是谁不再影响结论。
+ * <p>只查调用者还不够：视图默认用<b>主人</b>的身份读表，主人受行级安全约束时同样报 0 行（托管数据库的属主就不是超级用户）。
+ * 视图开了 {@code security_invoker}，主人是谁才不影响结论。
  */
 @SpringBootTest
 @DisplayName("扫描补丁 · 账本判官必须以能看到全部行的身份运行")

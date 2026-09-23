@@ -10,16 +10,10 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 
 /**
- * 测试环境的配置必须是「主配置 + 测试覆盖」，不能是「整份替换」。
+ * 测试环境的配置必须是「主配置 + 测试覆盖」，不能是「整份替换」：src/test/resources 里放一个同名的
+ * application.yml，Spring Boot 会按类路径资源整份替换主配置，主配置里的设置在任何测试里都不生效，也没有任何报错。
  *
- * <p>质询扫描 5.6：src/test/resources/application.yml 与主配置同名，Spring Boot
- * 按类路径资源整份替换，于是主配置里「故意开小以暴露连接池竞争」的
- * hikari.maximum-pool-size / connection-timeout 在任何测试里都没生效——
- * 池子是 10 只因为那是 HikariCP 的内置默认，connection-timeout 实测 30000 而非配置的 3000。
- * 一段描述得很认真的设置，从未被执行过。
- *
- * <p>这条钉住的是「测试拿到的是主配置的值」。用 connection-timeout 而不是 pool-size
- * 做判据，因为后者和 Hikari 默认值恰好相等，分不出「配了」和「没配」。
+ * <p>判据用 connection-timeout 而不是 pool-size：后者和 Hikari 默认值恰好相等，分不出「配了」和「没配」。
  */
 @SpringBootTest
 @DisplayName("测试配置叠加主配置")
@@ -50,8 +44,8 @@ class TestConfigurationSanityTest extends AbstractPostgresTest {
     @Test
     @DisplayName("★ 合约地址必须以字符串到达应用：YAML 1.1 会把不加引号的 0x 十六进制当整数")
     void tokenAddressSurvivesYamlAsAString() {
-        // 2026-09-03 本地起应用实测：不加引号的 0x779877A7… 被解析成整数，再转回字符串成了 48 位十进制，
-        // Alchemy 对每一次 eth_getLogs 都回 Invalid params，窗口一路减到 1 块然后停机。
+        // 不加引号的 0x779877A7… 被解析成整数，再转回字符串成了 48 位十进制：
+        // 节点对每一次 eth_getLogs 都回 Invalid params，窗口一路减到 1 块然后停机
         assertThat(env.getProperty("chainpay.chain.token-address"))
                 .as("到达应用的地址必须是 0x + 40 位十六进制，不是十进制数")
                 .matches("0x[0-9a-fA-F]{40}");

@@ -23,7 +23,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
 /**
- * M6-⑤ · 管理员认证的规则，表可注入：口令 Argon2id 存散列；登录失败计数与锁定；会话有闲置与绝对两种过期；敏感操作要最近再认证过；改口令踢掉别的会话。
+ * 管理员认证的规则（时钟可注入）：口令 Argon2id 存散列；登录失败计数与锁定；会话有闲置与绝对两种过期；敏感操作要最近再认证过；改口令踢掉别的会话。
  */
 @DisplayName("M6-⑤ · 管理员认证规则")
 class AdminAuthServiceTest extends AbstractPostgresTest {

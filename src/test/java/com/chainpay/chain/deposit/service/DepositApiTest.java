@@ -21,7 +21,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 
 /**
- * 商户的收款接口（M3-④）：真 Tomcat、真签名、真 RLS。
+ * 商户的收款接口：真 Tomcat、真签名、真 RLS。
  * 形状照币安 / OKX：地址接口幂等；入账列表把「在路上」的钱也列出来（PENDING + level + confirmations）；余额分 available 与 pending；
  * 金额一律字符串；HELD 的原因不外露；别人的地址与入账结构上查不到。
  */
@@ -140,8 +140,6 @@ class DepositApiTest extends AbstractDepositPostingTest {
         assertThat(body).doesNotContain("审计").doesNotContain("hold_reason").doesNotContain("holdReason");
     }
 
-    // ------------------------------------------------------------------ 脚手架
-
     @Test
     @DisplayName("★ 查询参数类型不对或缺失 —— 400，不是 500")
     void badQueryParametersAreBadRequests() {
@@ -153,6 +151,8 @@ class DepositApiTest extends AbstractDepositPostingTest {
         assertThat(missingToken.statusCode()).as(missingToken.body()).isEqualTo(400);
         assertThat(missingToken.body()).contains("\"code\":\"2001\"");
     }
+
+    // ------------------------------------------------------------------ 脚手架
 
     private static int count(String haystack, String needle) {
         Matcher m = Pattern.compile(Pattern.quote(needle)).matcher(haystack);

@@ -25,7 +25,7 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
- * 内存里的一条链，实现 {@link ChainReader}。
+ * 内存里的一条链：读链实现 {@link ChainReader}，也能收交易、打包、出回执。
  *
  * <p>区块哈希是 {@code sha256("block-N")}，parentHash 是上一块的哈希——
  * 于是它天然是一条「链」，而测试可以在任何一点把它弄断：
@@ -34,7 +34,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * {@link #reportHead} 模拟节点落后，{@link #beforeLogs} / {@link #beforeCall} / {@link #beforeBlock} 在取日志 / 问合约 / 取区块头时插一个钩子，
  * {@link #injectIntoGetLogs} 让 getLogs 像撒谎的节点一样塞进范围外或哈希不对的日志。
  *
- * <p>M2-⑤ 的三种「不可信」：{@link #limitLogsRange} 让 getLogs 像提供商一样对范围设限并报错（大声的错），
+ * <p>三种「不可信」：{@link #limitLogsRange} 让 getLogs 像提供商一样对范围设限并报错（大声的错），
  * {@link #dropFromGetLogs} 让一条日志从 getLogs 消失但仍在回执里（安静的错），
  * 第二个 FakeChain 实例当审计节点（自相矛盾的错——两个实例的哈希是确定性的，默认一致，可各自篡改）。
  *
@@ -62,7 +62,7 @@ public final class FakeChain implements ChainReader, ChainSender {
     /** 撒谎的节点塞进 getLogs 响应里的日志：不看范围、不看分支、不看地址。 */
     private final List<RawLog> injectedIntoGetLogs = new CopyOnWriteArrayList<>();
 
-    // ------------------------------------------------------------------ M4-②：内存池
+    // ------------------------------------------------------------------ 内存池
     /** 一笔在内存池里等打包的交易。 */
     public record PendingTx(String hash, String from, long nonce, byte[] raw, BigInteger maxFeePerGas, BigInteger maxPriorityFeePerGas) {}
 
@@ -75,7 +75,7 @@ public final class FakeChain implements ChainReader, ChainSender {
     private final ConcurrentMap<String, Long> minedCount = new ConcurrentHashMap<>();
     /** 哈希 → 待打包。 */
     private final ConcurrentMap<String, PendingTx> mempool = new ConcurrentHashMap<>();
-    /** 已上链的交易哈希（③ 用；② 只用来回答 transactionKnown）。 */
+    /** 已上链的交易哈希。 */
     private final Set<String> minedHashes = ConcurrentHashMap.newKeySet();
     private volatile BigInteger estimatedGas = BigInteger.valueOf(52_000);
     private volatile JsonRpcException estimateFailure;
@@ -212,7 +212,7 @@ public final class FakeChain implements ChainReader, ChainSender {
 
     /**
      * 像节点一样收原文：按内容识别（同一份原文再发 = already known），编号低于已上链笔数 = nonce too low，
-     * 同编号已有一笔在池里 = replacement transaction underpriced（③ 再学会比费率）。
+     * 同编号已有一笔在池里且新的费率不够高 = replacement transaction underpriced。
      */
     @Override
     public String sendRawTransaction(byte[] raw) {
@@ -404,17 +404,17 @@ public final class FakeChain implements ChainReader, ChainSender {
         this.beforeLogs = hook;
     }
 
-    /** 每次 eth_call 前先跑一下：在里面抛异常就是模拟「问合约」时节点失败，写库就是模拟另一个实例插队。 */
+    /** 每次 eth_call 与 eth_estimateGas 前先跑一下：在里面抛异常就是模拟「问合约」时节点失败，写库就是模拟另一个实例插队。 */
     public void beforeCall(Runnable hook) {
         this.beforeCall = hook;
     }
 
-    /** 每次取某个区块头之前先跑它（参数是块号）：在里面重组，就是「取头和取日志之间链换了分支」。 */
     /** 问链上计数时插一手：抛异常 = 这一步就失败（发送任务每轮的第一次问节点）。 */
     public void beforeNonce(Runnable hook) {
         this.beforeNonce = hook;
     }
 
+    /** 每次取某个区块头之前先跑它（参数是块号）：在里面重组，就是「取头和取日志之间链换了分支」。 */
     public void beforeBlock(java.util.function.LongConsumer hook) {
         this.beforeBlock = hook;
     }

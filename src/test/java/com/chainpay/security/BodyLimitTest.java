@@ -23,8 +23,7 @@ import org.springframework.mock.web.MockHttpServletResponse;
  *
  * <p><b>为什么不能只写一条「发 2 MB → 期望 413」的 HTTP 测试：</b>
  * 那条对错误的实现也是绿的——先把 2 MB 全读进堆、再量大小、再回 413，照样 413。
- * 它证明不了「有界」。质询扫描（7.9 / 1.5）抓到的正是这个：
- * 常量、注释、检查都在，但检查跑在无界读取之后，攻击者的字节早已进堆。
+ * 它证明不了「有界」：常量、检查都在，但检查跑在无界读取之后，攻击者的字节早已进堆。
  *
  * <p>唯一能区分对错的输入是<b>一条永远不结束的流</b>：
  * 有界读取在读满上限那一刻停手，返回 413；
@@ -44,13 +43,11 @@ class BodyLimitTest extends AbstractPostgresTest {
     @Timeout(value = 10, unit = TimeUnit.SECONDS, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
     @DisplayName("★ 永不结束的请求体 —— 必须在有限时间内被拒，且不进入业务链")
     void endlessBodyIsRejectedInBoundedTime() throws Exception {
-        // ★ 第一版的无限流是「永远返回 'x'」，结果对未修复的代码不是超时而是
-        // OutOfMemoryError: Required array size too large——readAllBytes 一路涨到
-        // 2 GB 数组上限，把 Surefire 的 fork 整个炸掉，连「跑了 1 个」都报不出来。
-        // 那恰好证明了漏洞的真实后果：不是「最终会 413」，是 JVM 直接没了。
-        // 这一版先给 4 MB（远超 1 MB 上限），再永远阻塞：
+        // 流先给 4 MB（远超 1 MB 上限），再永远阻塞：
         //   有界读取 → 在 1 MB + 1 处停手，根本走不到阻塞点，立刻 413
         //   读到底   → 卡在阻塞点，被 @Timeout 的独立线程打断，干净地红
+        // 不用「永远返回 'x'」：读到底的实现会一路涨到 2 GB 数组上限抛 OutOfMemoryError，
+        // 把 Surefire 的 fork 整个炸掉，连报告都出不来。
         var mock = new MockHttpServletRequest("POST", "/api/v1/transfers");
         mock.setContentType("application/json");
         // 不设 Content-Length：模拟 chunked 编码——服务端无从预判长度，只能边读边数

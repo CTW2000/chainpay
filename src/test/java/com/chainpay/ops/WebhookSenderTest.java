@@ -23,7 +23,7 @@ import org.junit.jupiter.api.Test;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
-/** M6-③ · webhook 出口：真的 POST 到一个本地假接收端；四种载荷形状；非 2xx 算没送到；没配地址只打日志；日志与描述里只有主机名。 */
+/** webhook 出口：真的 POST 到一个本地假接收端；四种载荷形状；非 2xx 算没送到；没配地址只打日志；日志与描述里只有主机名。 */
 @DisplayName("M6-③ · webhook 出口")
 class WebhookSenderTest {
 

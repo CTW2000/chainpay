@@ -8,7 +8,7 @@ import java.util.Locale;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-/** EIP-55 的测试用例（eips.ethereum.org/EIPS/eip-55「Test Cases」，2026-09-07 取得），期望值逐字。 */
+/** EIP-55 的测试用例（eips.ethereum.org/EIPS/eip-55「Test Cases」），期望值逐字。 */
 @DisplayName("M3-① · EIP-55 校验和")
 class EthAddressTest {
 
@@ -41,7 +41,7 @@ class EthAddressTest {
     }
 
     /**
-     * 2026-09-22 收口：地址的形状只在 EthAddress 写一份，注解用 {@code SHAPE}、代码用 {@code isWellFormed}。
+     * 地址的形状只在 EthAddress 写一份，注解用 {@code SHAPE}、代码用 {@code isWellFormed}。
      * 两者必须对每个样本给同一个答案——否则就是「请求里放行、代码里拒绝」或者反过来，边界从中间裂开。
      */
     @Test

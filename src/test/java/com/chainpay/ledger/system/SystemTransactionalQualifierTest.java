@@ -13,10 +13,10 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * 2026-09-15 起容器里有两个事务管理器：主池的（默认候选）与系统池的（限定名 system）。
+ * 容器里有两个事务管理器：主池的（默认候选）与系统池的（限定名 system）。
  * 没写限定名的 {@code @Transactional} 一律落在主池上——放在一个用系统身份干活的类里，就是「以为在系统事务里，其实系统连接上的 SQL 各自提交」，
  * 不报错。所以凡是在代码里（不算注释）用到 SystemLedger 的源文件，其中的 {@code @Transactional} 必须写明限定名：
- * 写 system，或者明确写主池的名字，逼作者当场想清楚用哪个池（CLAUDE.md「薄实现 vs Boot 官方双数据源」的换法里定好的这条）。
+ * 写 system，或者明确写主池的名字，逼作者当场想清楚用哪个池。
  * 扫源码就够，规则的形状是「某类文件里某种注解必须带参数」；匹配集合不能为空。
  */
 @DisplayName("系统侧的 @Transactional 必须写明限定名")

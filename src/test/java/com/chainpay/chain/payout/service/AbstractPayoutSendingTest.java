@@ -17,7 +17,7 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 
 /**
  * 发送任务的脚手架：一个商户、25 LINK 可用余额、一把公开的测试热钱包（Hardhat #0）、一条有内存池的假链。
- * {@link #queued} 像 ④ 的接口那样先冻结再插申请行（同一事务的形状由 ④ 负责，这里分两步只是为了造数据）。
+ * {@link #queued} 像提现接口那样先冻结再插申请行（同一事务的形状由提现接口负责，这里分两步只是为了造数据）。
  */
 abstract class AbstractPayoutSendingTest extends AbstractPostgresTest {
 
@@ -61,7 +61,7 @@ abstract class AbstractPayoutSendingTest extends AbstractPostgresTest {
         requests = 0;
     }
 
-    /** 像 ④ 那样：先冻结，再插一条 QUEUED 的申请。 */
+    /** 先冻结，再插一条 QUEUED 的申请。 */
     protected long queued(String amount) {
         String key = "req-" + (++requests);
         BigDecimal value = new BigDecimal(amount);

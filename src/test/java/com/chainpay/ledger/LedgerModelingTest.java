@@ -23,11 +23,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DataIntegrityViolationException;
 
 /**
- * V2 三个建模缺口的守卫。
+ * 账本的<b>建模</b>契约：币种、由数据库守的余额约束、业务类型与发生时间、加锁顺序。
  *
- * <p>{@code LedgerInvariantTest} 验证的是<b>行为</b>（幂等、原子、不超支）。
- * 这个类验证的是<b>建模</b> —— 它守的东西，行为测试一个都抓不到，
- * 这也正是那三个缺口能一直藏到对照官方文档时才被发现的原因。
+ * <p>{@code LedgerInvariantTest} 验证的是<b>行为</b>（幂等、原子、不超支）；这里守的东西，行为测试一个都抓不到。
  */
 @DisplayName("M0 · 建模契约（V2）")
 class LedgerModelingTest extends AbstractPostgresTest {
@@ -43,23 +41,18 @@ class LedgerModelingTest extends AbstractPostgresTest {
         alice = createAccount("user:alice:USDT", USDT, "LIABILITY");
     }
 
-    // ------------------------------------------------------------------
-    // 缺口 1 · 余额不变量必须由数据库守，不能只由 Java 守
-    // ------------------------------------------------------------------
-
     // ==================================================================
-    // 币种：分录币种必须等于账户币种（质询扫描 9.3 / 3.1-a / 5.10）
+    // 币种：分录币种必须等于账户币种
     // ==================================================================
 
     @Test
     @DisplayName("★ 币种错配 —— 转账行与分录行都在数据库层被拒，而不是三个判官全绿")
     void crossCurrencyRowsCannotBeStored() {
-        // 扫描前的现状：这条规则只由 Java 的 requireCurrencyMatches 守。
-        // 绕过 Java 层直接写 SQL，错配分录存得进去，而且——
+        // 只靠 Java 入口那道检查不够：绕过 Java 直接写 SQL，错配分录要是存得进去——
         //   ledger_invariant   按 entry.currency 分组，两条 BTC 分录自己配平 → 绿
         //   balance_consistency 求和不看币种 → 绿
         //   account_balance_ck  只看数字 → 绿
-        // 判官有盲区，测试集又从不踩进盲区（全是 USDT），两者互相掩护。
+        // 判官有盲区，测试又只用一种币时，两者互相掩护。
         // 能让状态无法构造的约束，强过任何检测：V8 的复合外键 (account_id, currency)。
         long a = createAccount("xc:a:USDT", "USDT", "LIABILITY", true);
         long b = createAccount("xc:b:USDT", "USDT", "LIABILITY");
@@ -94,10 +87,7 @@ class LedgerModelingTest extends AbstractPostgresTest {
         // 上面那条守的是「绕过 Java 直接写 SQL 也存不进去」；这一条守的是入口自己那道
         // requireCurrencyMatches。两道都要有：数据库那道拦得住任何写路径，但它给的是
         // DataIntegrityViolationException，落到 HTTP 上是 500；入口这道给的是 CURRENCY_MISMATCH，
-        // 映射成 400 + 2006，客户端知道该改什么。
-        //
-        // 2026-09-22 从 ApiContractTest 下移到这里：商户接口不再收账户 id，币种由 token（提现）
-        // 或收款地址（入账）决定，HTTP 上已经造不出这个组合；而账本入口仍被那两条路径调用。
+        // 映射成 400 + 2006，客户端知道该改什么。HTTP 上造不出这个组合（商户接口不收账户 id），所以在服务层测。
         assertThatThrownBy(() -> ledger.transfer(new TransferCommand(
                 "xc-entrance", "BTC", new BigDecimal("1"), mint, alice, TransferCode.INTERNAL, null)))
                 .isInstanceOf(LedgerException.class)
@@ -108,9 +98,8 @@ class LedgerModelingTest extends AbstractPostgresTest {
     @Test
     @DisplayName("★ 多币种同时在账本里 —— ledger_invariant 必须出现两行，且判官在两行下仍能响")
     void invariantJudgeWorksAcrossMultipleCurrencies() {
-        // 质询扫描 5.10：整个测试集只用 USDT，ledger_invariant 从没出现过第二行。
-        // 「每种币的分录之和为 0」里的「每种币」是个从没量到东西的量词。
-        // 这条先证明分组真的发生了，再证明判官在多组下仍能抓到问题（5.5 的自证）。
+        // 「每种币的分录之和为 0」里的「每种币」要量到第二组才算数：
+        // 先证明分组真的发生了，再证明判官在多组下仍能抓到问题。
         // USDT 的 mint / alice 由本类 @BeforeEach 建好；这里只补 BTC 的一对
         long mintBtc = createAccount("mc:mint:BTC", "BTC", "EQUITY", true);
         long bob     = createAccount("mc:bob:BTC",  "BTC", "LIABILITY");
@@ -131,14 +120,15 @@ class LedgerModelingTest extends AbstractPostgresTest {
         jdbc.sql("UPDATE account SET balance = balance - 1 WHERE id = :id").param("id", bob).update();
     }
 
+    // ------------------------------------------------------------------
+    // 余额不变量必须由数据库守，不能只由 Java 守
+    // ------------------------------------------------------------------
+
     @Test
     @DisplayName("绕过 LedgerService 直接改余额为负 —— 数据库必须拒绝")
     void databaseRejectsNegativeBalanceEvenWhenServiceIsBypassed() {
-        // 这里故意不走 ledger.transfer()，而是直接发 SQL。
-        // 模拟的是：将来某个新接口、某个运维脚本、某条手工 SQL —— 任何绕过服务层的路径。
-        //
-        // 如果不变量只写在 Java 的 `if (balance < amount) throw` 里，这一步会成功，
-        // 账本被写坏且没有任何报错。account_balance_ck 才是真正的最后一道防线。
+        // 故意不走 ledger.transfer()，直接发 SQL：模拟将来某个新接口、运维脚本、手工 SQL——任何绕过服务层的路径。
+        // 不变量若只写在 Java 里，这一步会成功、账本被写坏且没有报错；account_balance_ck 才是最后一道防线。
         assertThatThrownBy(() ->
                 jdbc.sql("UPDATE account SET balance = -1 WHERE id = :id")
                         .param("id", alice)
@@ -160,7 +150,7 @@ class LedgerModelingTest extends AbstractPostgresTest {
     }
 
     // ------------------------------------------------------------------
-    // 新判官本身也要被验证：它得真的能抓到漂移
+    // 漂移判官本身也要被验证：它得真的能抓到漂移
     // ------------------------------------------------------------------
 
     @Test
@@ -189,7 +179,7 @@ class LedgerModelingTest extends AbstractPostgresTest {
     }
 
     // ------------------------------------------------------------------
-    // 缺口 2 / 3 · 业务类型（为什么）与业务发生时间（何时）
+    // 业务类型（为什么）与业务发生时间（何时）
     // ------------------------------------------------------------------
 
     @Test
@@ -247,16 +237,12 @@ class LedgerModelingTest extends AbstractPostgresTest {
     /**
      * A→B 与 B→A 同时高并发发生，必须全部成功，一笔都不能因死锁失败。
      *
-     * <p><b>这个测试守的是 {@code lockBothInIdOrder} 里的那个排序。</b>
-     * 在它存在之前，「按 id 升序加锁」这行代码没有任何测试证明它在防什么 ——
-     * 把排序去掉，原有的全部测试照样绿，因为它们只有 alice→bob 一个方向。
+     * <p><b>这个测试守的是 {@code lockBothInIdOrder} 里的那个排序</b>：别的测试只有 alice→bob 一个方向，
+     * 把排序去掉它们照样绿。
      *
-     * <p>失效场景：V2 让步骤 ⑦ 更新两行 balance，于是每个事务先后持有两把行锁。
+     * <p>失效场景：步骤 ⑦ 更新两行 balance，每个事务先后持有两把行锁。
      * 不排序时，A 持 alice 等 bob、B 持 bob 等 alice —— 循环等待，
      * PostgreSQL 在 deadlock_timeout 后杀掉其中一个，那笔转账失败。
-     *
-     * <p>这是「防护措施存在但无人验证」的修复 —— 和 {@code balanceDrift()}
-     * 曾经无人调用是同一类问题的另一种形态。
      */
     @Test
     @DisplayName("A→B 与 B→A 并发 —— 按 id 升序加锁必须避免死锁")
@@ -280,10 +266,8 @@ class LedgerModelingTest extends AbstractPostgresTest {
             }
         }
 
-        // 只报去重后的失败类型，不报每一条。
-        // 死锁会连锁耗尽连接池（本项目实测：一次死锁引发近百条
-        // CannotCreateTransactionException），全部打印出来的失败信息没法读，
-        // 而真正有信息量的是「出现了哪几种失败」。
+        // 只报去重后的失败类型：一次死锁会连锁耗尽连接池、引出近百条 CannotCreateTransactionException，
+        // 全打印出来没法读，有信息量的是「出现了哪几种失败」。
         assertThat(failed.get())
                 .as("双向并发不应产生任何失败；出现过的失败类型：%s",
                         reasons.stream().distinct().limit(5).toList())

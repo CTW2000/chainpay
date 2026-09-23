@@ -20,47 +20,14 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 
 /**
- * M1 六层防护的守卫。
+ * API 安全的守卫：签名验证、拿着别人的对象 id 来碰、重放与幂等。手工演示不会在将来自动重跑，这些性质要由测试钉住。
  *
- * <p><b>为什么必须有这个类：</b>
+ * <p>这里用真实 HTTP 请求（{@code @SpringBootTest} 起真 Tomcat + {@link HttpClient}），而不是 MockMvc：
+ * <b>签名覆盖 method、path、body，而 MockMvc 绕过了真实的 Servlet 容器和过滤器链</b>，
+ * 用它测出来的「通过」不能证明真实请求也通过——和坚持用真 Postgres 而不是 H2 是同一条理由。
  *
- * <p>M1 的四步（认证、授权、错误码、签名）全部是用 curl 手工演示验证的。
- * 那些演示很有说服力，<b>但它们不会在将来自动重跑</b> ——
- * 只要有人改坏了签名逻辑、或者新加一个接口忘了走授权，没有任何东西会发现。
- *
- * <p>这与本项目已经付过两次学费的形状完全一致：
- * <b>测试的价值 = 抓 bug 的能力 × 被运行的频率。后者为 0 时前者再高也是 0。</b>
- *
- * <p>这里用真实 HTTP 请求（{@code @SpringBootTest} 起真 Tomcat +
- * {@link HttpClient}），而不是 MockMvc。原因：<b>签名覆盖 method、path、body，
- * 而 MockMvc 绕过了真实的 Servlet 容器和过滤器链</b>，
- * 用它测出来的「通过」不能证明真实请求也通过。
- * 这和我们坚持用真 Postgres 而不是 H2 是同一条理由。
- *
- * <p><b>2026-09-22 换靶子（用户定：移除通用转账接口）。</b>此前每条测试打的都是
- * {@code POST /api/v1/transfers} 或 {@code GET /api/v1/accounts/{id}/balance}，两个接口都删了——
- * 商户接口从此不收任何账本账户 id。签名层的性质与打哪个接口无关，靶子换成白名单接口
- * （{@code /api/v1/withdrawal-addresses}：登记幂等、不依赖链上配置、空列表也回 200）。
- * <b>不换会怎样</b>：过滤器在路由之前跑，打一条不存在的路径照样回 401，那 8 条签名测试会「绿着但什么都不证明」
- * ——和 2026-09-02 扫描抓到的空转是同一种（见 tamperedBodyIsRejected 里的注释）。
- *
- * <p>随接口一起删掉的用例，以及它们的性质现在住在哪里：
- * <ul>
- *   <li>「evilco 转走 acme 的钱 → 403」「贷方也必须是自己的」：请求体里递账户 id 这种形状没有了，
- *       {@code ControllerBoundaryTest} 守着不许再有；数据库层由 {@code TenantIsolationTest}
- *       「往别人的账户写分录 → 被数据库拒」兜着</li>
- *   <li>「偷看别人的余额 → 403」：没有按 id 读余额的接口了；跨商户读由
- *       {@code WithdrawalApiTest}「别的商户看不到」覆盖</li>
- *   <li>「无权访问 与 不存在 回答一致」：<b>删接口那天它变成了空转</b>（两边都是 404「路径不存在」，
- *       body 一样，照样绿）。搬到下面 ② 层的 disable 接口——那里 RLS 让「不是你的」和「不存在」
- *       都是「改了 0 行」，是结构性成立的</li>
- *   <li>「余额不足 → 4001」「金额格式非法 → 400」「同键不同体 → 4003」「正常转账成功」：
- *       {@code WithdrawalApiTest} 在真实业务路径上都有</li>
- *   <li>「非法枚举值不泄露合法值」：全项目再没有客户端给的枚举（提现列表的 {@code status}
- *       是字符串过滤，不转枚举）</li>
- *   <li>「两个商户各用同一个幂等键互不干扰」：约束是账本的 {@code UNIQUE (submitter_merchant_id,
- *       idempotency_key)}，测试下移到 {@code LedgerInvariantTest}（夹具也便宜）</li>
- * </ul>
+ * <p><b>靶子必须是真实存在的路由</b>：过滤器在路由之前跑，打一条不存在的路径照样回 401，
+ * 签名测试会「绿着但什么都不证明」。删接口时，打它的测试要逐条看过，不能只看红的那些。
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @DisplayName("M1 · API 安全契约")
@@ -117,9 +84,8 @@ class ApiSecurityTest extends AbstractPostgresTest {
     }
 
     /**
-     * 谁创建谁清理。基类每个测试只 TRUNCATE entry / transfer / account，白名单表留着，
-     * 而它指向 merchant——别的测试类做 `DELETE FROM merchant` 时会撞外键，那边的商户就删不掉
-     * （2026-09-22 实测：留下的白名单行让另外两个测试类一口气红 14 条）。
+     * 谁创建谁清理：白名单表不在基类的 TRUNCATE 里，而它指向 merchant——留着它，
+     * 别的测试类 DELETE FROM merchant 时会撞外键，那边的断言跟着红。
      */
     @AfterEach
     void removeWhitelistRows() {
@@ -168,10 +134,8 @@ class ApiSecurityTest extends AbstractPostgresTest {
                 .header("X-CP-API-SIGN", signature)                          // 对 honestBody 算的
                 .POST(HttpRequest.BodyPublishers.ofString(tamperedBody)));   // 实际发 tamperedBody
 
-        // ★ 2026-09-02 之前这条测试是空转的（质询扫描 5.5/5.4/7.7）：
-        // 它算了 nonce 进签名，却没把 X-CP-API-NONCE 头发出去，服务端代入 ""，
-        // 签名必然对不上——把 body 改回原样照样 401。
-        // 「签名覆盖 body」这个断言当时什么都没守：摘掉 body 的覆盖它也绿。
+        // ★ 小心空转：除了 body，其余一切（包括 X-CP-API-NONCE 头）都必须和签名时一致。
+        // 漏发一个头，签名会因为别的原因对不上，把 body 改回原样也照样 401——摘掉 body 的覆盖这条也绿。
         assertThat(response.statusCode()).as("签名必须覆盖 body").isEqualTo(401);
         assertThat(addressCount()).as("被拒的请求不能留下任何记录（只剩 seed 那一条）").isEqualTo(1);
     }
@@ -246,12 +210,8 @@ class ApiSecurityTest extends AbstractPostgresTest {
     @Test
     @DisplayName("★ evilco 用自己合法的凭证停用 acme 的白名单地址 —— 拒绝，且那一行没动")
     void evilcoCannotDisableAcmesWhitelistAddress() {
-        // 这是 M1 第二步那个攻击的今天形态：认证这关 evilco 是光明正大过的，
-        // 它确实是 evilco；要挡住的是「合法身份 + 别人的对象 id」。
-        // 2026-09-22 之前这条打的是转账接口（请求体里递 acme 的账户 id），那种形状已经没有了。
-        //
-        // 挡住它的不再是应用层的归属检查（那个服务连同转账接口一起删了），而是 RLS：
-        // UPDATE payout_address … WHERE id = :id 跑在商户连接上，别人的行不在可见范围里，
+        // 认证这关 evilco 是光明正大过的，它确实是 evilco；要挡住的是「合法身份 + 别人的对象 id」。
+        // 挡住它的是 RLS：UPDATE payout_address … WHERE id = :id 跑在商户连接上，别人的行不在可见范围里，
         // 改了 0 行 → 服务判为「白名单里没有这个地址」。
         var response = signedPost(evilSecret, "ak_evilco", TARGET + "/" + acmeAddressId + "/disable", "");
 
@@ -279,21 +239,11 @@ class ApiSecurityTest extends AbstractPostgresTest {
     @Test
     @DisplayName("★ 原样重放 —— 被 nonce 挡住；换新 nonce 的重试 —— 被接口的幂等兜住")
     void replayIsBlockedAndLegitimateRetryStillWorks() {
-        // ★ 这条测试在 M1.5 变了语义，值得记下来为什么 ★
-        //
-        // 原来的版本断言「重放返回 200，靠幂等键不重复扣款」。
-        // 那时挡住损失的只有账本层，认证层是放行的 ——
-        // 意味着任何一个**不经过账本**的接口（发通知、触发结算）都会中招。
-        //
-        // M1.5 加了签名唯一性之后，原样重放在认证层就被拒了（1002）。
-        // 但这带来一个新问题：客户端超时后重试，发的就是一模一样的请求。
-        // 如果它被永久拒绝，客户端就卡住了 —— 它不知道原来那笔到底成没成功。
-        //
-        // 答案是两个机制各管一件事：
-        //   nonce  —— 防「别人」截获你的请求原样重发
-        //   幂等   —— 防「你自己」超时后重发
-        // 所以客户端重试的正确姿势是：**换一个新 nonce 重新签名，请求体保持不变**。
-        // （2026-09-22：靶子从转账接口换成白名单登记——它同样幂等，已有就返回已有的那一条。）
+        // 两个机制各管一件事：
+        //   nonce —— 防「别人」截获你的请求原样重发：在认证层就拒（1002）。只靠业务幂等的话，
+        //            任何不经过账本的接口（发通知、触发结算）都会中招
+        //   幂等  —— 防「你自己」超时后重发：客户端不知道原来那笔成没成功，重试必须能过
+        // 所以客户端重试的正确姿势是：换一个新 nonce 重新签名，请求体保持不变。
         String body = addressBody(NEW_ADDRESS, "replay");
         long ts = System.currentTimeMillis();
         String nonce = SignedRequests.newNonce();

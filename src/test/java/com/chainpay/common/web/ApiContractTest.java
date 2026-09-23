@@ -47,10 +47,7 @@ class ApiContractTest extends AbstractPostgresTest {
     private final HttpClient http = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(5)).build();
 
-    /**
-     * 信封、重放、请求校验这几组的靶子（2026-09-22 换：原来是通用转账接口与按 id 查余额，两个都删了）。
-     * 挑白名单接口的理由：登记幂等（重发不会多出一行）、不依赖链上配置、空列表也回 200。
-     */
+    /** 信封、重放、请求校验这几组的靶子。挑白名单接口：登记幂等（重发不会多出一行）、不依赖链上配置、空列表也回 200。 */
     private static final String TARGET = "/api/v1/withdrawal-addresses";
 
     /**
@@ -62,10 +59,8 @@ class ApiContractTest extends AbstractPostgresTest {
     private static final String ADDRESS = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
     /**
-     * 用 V13 种下的那一行（Sepolia 的 LINK），<b>不自己插一行新代币</b>。
-     * 基类每个测试只 TRUNCATE entry / transfer / account，{@code chain_token} 留着——
-     * 往它插一行假代币会跨测试类泄漏：对账那组拿着这个地址去问假节点的余额，
-     * 当场「execution reverted」，一口气红 28 条（2026-09-22 实测踩过）。
+     * 用 V13 种下的那一行（Sepolia 的 LINK），<b>不自己插一行新代币</b>：基类只 TRUNCATE entry / transfer / account，
+     * {@code chain_token} 留着——插一行假代币会跨测试类泄漏，对账那组会拿它去问假节点的余额，当场「execution reverted」。
      */
     private static final String TOKEN = "0x779877a7b0d9e8603169ddbd7836e478b4624789";
 
@@ -96,9 +91,8 @@ class ApiContractTest extends AbstractPostgresTest {
     }
 
     /**
-     * 谁创建谁清理。基类每个测试只 TRUNCATE entry / transfer / account，白名单表留着，
-     * 而它指向 merchant——别的测试类做 `DELETE FROM merchant` 时会撞外键，
-     * 于是那边的商户删不掉、断言「被拦住就什么都没建」当场红（2026-09-22 实测：一口气连累 14 条）。
+     * 谁创建谁清理：白名单表不在基类的 TRUNCATE 里，而它指向 merchant——留着它，
+     * 别的测试类 DELETE FROM merchant 时会撞外键，那边的断言跟着红。
      */
     @AfterEach
     void removeWhitelistRows() {
@@ -159,10 +153,8 @@ class ApiContractTest extends AbstractPostgresTest {
     @Test
     @DisplayName("★ 段位与可重试性必须一致 —— 只有 5xxx 可以原样重试")
     void onlyTheRateLimitSegmentIsRetryable() {
-        // 这条把「第一位数字就是重试策略」从注释里的约定，
-        // 变成一个加错码就会失败的检查。
-        // 客户端靠这条约定处理它**没见过**的新错误码；
-        // 约定一旦被破坏，客户端会以错误的方式重试，而我们不会收到任何信号。
+        // 客户端靠「第一位数字就是重试策略」处理它没见过的新错误码；约定一旦被破坏，
+        // 客户端会以错误的方式重试，而我们收不到任何信号。这条让加错码的那一刻就变红。
         for (ErrorCode code : EnumSet.allOf(ErrorCode.class)) {
             boolean segmentSaysRetryable = code.segment() == '5' || code.segment() == '9';
             assertThat(code.retryable())
@@ -195,10 +187,7 @@ class ApiContractTest extends AbstractPostgresTest {
         assertThat(badAmount.body()).contains("\"code\":\"2001\"");
     }
 
-    // 「不存在 与 无权访问 回答必须一致」2026-09-22 搬到 ApiSecurityTest：
-    // 按 id 查余额的接口删了之后，这条测试两边都拿到 404「路径不存在」——**照样绿，但什么都不证明**。
-    // 新家是商户接口唯一还收对象 id 的地方（停用白名单地址），那里 RLS 让「不是你的」和「不存在」
-    // 都是「改了 0 行」，是结构性成立的。
+    // 「不存在与无权访问回答必须一致」在 ApiSecurityTest（停用白名单地址：RLS 让两者都是「改了 0 行」）。
 
     // ==================================================================
     // 重放防护
@@ -246,18 +235,8 @@ class ApiContractTest extends AbstractPostgresTest {
     @Test
     @DisplayName("★ 内容完全相同的并发 GET —— 因为 nonce 不同，不会被误判成重放")
     void identicalConcurrentGetsAreNotTreatedAsReplays() {
-        // ★ 这条测试记录了一次设计返工 ★
-        //
-        // 加 nonce 之前，签名 = f(时间戳, 方法, 路径, body)，是决定性函数。
-        // 同一毫秒里两个内容相同的 GET 会算出**同一个签名** ——
-        // 如果拿签名当「请求身份证」，第二个就被当成攻击拒掉了。
-        // 实测：并发发起 160 次只用掉 5 个不同的毫秒值，最挤的一毫秒挤了 39 个。
-        //
-        // 当时的权宜之计是「GET 不做重放检查」，但那给未来所有
-        // body 为空的 POST 接口埋了一颗看不见的雷 —— 而且没写在任何地方。
-        //
-        // 加 nonce 之后，两个职责彻底分开：签名只管「是不是你签的」，
-        // nonce 只管「是不是第一次」。GET 不再需要任何特例。
+        // 签名只管「是不是你签的」，nonce 只管「是不是第一次」。签名是决定性函数：拿它当请求的身份证，
+        // 同一毫秒里内容相同的两个请求会算出同一个签名，第二个被当成重放拒掉——并发时一毫秒挤几十个请求并不罕见。
         String path = TARGET;
         long ts = System.currentTimeMillis();   // 故意用同一个时间戳
 
@@ -276,8 +255,7 @@ class ApiContractTest extends AbstractPostgresTest {
     @Test
     @DisplayName("★ GET 也受重放保护 —— nonce 重复必被拒")
     void repeatingANonceOnAGetIsAlsoRejected() {
-        // 加 nonce 之前 GET 完全没有重放保护（攻击者能重放一次查询，
-        // 拿到余额这类他本来看不到的数据）。现在补上了。
+        // GET 也要防重放：重放一次查询，攻击者就能拿到余额这类他本来看不到的数据
         String path = TARGET;
         long ts = System.currentTimeMillis();
         String nonce = SignedRequests.newNonce();
@@ -292,14 +270,8 @@ class ApiContractTest extends AbstractPostgresTest {
     @Test
     @DisplayName("★ 攻击者改掉 nonce 想绕过重放检查 —— 签名立刻对不上")
     void changingTheNonceInvalidatesTheSignature() {
-        // ★ 这条才是 nonce 机制真正成立的原因 ★
-        //
-        // 如果 nonce 只是一个「旁路的键」、不参与签名计算，
-        // 那么攻击者截获请求后只要换个 nonce 就能重放 ——
-        // 签名还是那个签名，依然验得过，而重放检查查不到这个新 nonce。
-        // 整套防护会变成一行摆设。
-        //
-        // nonce 参与签名，意味着改它就等于改请求内容，签名必然失效。
+        // ★ nonce 机制成立的前提：它参与签名 ★
+        // 若 nonce 只是旁路的键，攻击者截获请求后换个 nonce 就能重放——签名照样验得过，重放检查又查不到新 nonce。
         String path = TARGET;
         long ts = System.currentTimeMillis();
         String nonce = SignedRequests.newNonce();
@@ -358,10 +330,8 @@ class ApiContractTest extends AbstractPostgresTest {
     @Test
     @DisplayName("★ nonce 长度必须固定 —— 变长会让签名拼接产生歧义，超长会被用来打 Redis")
     void nonceLengthIsEnforced() {
-        // 两个理由都是承重的：
-        //   上限 —— 不限长的话，每个请求塞 1MB nonce，Redis 内存几分钟被吃光
-        //   定长 —— prehash 各段直接拼接不加分隔符，nonce 可变长会让
-        //           "ab"+"c" 和 "a"+"bc" 拼出同一个串、算出同一个签名
+        // 上限是承重的：不限长的话，每个请求塞 1MB nonce，Redis 内存几分钟被吃光。
+        // 定长让重放键的大小可预期；拼接的唯一性由 CP2 的换行分隔保证，不靠 nonce 定长
         String path = TARGET;
         long ts = System.currentTimeMillis();
         String tooShort = "abcd";
@@ -377,10 +347,7 @@ class ApiContractTest extends AbstractPostgresTest {
     @Test
     @DisplayName("★ 每一个 LedgerException.Reason 都必须映射到一个 ErrorCode")
     void everyLedgerReasonIsMapped() {
-        // 质询扫描 6.1 指出：ApiExceptionHandler 的注释声称「新增 Reason 忘了映射会让测试当场变红」，
-        // 但全仓没有任何测试遍历 Reason.values()——那句话是空头支票。
-        // 漏映射的真实后果是 Map.get() 返回 null，然后在 ApiResponse.error() 里 NPE，
-        // 一个业务拒绝被伪装成 500。这条把支票兑现。
+        // 漏映射时查表得到 null，处理器随后 NPE：一个业务拒绝被伪装成 500
         for (var reason : com.chainpay.ledger.service.LedgerException.Reason.values()) {
             assertThat(ApiExceptionHandler.errorCodeFor(reason))
                     .as("Reason.%s 没有对应的 ErrorCode", reason)
@@ -391,8 +358,7 @@ class ApiContractTest extends AbstractPostgresTest {
     @Test
     @DisplayName("★ 超过 1 MB 的请求体 —— 413，且和其他错误一样走信封")
     void oversizedBodyIsRejectedWithEnvelope() throws Exception {
-        // 质询扫描 6.5：过滤器里其他每一处拒绝都走 errors.write，唯独 413 是裸
-        // setStatus + return，空 body。客户端按信封解析会拿到解析异常，多半当传输失败重试。
+        // 空 body 的 413 会让按信封解析的客户端拿到解析异常，多半当传输失败重试。
         // 这条不需要签名：体积检查必须发生在验签之前（读 body 是验签的前提）。
         String oversized = "x".repeat(1024 * 1024 + 1);
         var response = send(HttpRequest.newBuilder()
@@ -407,25 +373,20 @@ class ApiContractTest extends AbstractPostgresTest {
     }
 
     // ==================================================================
-    // 账本拒绝路径（质询扫描 5.1a：这些 throw 之前没有任何断言守着）
+    // 金额的写法与范围（在边界挡住）
     // ==================================================================
 
     /**
-     * 2026-09-21：金额此前只有 {@code @NotBlank}，控制器拿到什么就 {@code new BigDecimal} 什么。
-     * {@code 1E-999999999} 一个请求打挂进程、一百万位的普通写法光解析就要 11 秒，都是从这里进来的。
-     * 其中 {@code ٣} 是阿拉伯-印度数字的 3：BigDecimal 认所有文字的数字，正则的 {@code \d} 只认 ASCII 的 0–9。
-     *
-     * <p><b>2026-09-22 换靶子后多了两条</b>（19 位小数、21 位整数）。此前它们各自是一条测试、断言 2004：
-     * 转账接口用的是 {@code PLAIN_DECIMAL}，只管写法、范围交给账本，所以回 2004。那个接口删了，
-     * 而提现与限额用的是 {@code FITTING_DECIMAL}（范围也写进正则），装不下的金额在边界就回 2001、到不了账本。
+     * 提现与限额的金额用 {@code FITTING_DECIMAL}（写法与范围都写进正则），装不下的金额在边界就回 2001、到不了账本。
+     * {@code ٣} 是阿拉伯-印度数字的 3：BigDecimal 认所有文字的数字，正则的 {@code \d} 只认 ASCII 的 0–9。
      * 账本那一侧「装不下 → 2004、报错只说几位不写金额」由 {@code LedgerAmountBoundsTest} 在服务层守着。
      */
     @ParameterizedTest(name = "金额 [{0}] → 400 / 2001")
     @ValueSource(strings = {"1E-5", "1e2", "1E+3", "+1", "-1", "1.", ".5", " 1", "1,000", "0x10", "NaN", "٣",
             "10000000000000000000000000000000000000000000000000000000000000000",   // 65 位
             "0.1234567890123456789",           // 19 位小数：多出的那位会被 NUMERIC(38,18) 静默四舍五入
-            "100000000000000000000",           // 21 位整数：到了数据库是 numeric field overflow → 500 + 9001
-            "1E-100000000", "1E-999999999"})   // 修好之前前者回一个 100 MB 的报错，后者打挂进程
+            "100000000000000000000",           // 21 位整数：NUMERIC(38,18) 的整数部分只有 20 位
+            "1E-100000000", "1E-999999999"})   // 写全分别是 1 亿位、10 亿位
     @DisplayName("★ 金额只收装得下的普通小数写法 —— 指数、正负号、空格、别的文字的数字、超长、超范围都在边界 400 / 2001")
     void amountMustBeAPlainDecimal(String amount) {
         var r = signedPost(WITHDRAWALS, withdrawalBody(amount, "pf-1"));
@@ -443,9 +404,7 @@ class ApiContractTest extends AbstractPostgresTest {
         assertThat(r.body()).contains("\"code\":\"2001\"");
     }
 
-    // 「转账币种与账户不符 → 2006」2026-09-22 下移到 LedgerModelingTest：
-    // 商户接口不再收账户 id，币种也由 token 决定（提现）或由收款地址决定（入账），HTTP 上已经造不出这个组合。
-    // 而账本自己那道 requireCurrencyMatches 还在，测试跟着它走到服务层——被守的东西在哪，测试就该在哪。
+    // 「币种与账户不符 → 2006」HTTP 上已造不出来（商户接口不收账户 id），由 LedgerModelingTest 在服务层守。
 
     // ==================================================================
     // 错误信息的转义
@@ -454,18 +413,9 @@ class ApiContractTest extends AbstractPostgresTest {
     @Test
     @DisplayName("★ msg 里带引号/反斜杠/换行 —— 响应仍是合法 JSON，内容原样保留")
     void errorMessagesAreEscapedNotConcatenated() throws Exception {
-        // ★ 这条守的是「JSON 注入」，和 SQL 注入是同一个家族 ★
-        //
-        // 第一版的实现是手拼字符串：
-        //     "{\"code\":\"" + code + "\",\"msg\":\"" + msg + "\",\"data\":null}"
-        // 它当时是对的，但对得很脆弱 —— 前提是「msg 永远只来自代码里的常量」。
-        // 而这个前提没有任何东西在守。打破它不需要有人写恶意代码，
-        // 只需要有人做一件完全合理的事：让错误信息更有帮助一点，比如
-        //     "API key " + apiKey + " 无效"      ← apiKey 是客户端传来的请求头
-        // 攻击者传一个带引号的 key，就能往响应体里注入自己的字段。
-        //
-        // 交给 Jackson 之后，这个前提不再是前提。这条测试钉住那件事：
-        // 任何人把这里改回字符串拼接，它立刻变红。
+        // ★ 守的是「JSON 注入」，和 SQL 注入同一个家族 ★
+        // 手拼 JSON 只在「msg 永远只来自代码里的常量」时成立，而这个前提没人守：有人把客户端传来的 api key
+        // 拼进错误信息，攻击者传一个带引号的 key 就能往响应体里注入字段。把这里改回字符串拼接，这条立刻变红。
         String hostile = "他说\"不行\"，路径 C:\\tmp\n换行\t制表";
 
         var response = new org.springframework.mock.web.MockHttpServletResponse();
@@ -498,10 +448,6 @@ class ApiContractTest extends AbstractPostgresTest {
         return "{\"address\":\"%s\",\"label\":\"x\"}".formatted(address);
     }
 
-    /**
-     * 提现申请的请求体。金额那条正则由 {@code @Valid} 在业务逻辑之前跑，
-     * 所以格式不合法的那些用例走不到代币、白名单、余额任何一道门，不必为它们准备夹具。
-     */
     private String withdrawalBody(String amount, String key) {
         return """
                 {"token":"%s","toAddress":"%s","amount":"%s","idempotencyKey":"%s"}"""
@@ -540,12 +486,8 @@ class ApiContractTest extends AbstractPostgresTest {
     }
 
     /**
-     * 把每一<b>段</b>连续数字换成一个 #，用来比较两个响应「除了调用方自己传的 id
-     * 之外是否完全一样」。
-     *
-     * <p>注意是按「段」而不是按「位」替换：按位替换的话，
-     * id 5 变成 "#"、id 999999 变成 "######"，长度不同会误判成两种响应。
-     * 而<b>回显调用方自己传来的 id 不构成泄露</b> —— 他本来就知道自己传了什么。
+     * 把每一<b>段</b>连续数字换成一个 #，比较两个响应「除了调用方自己传的 id 之外是否完全一样」。
+     * 按段不按位：按位的话 id 5 与 999999 长度不同，会误判成两种响应。
      */
     private static String digitsMasked(String text) {
         return text.replaceAll("\\d+", "#");

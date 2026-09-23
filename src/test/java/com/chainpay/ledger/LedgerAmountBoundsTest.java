@@ -16,15 +16,14 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 /**
- * 账本入口对金额「装不装得下」的判断（2026-09-21）。
+ * 账本入口对金额「装不装得下」的判断。
  *
  * <p>金额列是 NUMERIC(38,18)：小数 18 位、整数 20 位。多出来的小数数据库会静默四舍五入，多出来的整数位数据库报
  * numeric field overflow——前者改人家的钱，后者在 HTTP 上落成 500 + 9001（按段位约定是「可以重试」）。
  * 两者都必须在写库之前拒绝。
  *
- * <p>拒绝时的报错本身也是一处输出：此前它用 toPlainString 把金额逐位写全，{@code 1E-999999999} 只有 12 个字符，
- * 写全是 10 亿个字符——同镜像、同内存上限的实例实测一个请求就内存耗尽退出（退出码 3）。
- * 所以这里除了「拒没拒」，还钉住「报错有多长」。
+ * <p>拒绝时的报错本身也是一处输出：把金额逐位写全的话，{@code 1E-999999999} 只有 12 个字符，写全是 10 亿个字符，
+ * 一个请求就能让进程内存耗尽。所以这里除了「拒没拒」，还钉住「报错有多长」。
  */
 @DisplayName("账本 · 金额装得下才写")
 class LedgerAmountBoundsTest extends AbstractPostgresTest {
@@ -43,8 +42,8 @@ class LedgerAmountBoundsTest extends AbstractPostgresTest {
     @Test
     @DisplayName("★ 小数超过 18 位被拒，而且报错不把金额写全 —— 1E-100000000 只有 12 个字符")
     void tooManyDecimalsIsRefusedWithoutSpellingTheAmountOut() {
-        // 此前的报错是一亿个字符（拼它要约 500 MB 堆）。1E-999999999 那个量级在旧代码上会把测试 JVM 一起打挂，
-        // 所以红灯只用这一亿位的：旧代码拼得出来、失败得干净。
+        // 用一亿位而不是十亿位：万一有人把展开改回去，一亿位拼得出来（约 500 MB 堆）、失败得干净，
+        // 十亿位会把测试 JVM 一起打挂
         assertRefused("1E-100000000");
     }
 
@@ -56,9 +55,8 @@ class LedgerAmountBoundsTest extends AbstractPostgresTest {
     }
 
     /**
-     * 修好之后才加得进来的几个：旧代码上 {@code 1E-2147483647} 在 JDK 里直接抛 OutOfMemoryError（长度算溢出），
-     * 整数那一侧会落到数据库。{@code 1E-999999999} 不放在这里——万一有人把展开改回去，它会真的吃光测试 JVM 的堆，
-     * 把同一进程里的别的测试一起拖垮；它由真跑（同镜像实例）验证，上面那条一亿位的负责在测试里干净地红。
+     * 只有「不展开」的实现才过得了这几个：展开的话 {@code 1E-2147483647} 在 JDK 里直接抛 OutOfMemoryError（长度算溢出）。
+     * {@code 1E-999999999} 不放在这里——万一有人把展开改回去，它会真的吃光测试 JVM 的堆，把同一进程里的别的测试一起拖垮。
      */
     @ParameterizedTest(name = "金额 {0} → 拒绝，报错不到 200 个字符")
     @ValueSource(strings = {

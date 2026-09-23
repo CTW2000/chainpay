@@ -13,14 +13,12 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * CLAUDE.md 的承诺：{@code TenantScope.asSystem} 是用会话变量模拟的权宜之计，靠「控制器不得调它」这条纪律守着，
- * 「接口多起来了，先用 ArchUnit 断言 controller 包不得引用 asSystem」。接口已经多起来了（三个 controller 包）。
- * M4-⓪（2026-09-09）asSystem 已删除；这里仍扫 {@code asSystem(}，防止它以任何形式回来。
- * M3-⓪ 之后同一条规则也管 {@code SystemLedger}：系统权限变成了连接身份，控制器拿到它等于拿到全库。
+ * 控制器不得拿到系统身份：系统权限是连接身份，控制器拿到 {@code SystemLedger} 就等于拿到全库。
+ * {@code asSystem(}（用会话变量放行整库）已删除，仍扫它，防止它以任何形式回来。
  *
- * <p>不引 ArchUnit：为一条规则背一个依赖，且它对 Java 25 的类文件支持还要碰运气。
- * 扫源码就够——这条规则的形状是「某个包里不出现某个字符串」。守卫的匹配集合不能为空（质询模板 5.10）：
- * 先断言真的找到了控制器，再断言它们干净。
+ * <p>不引 ArchUnit：为几条规则背一个依赖，且它对 Java 25 的类文件支持还要碰运气。
+ * 扫源码就够——规则的形状是「某个包里不出现某个字符串」。守卫的匹配集合不能为空：
+ * 先断言真的找到了控制器，再断言它们干净，否则一个都没扫到也是绿的。
  */
 @DisplayName("架构边界 · controller 包不得引用 asSystem 与 SystemLedger")
 class ControllerBoundaryTest {
@@ -39,9 +37,8 @@ class ControllerBoundaryTest {
         for (Path controller : controllers) {
             String source = Files.readString(controller);
             assertThat(source).as(controller.toString()).doesNotContain("asSystem(");
-            // M3-⓪ 起系统权限是连接身份：拿到 SystemLedger 就拿到了全库，HTTP 层永远不该持有它
             assertThat(source).as(controller.toString()).doesNotContain("SystemLedger");
-            // 2026-09-15 起系统池与系统事务管理器是容器里的 bean（限定名 system）：注入它们或在事务上点它们的名字，同样等于拿到全库
+            // 系统池与系统事务管理器是容器里的 bean（限定名 system）：注入它们或在事务上点它们的名字，同样等于拿到全库
             assertThat(source).as(controller.toString())
                     .doesNotContain("Qualifier(\"system\")")
                     .doesNotContain("Transactional(\"system\")")
@@ -51,16 +48,11 @@ class ControllerBoundaryTest {
     }
 
     /**
-     * 2026-09-22（用户定「移除通用转账接口」）：HTTP 入口不得自己挑账本的借贷双方，也不得指定业务类型。
+     * HTTP 入口不得自己挑账本的借贷双方，也不得指定业务类型。
      *
-     * <p>删掉的那个通用转账接口（{@code POST /api/v1/transfers}）两样都干：账户 id 与 {@code code} 都从请求体来，
-     * 授权只问「这账户是不是你的」。而商户的冻结账户**确实是商户的**——于是商户可以自己拼出一笔
-     * 「冻结 → 可用」的 {@code WITHDRAWAL_REVERSE}，把提现途中冻着的钱捞回可用余额，而链上的币照样发出去
-     * （实测：冻结账户余额为 0 时回 4001「余额不足」，说明授权与业务类型两道门都已放行，只差账户里有钱）。
+     * <p>只问「这账户是不是你的」挡不住：商户的冻结账户<b>确实是商户的</b>。让请求体给出账户与 {@code code}，
+     * 商户就能自己拼一笔「冻结 → 可用」的 {@code WITHDRAWAL_REVERSE}，把提现途中冻着的钱捞回可用余额，链上的币照样发出去。
      * 真实业务各走专用流程：入账与提现三笔流的借贷双方都由服务端定，商户填不了。
-     *
-     * <p>所以规矩不是「那个接口别回来」，而是**任何控制器都不准碰这两样**：
-     * 扫到 {@code TransferCode} 或 {@code ledger.transfer(} / {@code new TransferCommand} 就红。
      */
     @Test
     @DisplayName("★ 没有任何 controller 能自己选借贷双方或业务类型（TransferCode / ledger.transfer）")
@@ -83,8 +75,8 @@ class ControllerBoundaryTest {
     }
 
     /**
-     * 扫描补丁（2026-09-09）：「校验放在请求记录，坏数据到不了 service」这条规矩此前只写在 AdminController 的注释里，
-     * 转账接口没跟上，null 字段一路走到 NPE 变成 500。规矩从此由这条测试强制：每个 @RequestBody 参数都必须带 @Valid。
+     * 「校验放在请求记录，坏数据到不了 service」：漏一个 @Valid，null 字段就一路走到 NPE 变成 500。
+     * 只写在注释里的规矩会有人漏，由这条测试强制。
      */
     @Test
     @DisplayName("★ 每个 @RequestBody 参数都带 @Valid；且扫描到的 @RequestBody 不少于三个")
@@ -104,10 +96,9 @@ class ControllerBoundaryTest {
     }
 
     /**
-     * 2026-09-21：转账接口的金额只有 {@code @NotBlank}，控制器拿到什么就 {@code new BigDecimal} 什么——
-     * {@code 1E-999999999}（12 个字符）一个请求让进程内存耗尽退出，一百万位的普通写法光解析就要 11 秒。
-     * 提现与限额接口一直有格式正则，只有转账这一处漏了，所以规矩由这条测试强制：控制器里每一个
-     * {@code new BigDecimal(x.y())}，{@code y} 都必须带 {@code LedgerAmounts} 里的某个正则（金额的规矩只在那里写一份）。
+     * 控制器里每一个 {@code new BigDecimal(x.y())}，{@code y} 都必须带 {@code LedgerAmounts} 里的某个正则（金额的规矩只在那里写一份）。
+     * 只有 {@code @NotBlank} 的金额拿到什么就解析什么：{@code 1E-999999999}（12 个字符）一个请求就能让进程内存耗尽退出，
+     * 一百万位的普通写法光解析就要 11 秒。
      */
     @Test
     @DisplayName("★ 控制器解析的每个金额都带 LedgerAmounts 的格式校验；且扫描到的解析点不少于三个")

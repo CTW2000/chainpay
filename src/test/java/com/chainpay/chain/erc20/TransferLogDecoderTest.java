@@ -13,12 +13,11 @@ import org.junit.jupiter.api.Test;
 /**
  * ERC-20 Transfer 日志解码的<b>已知答案测试</b>。
  *
- * <p>向量是 2026-09-02 从 Sepolia 抓的一条真实 LINK 转账
+ * <p>向量是从 Sepolia 抓的一条真实 LINK 转账
  * （区块 11617625，交易 0xce33…698b，logIndex 28），
- * 期望值由 Python 独立解出——不是 Java 自己算自己比（质询扫描 5.3 的教训）。
+ * 期望值由 Python 独立解出——不是 Java 自己算自己比。
  *
- * <p>三条「畸形日志必须拒绝」对应 M2-before 第 19 问：
- * 解析代码遇到不该出现的形状，是拒绝，还是把错的数当成对的？
+ * <p>形状不对的日志一律拒绝，不把错的数当成对的。
  */
 @DisplayName("M2 · Transfer 日志解码")
 class TransferLogDecoderTest {

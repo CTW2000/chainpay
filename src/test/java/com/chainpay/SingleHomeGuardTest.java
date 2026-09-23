@@ -13,10 +13,9 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * 收口守卫（2026-09-22，CLAUDE.md「收口按概念，不按层」）：一个事实只在它的家里写一份，这里一条规则守一个家。
+ * 收口守卫（CLAUDE.md「收口按概念，不按层」）：一个事实只在它的家里写一份，这里一条规则守一个家。
  *
- * <p>光有一个收口的文件挡不住下一个人再抄一份——清点时地址的形状已经抄了六份，金额写成字符串散在七处，
- * 其中一处（{@code String.valueOf}）写出来的格式还和别处不一样（1 wei 是 {@code 1E-18}）。
+ * <p>光有一个收口的文件挡不住下一个人再抄一份，而抄出来的副本常常写得不一样（金额写成字符串，1 wei 可能成了 {@code 1E-18}）。
  * 扫源码、不引 ArchUnit（同 {@code ControllerBoundaryTest}）；每条规则先断言家里确实有它（匹配集合不能为空），
  * 再断言别处一个都没有。以后再收口一个概念，就在这里加一条。
  */
@@ -35,7 +34,7 @@ class SingleHomeGuardTest {
     @DisplayName("★ 金额写成字符串只经 LedgerAmounts.text —— 别处不直接 toPlainString，SQL 里也不 ::text")
     void amountsBecomeTextOnlyInLedgerAmounts() throws IOException {
         assertOnlyHomeContains("toPlainString()", "ledger/service/LedgerAmounts.java");
-        // SQL 的 ::text 是同一件事的另一种写法（待核准列表曾经这样写，输出碰巧一样，所以只有这条规则抓得住它）：
+        // SQL 的 ::text 是同一件事的另一种写法（输出碰巧一样时，只有这条规则抓得住它）：
         // 金额列在 SQL 里原样取出，交给 LedgerAmounts.text。只认得出 ::text 这一种写法，CAST(… AS text) 之类要靠评审
         Pattern castToText = Pattern.compile("(?i)\\w*(amount|balance|max)\\w*::text");
         try (Stream<Path> files = Files.walk(MAIN)) {

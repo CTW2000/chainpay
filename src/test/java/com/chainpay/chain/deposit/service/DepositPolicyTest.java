@@ -17,7 +17,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.dao.QueryTimeoutException;
 
 /**
- * 策略与例外（M3-③）：最小入账额、balanceOf 第二意见、意外异常的分类、HELD 的人工路径。
+ * 策略与例外：最小入账额、balanceOf 第二意见、意外异常的分类、HELD 的人工路径。
  * 信合约做的（balanceOf），不信合约说的（Transfer 事件）。
  */
 @DisplayName("M3-③ · 入账策略与例外")

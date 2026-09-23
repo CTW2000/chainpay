@@ -22,7 +22,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * 进程拆分 ① · 变量清单：env 样例里的每个变量都有归属——是不是密钥、web 能不能拿、worker 能不能拿。
+ * 变量清单：env 样例里的每个变量都有归属——是不是密钥、web 能不能拿、worker 能不能拿。
  *
  * <p>三份东西必须互相对得上，这里把它们绑在一起：
  * <ul>
@@ -30,7 +30,7 @@ import org.junit.jupiter.api.Test;
  *   <li>清单判为密钥的 = {@code tools/image-check.sh} 按值扫描的（{@link SecretNames}）——密钥不在扫描名单上，就可能悄悄进了镜像；</li>
  *   <li>每个角色的禁用名单（{@link ProcessRole}）= 清单里这个角色不许拿的密钥。</li>
  * </ul>
- * 对标 Fineract 的教训：同一个开关在文档、报错提示、代码里三种拼法，写在名单上却从不触发的规矩，和没有一样，而且不会有任何报错。
+ * 三份各写各的，拼法迟早对不上：写在名单上却从不触发的规矩和没有一样，而且不会有任何报错。
  */
 @DisplayName("进程拆分 ① · 变量清单：每个变量都有归属，密钥都在扫描名单上，禁用名单与清单一致")
 class EnvInventoryTest {

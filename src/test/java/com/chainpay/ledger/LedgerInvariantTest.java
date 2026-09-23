@@ -15,11 +15,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 
 /**
- * M0 的三个判官。现在全是红的 —— 你的任务是把它们变绿。
- *
- * <p><b>但不要直接改实现。</b>先按 {@code LEARNING-PATH.md} 第四节走第 ① 步：
- * 在 {@code docs/retro/M0-before.md} 里写下你认为这个账本会怎么坏。
- * 那份清单才是这个里程碑真正的产出。
+ * 账本核心契约的三个判官：不变量（账本平、余额对、失败不留痕）、幂等（同一个键只记一笔）、并发（不能透支）。
  */
 @DisplayName("M0 · 账本核心契约")
 class LedgerInvariantTest extends AbstractPostgresTest {
@@ -139,12 +135,8 @@ class LedgerInvariantTest extends AbstractPostgresTest {
             }
         }
 
-        // 这三条是本项目最重要的三条断言。
-        //
-        // 「先查余额，够就扣」的天真实现会在这里崩：
-        // 100 个线程同时查到"余额够"，然后同时扣款 —— alice 会变成负数。
-        // 这就是 check-then-act，flow-pay 里 Redis 验证码计数、
-        // MySQL 付款单状态、账本余额三处踩的是同一个坑。
+        // 这三条是本项目最重要的三条断言。「先查余额，够就扣」的天真实现会在这里崩：
+        // 100 个线程同时查到「余额够」，然后同时扣款——alice 变成负数。这就是 check-then-act。
         assertThat(illegalNegativeBalances())
                 .as("用户余额永远不能为负")
                 .isZero();

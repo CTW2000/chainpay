@@ -14,8 +14,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
 
 /**
- * 扫描补丁（2026-09-09）：几条只存在于注释里的模式规矩，从此由系统表守着。
- * 匹配集合都要求非空——守卫扫到 0 个对象等于没守（质询模板 5.10）。
+ * 模式规矩由系统表守着，不只写在注释里。匹配集合都要求非空——守卫扫到 0 个对象等于没守。
  */
 @SpringBootTest
 @DisplayName("扫描补丁 · 模式守卫")
@@ -40,9 +39,8 @@ class SchemaGuardTest extends AbstractPostgresTest {
     @Test
     @DisplayName("★ 账本三表只追加：两个角色对 transfer / entry 都没有 UPDATE / DELETE，account 只能改 balance 一列（V29）")
     void theLedgerIsAppendOnlyForBothRoles() {
-        // 2026-09-22 清点权限时发现：transfer / entry 上两个角色都有 UPDATE，而全仓库没有一条 SQL 用它。
-        // 「账本只追加」当时只靠「没人写那种 SQL」这条纪律撑着——纪律会被新接口、手工 SQL、将来的自己绕过。
-        // V29 撤掉之后这条规矩由权限守；这个测试守的是「V29 不许被改回去」。
+        // 「账本只追加」由权限守，不靠「没人写那种 SQL」的纪律——纪律会被新接口、手工 SQL、将来的自己绕过。
+        // 这个测试守的是「V29 撤掉的权限不许被加回去」。
         for (String role : List.of("chainpay_app", "chainpay_system")) {
             for (String table : List.of("transfer", "entry")) {
                 assertThat(can(role, table, "INSERT")).as("%s 必须能往 %s 追加", role, table).isTrue();
@@ -145,7 +143,7 @@ class SchemaGuardTest extends AbstractPostgresTest {
                         """).query(String.class).list();
         assertThat(functionsWithRegex).as("写着地址正则的函数只许有一个").containsExactly("is_eth_address");
 
-        // 存库的写法：一律小写（大写、短一位都不算）；NULL 放行、交给 NOT NULL 管——和原来 8 个 CHECK 的行为一样
+        // 存库的写法：一律小写（大写、短一位都不算）；NULL 放行、交给 NOT NULL 管
         assertThat(jdbc.sql("SELECT is_eth_address('0x' || repeat('a', 40))").query(Boolean.class).single()).isTrue();
         assertThat(jdbc.sql("SELECT is_eth_address('0x' || repeat('A', 40))").query(Boolean.class).single()).isFalse();
         assertThat(jdbc.sql("SELECT is_eth_address('0x' || repeat('a', 39))").query(Boolean.class).single()).isFalse();

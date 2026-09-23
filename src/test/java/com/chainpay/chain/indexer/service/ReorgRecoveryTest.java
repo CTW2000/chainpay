@@ -34,8 +34,7 @@ import org.springframework.transaction.interceptor.TransactionAspectSupport;
 /**
  * 重组回滚：找共同祖先、标废、退书签、记审计，然后正常重放。
  *
- * <p>验收标准原话：「手工改掉某个区块的 blockHash → 系统必须发现，并回滚该区块之后的所有派生数据」。
- * 这里的「改掉」用 {@link FakeChain#reorgFrom} 造成一次真正的分支切换，日志跟着分支走。
+ * <p>用 {@link FakeChain#reorgFrom} 造一次真正的分支切换（不只是改掉一个块哈希），日志跟着分支走。
  */
 @SpringBootTest
 @DisplayName("M2-④ · 重组回滚")
@@ -377,7 +376,7 @@ class ReorgRecoveryTest extends AbstractPostgresTest {
         @Transactional
         public ReorgResult rollback(String cursorName, HeadRef cursor, HeadRef ancestor) {
             ReorgResult result = super.rollback(cursorName, cursor, ancestor);
-            TransactionAspectSupport.currentTransactionStatus().setRollbackOnly();   // 所有语句都跑完了，然后整个回滚
+            TransactionAspectSupport.currentTransactionStatus().setRollbackOnly();
             return result;
         }
     }

@@ -32,8 +32,6 @@ import org.springframework.transaction.PlatformTransactionManager;
 
 /**
  * 抽样对账：回执是事实源，getLogs 是索引。差异要两个节点都点头才动。
- *
- * <p>验收标准原话：「随机抽 100 个区块，链上 log 数 == 库内记录数」。
  */
 @SpringBootTest
 @DisplayName("M2-⑤ · 抽样对账")
@@ -233,7 +231,7 @@ class LogReconcilerTest extends AbstractPostgresTest {
         assertThat(reconcileRows()).isEmpty();
     }
 
-    // ------------------------------------------------------------------ 比载荷，不只比坐标（2026-09-03 补丁）
+    // ------------------------------------------------------------------ 比载荷，不只比坐标
 
     @Test
     @DisplayName("★ 同一坐标、不同金额：审计节点说 1，库里存着主节点说的 10，记为 disputed，金额一个字不改")

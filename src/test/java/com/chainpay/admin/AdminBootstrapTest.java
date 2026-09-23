@@ -9,7 +9,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-/** M6-⑤ · 第一个管理员怎么来：java -jar chainpay.jar --create-admin <用户名>，口令只从环境变量 CHAINPAY_ADMIN_PASSWORD 来，不进参数。 */
+/** 第一个管理员怎么来：java -jar chainpay.jar --create-admin <用户名>，口令只从环境变量 CHAINPAY_ADMIN_PASSWORD 来，不进参数（ps 看得到参数）。 */
 @DisplayName("M6-⑤ · 创建第一个管理员")
 class AdminBootstrapTest extends AbstractPostgresTest {
 

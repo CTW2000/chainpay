@@ -16,12 +16,12 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 
 /**
- * 租户隔离下沉到数据库之后的守卫。
+ * 租户隔离在数据库层的守卫。
  *
  * <p><b>这一组测试和 {@code ApiSecurityTest} 守的不是同一件事：</b>
  *
  * <pre>
- *   ApiSecurityTest      走 HTTP，证明**接口**不让你碰别人的账户
+ *   ApiSecurityTest      走 HTTP，证明**接口**不让你碰别人的对象
  *   TenantIsolationTest  绕过整个 Java 层直接写 SQL，
  *                        证明**数据库自己**就不让你查到别人的行
  * </pre>
@@ -76,8 +76,7 @@ class TenantIsolationTest extends AbstractPostgresTest {
     @Test
     @DisplayName("★ 手写 SQL 直查全表 —— 也只看得到自己的账户")
     void rawSqlStillOnlySeesOwnAccounts() {
-        // 注意这里**完全没有**经过 AccountAccessService。
-        // 这条 SQL 就是「将来某个忘了做授权的新接口」会写出来的样子。
+        // 这里没有任何应用层的授权检查：这条 SQL 就是「将来某个忘了做授权的新接口」会写出来的样子。
         var visible = tenantScope.asMerchant(acmeId, () ->
                 appJdbc.sql("SELECT id FROM account ORDER BY id").query(Long.class).list());
 
@@ -93,30 +92,18 @@ class TenantIsolationTest extends AbstractPostgresTest {
                 appJdbc.sql("SELECT id FROM account WHERE id = :id")
                         .param("id", evilcoAccount).query(Long.class).optional());
 
-        // 「不存在」和「无权访问」给同一个回答，攻击者无法用它枚举账户 ——
-        // 这正是 AccountAccessService 刻意做到的「不可区分响应」，
-        // 而 RLS 直接把它变成了数据库的天然行为，不需要谁记得实现它。
+        // 「不存在」和「无权访问」给同一个回答，攻击者无法用它枚举账户——
+        // RLS 让这成了数据库的天然行为，不需要谁记得实现它。
         assertThat(found).isEmpty();
     }
 
     @Test
     @DisplayName("★ 根本没调 asMerchant —— 什么都查不到，而不是什么都查得到")
     void forgettingTheTenantScopeEntirelySeesNothing() {
-        // ★ 这条测试在 2026-08-31 的质询扫描后重写，值得记下来为什么 ★
-        //
-        // 第一版在 asMerchant **里面**清掉租户变量，模拟的是「降了权但没设变量」。
-        // 那个状态在生产里构造不出来：enterTenantScope 的两行同生同死。
-        // 真实的失误形态是「整个 asMerchant 都没调」——而第一版一次都没测过它。
-        //
-        // 更糟的是，当时应用以超级用户连库，「没调 asMerchant」的真实后果是
-        // **看到全库**（超级用户无条件绕过 RLS），和 TenantScope 的 javadoc
-        // 写的「一行都查不到，立刻炸」恰好相反。实测：acme 拿到了 evilco 的账户。
-        //
-        // 现在应用以普通角色 chainpay_app 连库，RLS 对它无条件生效。
-        // 没调 asMerchant → 租户变量没设 → current_merchant_id() 为 NULL →
-        // merchant_id = NULL 恒为假 → 一行都看不到。**失误方向终于朝着立刻暴露。**
-        //
-        // 这是清单 5.4 的原型：唯一能区分对错的输入是「根本不调」，第一版不在集合里。
+        // 真实的失误形态是「整个 asMerchant 都没调」，所以这里就是不调。
+        // 应用以普通角色 chainpay_app 连库，RLS 对它无条件生效：没调 asMerchant → 租户变量没设 →
+        // current_merchant_id() 为 NULL → merchant_id = NULL 恒为假 → 一行都看不到，失误朝着立刻暴露的方向。
+        // 若应用以超级用户连库，同样的失误会看到全库（超级用户无条件绕过 RLS）。
         var visible = appJdbc.sql("SELECT id FROM account").query(Long.class).list();
 
         assertThat(visible)
@@ -156,13 +143,11 @@ class TenantIsolationTest extends AbstractPostgresTest {
     void cannotGiveAwayAnAccountByChangingItsOwner() {
         // 只写 USING 不写 WITH CHECK 的话，这条 UPDATE 会成功 ——
         // 商户可以一次性把账户「送」给别人（或者把别人的账户认领过来）。
+        // 它先撞上的是列权限：应用角色对 account 只有 UPDATE(balance)，权限检查在行级安全之前，报 permission denied。
         //
-        // 2026-09-22（V29）之后它连跑都跑不起来：应用角色对 account 只剩 UPDATE(balance)，
-        // 而权限检查在行级安全之前，所以报的是 permission denied，不再是 row-level security policy。
-        //
-        // **两层都要断言**：只断言权限的话，V6 那道 WITH CHECK 就没人守了——哪天有人给 account
+        // 两层都要断言：只断言权限的话，V6 那道 WITH CHECK 就没人守了——哪天有人给 account
         // 重新 GRANT 整行 UPDATE（比如为了让某个新功能能改别的列），这条测试照样绿，
-        // 而「把账户送给别人」又成了可能。这是删接口那天踩到的空转的另一种形态。
+        // 而「把账户送给别人」又成了可能。
         assertThatThrownBy(() -> tenantScope.asMerchant(acmeId, this::giveAwayTheAccount))
                 .as("V29：应用角色没有 account.merchant_id 的 UPDATE 权限")
                 .hasStackTraceContaining("permission denied");
@@ -192,14 +177,9 @@ class TenantIsolationTest extends AbstractPostgresTest {
     void ownAccountsRemainFullyUsable() {
         // 加一道保险很容易把正常路径也一起挡死。这条证明没有。
         //
-        // 注意这里**不**直接改 balance 列：第一版我写了 UPDATE account SET balance = 5，
-        // 结果被 @AfterEach 里的 balanceDrift() 抓住 ——
-        // 物化余额和分录求和对不上了。判官连我自己的测试都一起管，这是对的。
-        //
-        // 2026-09-22（V29）也不再改 code：应用角色对 account 只剩 UPDATE(balance)，
-        // 改别的列要属主身份。所以「自己的账户照常读写」里那个「写」，
-        // 换成应用角色真正会做的那一种——在自己名下插一个账户（RLS 的 WITH CHECK 只允许挂在自己名下），
-        // 再读回来。余额那条路由账本的测试覆盖：它改 balance 时同时写分录，判官才平。
+        // 「写」用应用角色真正会做的那一种：在自己名下插一个账户（RLS 的 WITH CHECK 只允许挂在自己名下），再读回来。
+        // 不直接改 balance：@AfterEach 的漂移判官会报警——余额只能随分录一起变，那条路由账本的测试覆盖；
+        // 也改不了别的列：应用角色对 account 只有 UPDATE(balance)。
         var result = tenantScope.asMerchant(acmeId, () -> {
             appJdbc.sql("""
                             INSERT INTO account(code, currency, kind, merchant_id)
@@ -226,32 +206,26 @@ class TenantIsolationTest extends AbstractPostgresTest {
                 .query(String.class).single();
         assertThat(tenant).isEmpty();
 
-        // ★ 第一版这里断言「脱离作用域后又能看到全部账户 = 3」★
-        // 那是把真实的失效形态（超级用户绕过 RLS）当成正常行为钉了下来。
-        // 现在的正确断言：脱离作用域后**一行都看不到**，和上一条测试同一个方向。
+        // 脱离作用域后一行都看不到，和上一条测试同一个方向
         assertThat(appJdbc.sql("SELECT count(*) FROM account").query(Long.class).single())
                 .as("脱离作用域后不该看到任何账户——看得到就说明连接是特权角色")
                 .isZero();
     }
 
     // ==================================================================
-    // 幂等键的作用域（2026-09-22 从 ApiSecurityTest 下移到这里）
+    // 幂等键的作用域
     // ==================================================================
 
     @Test
     @DisplayName("★ 两个商户各用同一个幂等键 —— 各自成一笔，互不干扰")
     void theIdempotencyKeyNamespaceIsPerMerchant() {
-        // 历史（M1.5 质询扫描 9.8）：V1 那行 UNIQUE (idempotency_key) 的作用域是**全表**。
-        // evilco 用了 acme 用过的键 → UNIQUE 冲突 → ON CONFLICT DO NOTHING 返回空 →
-        // 回读那一笔又被 RLS 藏住 → 0 行 → .single() 炸 → 500，而 9001 还标着「可重试」。
+        // 幂等键若是全表唯一：evilco 用了 acme 用过的键 → UNIQUE 冲突 → ON CONFLICT DO NOTHING 返回空 →
+        // 回读那一笔又被 RLS 藏住 → 0 行 → 500，而 9001 还标着「可重试」。
         // 两个后果：① 跨租户的存在性预言机（看 200 还是 500 就能探出别人用过哪些键）；
         //          ② 可抢占——预先占掉受害者要用的键，让他永久拿 500。
-        // 修法是 V7：UNIQUE NULLS NOT DISTINCT (submitter_merchant_id, idempotency_key)，
+        // 所以约束是 V7 的 UNIQUE NULLS NOT DISTINCT (submitter_merchant_id, idempotency_key)，
         // 而 submitter_merchant_id 由 SQL 里的 current_merchant_id() 填——「谁提交的」由租户变量说，
-        // 不由调用方的参数说。NULLS NOT DISTINCT 是为了系统身份（商户为 NULL）之间也不许撞。
-        //
-        // 这条性质原先由 ApiSecurityTest 经通用转账接口守着；接口 2026-09-22 删了，
-        // 而约束本身在数据库，所以测试下移到这里，夹具也便宜（不必起 HTTP、不必发签名请求）。
+        // 不由调用方的参数说。NULLS NOT DISTINCT 让系统身份（商户为 NULL）之间也不许撞。
         long acmeTo = account("user:acme-2:USDT", acmeId);
         long evilcoTo = account("user:evilco-2:USDT", evilcoId);
         // 借方允许为负：这条测试只关心幂等键的作用域，不关心余额，免得再搭一套注资夹具

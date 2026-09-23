@@ -18,7 +18,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 /**
- * 部署脚本的<b>行为</b>（2026-09-18）。{@link DeployGuardTest} 读的是脚本文本：八个环节在不在、顺序对不对；
+ * 部署脚本的<b>行为</b>。{@link DeployGuardTest} 读的是脚本文本：八个环节在不在、顺序对不对；
  * 这里管文本看不出来的东西——标签能不能唯一确定内容、密钥会不会漏进后面的子进程、
  * 一句日志能不能掐断部署、第一次部署失败时留下什么。
  *
@@ -221,7 +221,7 @@ class DeployScriptTest {
     @Test
     @DisplayName("就绪之后顺带打出 work 组的总状态给人看（Boot 4 的字母序与「status 在前」两种键序都认得）；取不到也不影响部署")
     void theWorkGroupIsShownButNeverDecides() throws Exception {
-        // Boot 4 的 JSON 按字母序：components 在前、顶层 status 在最后，部件里 details 排在 status 前（2026-09-18 对在跑的容器实测）
+        // Boot 4 的 JSON 按字母序：components 在前、顶层 status 在最后，部件里 details 排在 status 前（样本取自在跑的容器）
         String boot4 = "{\"components\":{\"audit\":{\"details\":{\"stale\":false,\"lastRun\":\"OK\"},\"status\":\"UP\"},"
                 + "\"deposit\":{\"details\":{\"ending\":\"RETRY_LATER\"},\"status\":\"DEGRADED\"},\"redis\":{\"status\":\"UP\"}},\"status\":\"DEGRADED\"}";
         String statusFirst = "{\"status\":\"DOWN\",\"components\":{\"indexer\":{\"status\":\"DOWN\",\"details\":{\"reason\":\"x\"}}}}";

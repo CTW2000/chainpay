@@ -19,14 +19,15 @@ import org.springframework.core.env.StandardEnvironment;
 import org.springframework.core.env.SystemEnvironmentPropertySource;
 
 /**
- * 进程拆分 ① · 真的应用（读真的 application.yml）：守卫在创建任何 bean 之前拦下。
+ * 真的应用（读真的 application.yml）：守卫在创建任何 bean 之前拦下。
  *
  * <p>两件事只有起真的应用才证明得了：
  * <ol>
  *   <li><b>守卫接进了应用</b>，而且跑在最前面：拒绝启动的根因必须是 {@link ProcessRoleException}，
  *       不是连接池、占位符或节点地址的报错。库地址故意指向一个连不上的端口——守卫漏了，应用会在那里撞墙报别的错，而不是去碰开发库。</li>
  *   <li><b>名单上的名字是真的</b>：运维设的是环境变量，应用读的是配置键，两者靠 application.yml 的占位符或 Spring 的宽松映射连起来。
- *       逐项设「运维真正会设的那个环境变量」，证明它真的会被拦住（对标 Fineract：文档里的开关名在代码里根本不存在，那条规矩永远不触发）。</li>
+ *       逐项设「运维真正会设的那个环境变量」，证明它真的会被拦住——名单上的名字拼错一个字，从名单派生的单元测试照样绿，
+ *       那条规矩却永远不触发。</li>
  * </ol>
  * 不需要 Testcontainers：每次启动都停在守卫那一步。
  */

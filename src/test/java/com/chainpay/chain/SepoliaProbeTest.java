@@ -12,7 +12,7 @@ import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * M2-①「裸奔版」：对着真实的 Sepolia 打一遍，把数据打印出来看。
+ * 对着真实的 Sepolia 打一遍，把数据打印出来看。
  *
  * <p><b>默认不跑</b>：设了 CHAINPAY_SEPOLIA_RPC 才启用。默认测试集必须离线——
  * 一个依赖公网节点的测试，红了分不清是代码错还是节点抽风。
@@ -48,7 +48,7 @@ class SepoliaProbeTest {
                 System.out.printf("    块 %d #%d  %s → %s  %s raw%n",
                         t.blockNumber(), t.logIndex(), t.from(), t.to(), t.value()));
 
-        // M2-⑥：第一次「调合约」而不是「读日志」——问真实的 LINK 它的 decimals、symbol，再读一个真实地址的余额
+        // 调合约而不是读日志：问真实的 LINK 它的 decimals、symbol，再读一个真实地址的余额
         var calls = new Erc20Calls(rpc);
         int decimals = calls.decimals(LINK_SEPOLIA).orElseThrow();
         String symbol = calls.symbol(LINK_SEPOLIA).orElseThrow();

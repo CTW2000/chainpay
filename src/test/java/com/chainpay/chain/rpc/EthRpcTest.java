@@ -28,9 +28,9 @@ import tools.jackson.databind.node.ObjectNode;
 /**
  * 翻译层的契约测试：把<b>真实节点的实际输出</b>喂给我们的解析器。
  *
- * <p>夹具是 2026-09-04 从 Sepolia 公共网关录下来的 JSON-RPC 响应（块 11627476，里面有一笔 LINK 转账），
- * 期望值从夹具里手抄，不经过被测代码。之前 {@code EthRpc} 只被两条默认不跑的探针碰过：
- * 服务层的测试全走 {@code FakeChain}，外部 JSON 进入系统的唯一那一层在默认测试集里零执行（质询扫描 5.9 / 10.7）。
+ * <p>夹具是从 Sepolia 公共网关录下来的 JSON-RPC 响应（块 11627476，里面有一笔 LINK 转账），
+ * 期望值从夹具里手抄，不经过被测代码。服务层的测试全走 {@code FakeChain}，碰不到真实 JSON：
+ * 外部 JSON 进入系统的那一层靠这里守。
  */
 @DisplayName("M2-⑥ 补丁 3 · EthRpc 翻译层（真实响应夹具）")
 class EthRpcTest {

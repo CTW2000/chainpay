@@ -61,7 +61,7 @@ class RlpVectorsTest {
         assertThatThrownBy(() -> Rlp.integer(BigInteger.valueOf(-1))).isInstanceOf(IllegalArgumentException.class);
     }
 
-    // 解码委托给 web3j 之后不再单独验「拒绝非规范形式」：库的解码器是宽松的，而我们只解码自己签出的字节。
+    // 这里不验「拒绝非规范形式」：解码委托给 web3j，库的解码器是宽松的，而我们只解码自己签出的字节。
     // 规范性由交易层守：Eip1559Transaction.decode 拆回再编回必须与原文逐字节相同（Eip1559VectorTest 的官方反例）。
 
     static Rlp.Item toItem(JsonNode node) {

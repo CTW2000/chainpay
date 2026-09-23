@@ -21,7 +21,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * V21 的四张表由数据库守：状态词表、结局与账本转账的一一对应、同 nonce 只能上链一次、租户边界、角色权限。
- * 同时兑现 CLAUDE.md 的承诺：会话变量 {@code chainpay.system} 那道门在 M4 拆掉，系统权限只剩连接身份一条路。
+ * 同时守着：会话变量 {@code chainpay.system} 那道门已拆，没有会话变量能打开整库，系统权限只剩连接身份一条路。
  */
 @SpringBootTest
 @DisplayName("M4-⓪ · 提现四张表：约束、租户边界、角色权限；会话变量那道门已拆")

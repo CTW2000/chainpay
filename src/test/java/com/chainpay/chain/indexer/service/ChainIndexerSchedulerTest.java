@@ -40,11 +40,12 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.transaction.PlatformTransactionManager;
 
 /**
- * 一次轮询的形状：核对代币（只在第一次）→ 放书签（若没有且配了起点）→ 刷新链头 → 连续推批直到追平 → 抽样对账。
+ * 一次轮询的形状：查白名单（每轮）、上链核对 decimals（每个进程一次）→ 放书签（若没有且配了起点）→ 刷新链头
+ * → 连续推批直到追平或追赶预算用完 → 抽样对账。
  *
- * <p>失败分三种：瞬时的（节点不可达）下次再来；重组（M2-④ 起）这一次回滚、下一次重放；
- * 结构性的（finalized 倒退、没书签没起点、代币未登记或 decimals 不一致）停下，之后每次轮询都直接返回。
- * 对账（M2-⑤）是审计，它自己的瞬时失败不改变轮询的结局。
+ * <p>失败分三种：瞬时的（节点不可达、库连不上）下次再来；重组这一次回滚、下一次重放；
+ * 结构性的（finalized 倒退、没书签没起点、代币未登记或停用或 decimals 不一致、节点拒绝凭证）停下，之后每次轮询都直接返回。
+ * 对账是审计，它自己的瞬时失败不改变轮询的结局。
  */
 @SpringBootTest
 @DisplayName("M2-③ · 轮询")

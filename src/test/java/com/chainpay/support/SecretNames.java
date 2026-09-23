@@ -9,7 +9,7 @@ import java.util.regex.Pattern;
 
 /**
  * 「什么样的变量名算密钥」只写一份，在 {@code tools/image-check.sh}：它在生产里按这个名单逐个按值扫描镜像，是这条规矩真正起作用的地方。
- * 测试从那里读，不另抄（进程拆分 ①，2026-09-23 收口）。此前 ContainerGuardTest 抄了一份，两份一起漏掉了告警地址与测试探针的节点地址。
+ * 测试从那里读，不另抄一份：多一份名单就多一处会漏改的地方，漏了也没有任何报错。
  */
 public final class SecretNames {
 

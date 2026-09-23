@@ -10,7 +10,7 @@ import org.junit.jupiter.api.Test;
 
 /**
  * 类型 2（EIP-1559）交易的官方向量：ethereum/tests 的 TransactionTests/ttEIP1559/GasLimitPriceProductOverflowtMinusOne.json
- * 与 maxFeePerGas00prefix.json（提交 c67e485f，2026-09-09 浅克隆逐字抄录）。前者给出原文、交易哈希、发送方，
+ * 与 maxFeePerGas00prefix.json（提交 c67e485f，逐字抄录）。前者给出原文、交易哈希、发送方，
  * 我们把原文拆回字段、再用自己的编码器编回去，字节必须一样；再从签名恢复发送方，必须一样。后者的 maxFeePerGas 带前导零，必须拒绝。
  */
 @DisplayName("M4-① · EIP-1559 官方向量：拆开、编回、恢复发送方")

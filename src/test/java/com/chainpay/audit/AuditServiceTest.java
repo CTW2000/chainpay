@@ -22,7 +22,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 
 /**
  * 对账是判官：站在两个节点都认的 finalized 块上，把链上事实和库内记录逐项比对。
- * 钱从 M3 的真实路径进来（索引 → FINAL → 入账），然后往库里或链上动手脚，看哪条检查响。
+ * 钱从真实的入账路径进来（索引 → FINAL → 入账），然后往库里或链上动手脚，看哪条检查响。
  */
 @SpringBootTest
 @DisplayName("M5 · 对账：三种差异都要浮出来，没跑完也要能看出来")
@@ -36,7 +36,7 @@ class AuditServiceTest extends AbstractDepositPostingTest {
         jdbc.sql("TRUNCATE audit_finding, audit_run, payout_tx, payout, payout_address, payout_limit, hot_wallet CASCADE").update();
     }
 
-    /** 10 LINK 走 M3 真实路径入账；链上两个节点在 F 的余额都等于事件累计；热钱包登记、余额 0。 */
+    /** 10 LINK 走真实路径入账；链上两个节点在 F 的余额都等于事件累计；热钱包登记、余额 0。 */
     private void fundedAndPosted() {
         pay(5, TEN_LINK);
         indexUpTo(100, 90, F);

@@ -22,11 +22,9 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 /**
  * 系统权限是连接身份，不是一个开关。
  *
- * <p>M0 到 M2 的系统操作靠 {@code TenantScope.asSystem()} 在事务里设一个会话变量放行 RLS——
- * 一个 public 方法，任何代码都能调，靠「控制器不得调它」的纪律守着。
- * M3 的入账是第一段无人值守、按时刻表跨所有商户动钱的代码，它的特权应当来自<b>它连库用的角色</b>：
- * 独立的 {@code chainpay_system}（BYPASSRLS，非超级用户，非属主），独立的连接池，
- * 拿不到这个池就拿不到这份权限。
+ * <p>会话变量那种开关是一个任何代码都能拨的 public 方法，只能靠纪律守。无人值守、跨所有商户动钱的系统任务，
+ * 特权应当来自<b>它连库用的角色</b>：独立的 {@code chainpay_system}（BYPASSRLS，非超级用户，非属主），
+ * 独立的连接池，拿不到这个池就拿不到这份权限。
  */
 @SpringBootTest
 @DisplayName("M3-⓪ · 系统账本：权限来自连接身份")
