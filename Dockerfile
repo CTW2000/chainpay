@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# M6-① · 两个阶段：构建（JDK + Maven，只活在构建期）→ 运行（JRE，非 root，只装应用）。
+# 两个阶段：构建（JDK + Maven，只活在构建期）→ 运行（JRE，非 root，只装应用）。
 # 密钥永远不进这里：没有 ARG / ENV 放密码，运行时全部从 env_file 注入（docker-compose.yml 的 app 服务）。
 # 打完镜像跑 tools/image-check.sh：非 root、有 HEALTHCHECK、文件系统里 grep 不到 env/local.env 的任何一个值。
 

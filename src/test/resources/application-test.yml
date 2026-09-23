@@ -1,38 +1,17 @@
-# 测试专用配置（profile: test）。
-#
-# ★ 文件名是 application-test.yml，不是 application.yml ★
-# 同名的话 Spring Boot 按类路径资源**整份替换**主配置——不是合并。
-# 质询扫描 5.6 抓到的后果：主配置里「故意开小以暴露连接池竞争」的
-# hikari.maximum-pool-size / connection-timeout 在任何测试里都没生效，
-# 池子是 10 只因为那恰好是 HikariCP 的默认值，connection-timeout 实测 30000。
-# 改成 profile 文件后：主配置先加载，这里只覆盖测试需要不同的那几项。
+# 测试 profile 的覆盖项：主配置先加载，这里只覆盖测试需要不同的几项。
+# 文件名必须是 application-test.yml：叫 application.yml 会按类路径资源整份替换主配置而不是合并，主配置里故意开小的连接池在测试里就不生效了。
 # 数据源与 Flyway 的凭据由 AbstractPostgresTest 的 @DynamicPropertySource 注入。
-# 生产那份里 chainpay.secret-key 没有默认值，缺了就起不来 ——
-# 那是刻意的，但测试不能因此跑不起来。
-#
-# 这里这把密钥是**固定的、公开的、只用于测试**。
-# 它出现在 git 里没有关系，因为它从不加密任何真实数据。
-#
-# ★ 真正危险的做法是把它写进 src/main/resources ★
-# 那样它就成了"默认值"，会跟着应用一路带进生产，而且不会有任何报错。
-# 一个人人都知道的默认密钥等于没有加密。
-# 解码后必须正好 32 字节（AES-256）。
-# 这里明文是 "chainpay-test-key-not-for-prod!!"，刚好 32 个 ASCII 字符。
-# 写这份配置时第一版少了一个字节（31），SecretCipher 的构造器直接抛异常 ——
-# 这正是那个长度检查存在的意义：配错了就起不来，而不是「起来了但加密是弱的」。
 chainpay:
+  # 固定、公开、只用于测试的密钥，从不加密真实数据：明文 "chainpay-test-key-not-for-prod!!"，正好 32 字节（AES-256）。
+  # 绝不能写进 src/main/resources：那就成了会被一路带进生产的默认值
   secret-key: "Y2hhaW5wYXktdGVzdC1rZXktbm90LWZvci1wcm9kISE="
-
-  # M6-⑤ 起控制面用管理员会话，不再有静态令牌；测试里 AbstractPostgresTest.adminSessionToken() 建用户并登录
-
-# 数据源不用配：测试走 Testcontainers，由 @ServiceConnection 自动注入。
 
 logging:
   level:
-    # 主配置对 com.chainpay 开了 DEBUG；测试里降回 INFO，否则 Surefire 输出会被淹没
+    # 本机 env 常开 DEBUG；测试里降回 INFO，否则 Surefire 输出会被淹没
     com.chainpay: INFO
 
-# M6-⓪：管理端口随机。主配置把它钉在 8096；测试里多个 RANDOM_PORT 的容器并存，固定端口会互相撞
+# 管理端口随机：多个 RANDOM_PORT 的上下文并存，钉死 8096 会互相撞
 management:
   server:
     port: 0

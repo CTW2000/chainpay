@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
-# 打完镜像后扫一遍（M6-①）：
+# 打完镜像后扫一遍：
 #   ① 以非 root 用户跑   ② 有 HEALTHCHECK   ③ /app 与镜像元数据里没有私钥形态（tools/check-secrets.sh）
 #   ④ env/local.env 里每个密钥形态变量的值在文件系统、元数据与构建历史里都 grep 不到（只报变量名，值不出现在输出里）   ⑤ 没有 env 目录
 #
-# 元数据 = Config.Env / Labels / Cmd / Entrypoint + 构建历史（2026-09-15 补）。docker export 只导文件系统，
-# 密钥若从 ENV 或 docker build --build-arg 进来，光扫文件系统一无所获——而 ContainerGuardTest 只读 Dockerfile 文本，
-# 也管不到「源码没写、构建时注入」这条路。
+# 元数据 = Config.Env / Labels / Cmd / Entrypoint + 构建历史。docker export 只导文件系统，密钥若从 ENV 或 --build-arg 进来，
+# 光扫文件系统一无所获；ContainerGuardTest 只读 Dockerfile 文本，也管不到「源码没写、构建时注入」这条路。
 # 用法：tools/image-check.sh [镜像:标签]   默认 chainpay:local。命中任何一条退出 1。
 # 环境变量：CHAINPAY_ENV_FILE=<按值扫描用的 env 文件，默认 env/local.env>；CHAINPAY_SKIP_VALUE_SCAN=1 显式跳过按值扫描。
 set -euo pipefail
@@ -25,7 +24,7 @@ tarlog=$(mktemp)        # 解包时 tar 的抱怨：留着，别丢进 /dev/null
 trap 'rm -rf "$tmp" "$meta" "$hist" "$tarlog"' EXIT
 cid=$(docker create "$IMAGE")
 
-# 解包失败就停（2026-09-15 补）。扫一个残缺或空的目录时，下面每一项都会「✓」——
+# 解包失败就停。扫一个残缺或空的目录时，下面每一项都会「✓」——
 # 「没找到密钥」和「根本没扫」在输出上一模一样，这是安全检查最糟的失败方式。
 docker export "$cid" | tar -x -C "$tmp" 2>"$tarlog" || {
   docker rm "$cid" >/dev/null 2>&1
@@ -62,7 +61,7 @@ else
 fi
 
 # 按值扫描的 env 文件可以换（进程拆分后会有 web.env / worker.env）。文件不在 = 这一项做不了 = 不通过；
-# 确实不需要时必须显式说出来，而不是靠「文件恰好不在」蒙混过去（2026-09-15 补）
+# 确实不需要时必须显式说出来，而不是靠「文件恰好不在」蒙混过去
 ENV_FILE=${CHAINPAY_ENV_FILE:-env/local.env}
 if [[ ! -f $ENV_FILE ]]; then
   if [[ ${CHAINPAY_SKIP_VALUE_SCAN:-} == 1 ]]; then
@@ -76,7 +75,7 @@ else
   scanned=0
   while IFS='=' read -r k v; do
     # 「什么样的变量名算密钥」只在这一行写一份：Java 测试（ContainerGuardTest、EnvInventoryTest）从这里读，不另抄。
-    # 进程拆分 ① 补上 WEBHOOK_URL（告警地址里带令牌）与 RPC（测试探针的节点地址）：此前两份副本一起漏了它们
+    # WEBHOOK_URL：告警地址里常带令牌；RPC：测试探针的节点地址（带 key）
     [[ $k =~ ^CHAINPAY_[A-Z_]*(PASSWORD|KEY|TOKEN|RPC_URL|RPC|XPUB|WEBHOOK_URL)$ ]] || continue
     v=${v%\"}; v=${v#\"}
     if [[ ${#v} -lt 12 ]]; then echo "· $k 的值只有 ${#v} 个字符，太短，按值扫会误报，跳过（这一项没查）"; continue; fi

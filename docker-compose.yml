@@ -1,9 +1,7 @@
-# 本地开发用的中间件，M6-① 起应用也在这里跑（app 服务）。
+# 本地的中间件与应用（app 服务）。
 #
-# 端口一律绑 127.0.0.1 —— 不要写成 "5433:5432"。
-# 那样会绑到 0.0.0.0，而且 Docker 直接写 iptables 的 DOCKER 链，
-# 优先级在 UFW 之前，你以为封住的端口其实是开的。
-# 参见 OWASP Docker_Security RULE #5a。
+# 端口一律绑 127.0.0.1，不要写成 "5433:5432"：那会绑到 0.0.0.0，而 Docker 直接写 iptables 的 DOCKER 链，
+# 优先级在 UFW 之前，以为封住的端口其实是开的（OWASP Docker Security RULE #5a）。
 
 services:
   postgres:
@@ -12,21 +10,16 @@ services:
     environment:
       POSTGRES_DB: chainpay
       POSTGRES_USER: chainpay
-      # 本地开发密码，不是密钥。真实密钥永远走环境注入，见 env/local.env.example
+      # 本地开发密码，不是密钥；真实密钥永远走环境注入
       POSTGRES_PASSWORD: chainpay_local_dev
     ports:
-      - "127.0.0.1:5433:5432"   # 用 5433 避开你本机可能已有的 5432
+      - "127.0.0.1:5433:5432"   # 用 5433 避开本机可能已有的 5432
     volumes:
-      # Postgres 18 起，官方镜像推荐把卷挂在 /var/lib/postgresql（而不是它下面的 data/）。
-      # 数据会落到子目录里，这样将来 pg_upgrade --link 不会跨挂载点边界。
-      # 沿用 17 及以前的 /var/lib/postgresql/data 会导致容器反复重启，
-      # 报 "there appears to be PostgreSQL data in ... (unused mount/volume)"。
+      # PG 18 起卷挂 /var/lib/postgresql，不是它下面的 data/（沿用旧路径容器会反复重启，见 README 末尾）
       - chainpay-pgdata:/var/lib/postgresql
-      # 首次建库时执行 db/init/*.sql，创建应用的运行时角色 chainpay_app。
-      # 只在数据卷为空时跑一次；已有的卷不会重跑（改了脚本要 docker compose down -v）。
+      # 数据卷为空时执行一次 db/init/*.sql，建 chainpay_app 与 chainpay_system；已有的卷不会重跑（改了脚本要 docker compose down -v）
       - ./db/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      # 健康检查要区分「进程活着」和「真的能干活」——M6 会展开讲
       test: ["CMD-SHELL", "pg_isready -U chainpay -d chainpay"]
       interval: 5s
       timeout: 3s
@@ -36,17 +29,11 @@ services:
   redis:
     image: redis:8.10
     container_name: chainpay-redis
-    # 6380 而不是默认的 6379：避开你本机或别的项目可能已经在跑的 Redis。
     ports:
-      - "127.0.0.1:6380:6379"
-    # ★ 故意不挂数据卷、关掉持久化 ★
-    # 这个 Redis 只存限流计数 —— 那是「丢了也无所谓」的数据：
-    # 重启后计数归零，最坏情况是某个商户多打了一个窗口的请求量。
-    # 加持久化只会带来额外的磁盘 IO 和运维负担，换不到任何东西。
-    #
-    # 这个判断的前提是「Redis 里只放可丢弃的数据」。
-    # 哪天往里塞了不能丢的东西（比如 M4 的 nonce 分配），前提就不成立了，
-    # 那时要么加持久化，要么把那份数据放回 Postgres。
+      - "127.0.0.1:6380:6379"   # 6380：避开本机或别的项目可能在跑的 Redis
+    # 故意不挂数据卷、关掉持久化：这里只有限流计数和防重放的 nonce，都是几分钟的短期数据。
+    # 重启丢了的代价：计数归零（某商户多打一个窗口），nonce 记录没了（时间窗内的重放只剩幂等键挡）。
+    # 前提是 Redis 里只放可丢弃的数据；哪天往里放了不能丢的，要么加持久化，要么放回 Postgres
     command: ["redis-server", "--save", "", "--appendonly", "no"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -55,7 +42,7 @@ services:
       retries: 10
     restart: unless-stopped
 
-  # M6-①：应用本身。密钥只从 env_file 来；environment 里只放拓扑（容器网络里中间件叫 postgres / redis，不再是 localhost）。
+  # 应用本身。密钥只从 env_file 来；environment 里只放拓扑与角色（容器网络里中间件叫 postgres / redis，不是 localhost）
   app:
     build:
       context: .
@@ -70,20 +57,19 @@ services:
     env_file:
       - env/local.env
     environment:
-      # 进程角色（进程拆分 ①）：恰好一个，没有就起不来。拆成 web + worker 两个服务（第 ⑥ 步）之前，唯一的容器以 worker 身份跑——
-      # 它今天还装着全部的活，web 不许拿的凭证它都有。角色不是密钥，放 environment 与拓扑一起
+      # 进程角色，恰好一个。拆成 web + worker 两个服务（进程拆分第 ⑥ 步）之前，唯一的容器以 worker 身份跑，装着全部的活
       SPRING_PROFILES_ACTIVE: worker
       CHAINPAY_DB_URL: jdbc:postgresql://postgres:5432/chainpay
       CHAINPAY_REDIS_HOST: redis
       CHAINPAY_REDIS_PORT: "6379"
       CHAINPAY_PORT: "8095"
       CHAINPAY_MANAGEMENT_PORT: "8096"
-      # 主端口在容器内要对容器网络开放（宿主发布的是 127.0.0.1:8095 → 容器:8095）；宿主上直接跑 jar 时默认只绑回环
+      # 容器内主端口要对容器网络开放（宿主发布的是 127.0.0.1:8095 → 容器:8095）
       CHAINPAY_BIND_ADDRESS: "0.0.0.0"
     ports:
-      # 和中间件一样只绑回环（RULE #5a）。管理端口 8096 不发布：它只在容器内回环上，HEALTHCHECK 在容器里打
+      # 只绑回环（RULE #5a）。管理端口 8096 不发布：它只在容器内回环上，HEALTHCHECK 在容器里打
       - "127.0.0.1:8095:8095"
-    # RULE #3 去掉全部 Linux 能力（一个 Java 进程一项都不需要）；RULE #4 禁止提权；RULE #8 根文件系统只读，只给 /tmp 一块内存盘
+    # RULE #3 去掉全部 Linux 能力（Java 进程一项都不需要）；RULE #4 禁止提权；RULE #8 根文件系统只读，只给 /tmp 一块内存盘
     cap_drop:
       - ALL
     security_opt:
@@ -91,7 +77,7 @@ services:
     read_only: true
     tmpfs:
       - /tmp
-    # RULE #7 限资源：JVM 堆按这个上限的 75% 算（Dockerfile 的 ENTRYPOINT）；进程数上限防 fork 炸弹
+    # RULE #7 限资源：JVM 堆按内存上限的 75% 算（Dockerfile 的 ENTRYPOINT）；进程数上限防 fork 炸弹
     mem_limit: 1g
     pids_limit: 256
     healthcheck:
@@ -101,7 +87,7 @@ services:
       timeout: 3s
       start_period: 60s
       retries: 3
-    # 容器运行时就是进程管理器：崩了拉起来，人手停的不拉（M6 取舍 5）
+    # 容器运行时就是进程管理器：崩了拉起来，人手停的不拉
     restart: unless-stopped
 
 volumes:

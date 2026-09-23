@@ -4,11 +4,7 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
-    <!--
-      Spring Boot 4.1.0 (Spring Framework 7.0.x) —— 当前最新稳定版。
-      基线是 Java 17，我们用 Java 25 (LTS)。
-      注意：4.x 的网上示例还不多，遇到和 3.x 不同的写法属于正常，不是你写错了。
-    -->
+    <!-- Spring Boot 4.1.0（Spring Framework 7.0.x），Java 25。4.x 的示例还少，和 3.x 写法不同是正常的；踩过的版本坑见 README 末尾 -->
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
@@ -28,16 +24,12 @@
     </properties>
 
     <dependencies>
-        <!-- Web：M1 才真正用到，先放着以便起进程 -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>
         </dependency>
 
-        <!--
-          JDBC 而不是 JPA：账本层要看得见每一条 SQL。
-          用的是 Spring 6.1+ 引入的 JdbcClient（在 spring-jdbc 里）。
-        -->
+        <!-- JDBC 而不是 JPA：账本层要看得见每一条 SQL（JdbcClient 在 spring-jdbc 里） -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-jdbc</artifactId>
@@ -48,55 +40,29 @@
             <artifactId>spring-boot-starter-validation</artifactId>
         </dependency>
 
-        <!--
-          M6-⓪：健康检查与指标。分组、探针（liveness / readiness）、HTTP 状态映射、连接池与 Redis 的指示器
-          都是「协议编码」，引库；每个指示器判「什么算能干活」是业务，自己写（com.chainpay.ops.health）。
-          端点只在回环的管理端口上答（application.yml 的 management 段），主端口上没有 /actuator。
-        -->
+        <!-- 健康检查与指标：分组、探针、HTTP 状态映射、连接池与 Redis 的指示器引库；
+             每个指示器判「什么算能干活」是业务，自己写（com.chainpay.ops.health）。端点只在回环的管理端口上答 -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-actuator</artifactId>
         </dependency>
 
-        <!--
-          M6-⑤：管理员口令散列用 Argon2id（Spring Security 的 crypto 模块，不引整个 Security）。
-          口令散列是原语，引库；谁能登录、会话多久、什么算敏感操作是业务，自己写（com.chainpay.admin）。
-          Argon2 的实现来自 BouncyCastle（M3 已在树里）。
-        -->
+        <!-- 管理员口令散列用 Argon2id（Spring Security 的 crypto 模块，不引整个 Security；实现来自下面的 BouncyCastle）。
+             谁能登录、会话多久、什么算敏感操作是业务，自己写（com.chainpay.admin） -->
         <dependency>
             <groupId>org.springframework.security</groupId>
             <artifactId>spring-security-crypto</artifactId>
         </dependency>
 
-        <!--
-          Redis：限流计数需要在所有实例之间共享。
-          进程内的 AtomicLong 在单实例下是对的，扩容到两个实例的那一刻就不对了
-          （各自允许 120，商户实际能打 240）。
-
-          底层客户端是 Lettuce（Boot 托管 7.5.2）—— 它是线程安全的，
-          一个连接可以被所有线程共用，不需要连接池。
-          Jedis 不是线程安全的，必须配池；这是两者最主要的区别。
-        -->
+        <!-- Redis：限流计数与防重放的 nonce 要在所有实例之间共享（进程内计数扩到两个实例，商户就能打两倍）。
+             客户端是 Lettuce：线程安全，一个连接所有线程共用，不需要连接池 -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-data-redis</artifactId>
         </dependency>
 
-        <!--
-          迁移。这里有两个都会咬人的版本陷阱，各来自一个不同的项目：
-
-          ① Flyway 10+ 把各数据库的支持拆成了独立模块
-             → flyway-database-postgresql 必须单独加，否则运行时报「不支持 postgresql」
-
-          ② Spring Boot 4 把自动配置从 spring-boot-autoconfigure 里拆了出来
-             → 只加 flyway-core 只能拿到 Flyway 这个库本身，
-               拿不到 Spring 的 FlywayAutoConfiguration，迁移根本不会执行。
-               现象很隐蔽：应用正常启动、数据源连得上、
-               只是表一张都没有（relation "xxx" does not exist）。
-               必须显式加 org.springframework.boot:spring-boot-flyway。
-
-          Boot 3.x 的示例里没有这一行 —— 这就是选最新版的代价。
-        -->
+        <!-- 迁移，三个都要：spring-boot-flyway 是 Boot 4 拆出来的自动配置，缺了迁移静默不跑（README 版本坑 2）；
+             flyway-database-postgresql 是 Flyway 10+ 按数据库拆的模块，缺了运行时报不支持 postgresql -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-flyway</artifactId>
@@ -116,17 +82,15 @@
             <scope>runtime</scope>
         </dependency>
 
-        <!-- M3-①：收款地址派生。只用它的曲线运算（secp256k1）、Keccak-256、RIPEMD-160；
-             BIP-32 / BIP-39 / EIP-55 的逻辑自己写、用规范向量钉住（理由见 CLAUDE.md §7）。
-             版本 1.80 = web3j utils 6.0.0 自己声明的版本（2026-09-10 扫描发现之前钉的 1.78.1 靠 Maven 就近优先把库压到了它编译时更旧的 BC 上）。 -->
+        <!-- 密码学原语：secp256k1、Keccak-256、RIPEMD-160、Argon2。BIP-32 / 39、EIP-55 自己写、用规范向量钉住（CLAUDE.md §7）。
+             版本跟 web3j 6.0.0 声明的一致：钉得更旧，Maven 就近优先会把 web3j 压到比它编译时更旧的 BC 上 -->
         <dependency>
             <groupId>org.bouncycastle</groupId>
             <artifactId>bcprov-jdk18on</artifactId>
             <version>1.80</version>
         </dependency>
-        <!-- M4-①（2026-09-09 改判）：协议层编码用库，不自己写。web3j 只拿 crypto 模块（RLP、EIP-1559 编码、签名与恢复、地址），
-             不拿 core（JSON-RPC 客户端我们自己写，那里面全是策略）。排除 jc-kzg-4844：那是 EIP-4844 blob 交易的原生库，我们永远不发那种交易，
-             付款系统里不该带一个用不上的原生库（前提：Eip1559Transaction.decode 只放行首字节 0x02）。BouncyCastle 仍显式保留：M3 的 BIP-32/39 与 xpub 解析用它，web3j 也依赖它。 -->
+        <!-- 协议编码用库：web3j 只拿 crypto 模块（RLP、EIP-1559 编码、签名与恢复、地址），不拿 core（JSON-RPC 客户端自己写，里面全是策略）。
+             排除 jc-kzg-4844：EIP-4844 blob 交易的原生库，我们不发那种交易，付款系统不带用不上的原生库（前提：Eip1559Transaction.decode 只放行首字节 0x02） -->
         <dependency>
             <groupId>org.web3j</groupId>
             <artifactId>crypto</artifactId>
@@ -136,9 +100,8 @@
                     <groupId>io.consensys.protocols</groupId>
                     <artifactId>jc-kzg-4844</artifactId>
                 </exclusion>
-                <!-- 2026-09-10 扫描：crypto 经 tuweni-bytes 把 vert.x、五个 netty http 编解码器、connid、kotlin-stdlib、Jackson 2 拖进运行时类路径，
-                     合计 5.7 MB、仓里 0 引用。排除整个 tuweni 后 89 条零网络签名与解码测试全绿（受控实验）。
-                     前提：我们只调 TransactionEncoder / TransactionDecoder / Sign / Keys，不碰任何以 tuweni Bytes 为参数的方法。复查：下次升 web3j 时 -->
+                <!-- tuweni 把 vert.x、netty 编解码器、kotlin-stdlib、Jackson 2 拖进运行时（约 5.7 MB，仓里零引用）。
+                     前提：只调 TransactionEncoder / TransactionDecoder / Sign / Keys，不碰以 tuweni Bytes 为参数的方法；升 web3j 时复查 -->
                 <exclusion>
                     <groupId>io.consensys.tuweni</groupId>
                     <artifactId>*</artifactId>
@@ -153,24 +116,13 @@
             <scope>test</scope>
         </dependency>
 
-        <!--
-          Testcontainers：测试跑真 PostgreSQL 18，不用 H2。
-          用 H2 会让你以为自己测过了 —— H2 的 NUMERIC 语义、隔离级别、锁行为
-          和 Postgres 都不一样，而这三处正好是本项目最要命的地方。
-        -->
+        <!-- 测试跑真 PostgreSQL 18，不用 H2：NUMERIC 语义、隔离级别、锁行为都不一样，而这三处正好是本项目最要命的地方 -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-testcontainers</artifactId>
             <scope>test</scope>
         </dependency>
-        <!--
-          注意坐标：Testcontainers 2.x 把所有模块改名加了 testcontainers- 前缀。
-          1.x 时代是 org.testcontainers:postgresql / :junit-jupiter，
-          网上绝大多数示例还是旧坐标 —— 照抄会得到
-          "'dependencies.dependency.version' ... is missing"。
-          这就是选最新版的代价，也是这个项目要练的能力之一：
-          不要信示例，去 BOM 里查真相。
-        -->
+        <!-- Testcontainers 2.x 的坐标带 testcontainers- 前缀（README 版本坑 1） -->
         <dependency>
             <groupId>org.testcontainers</groupId>
             <artifactId>testcontainers-postgresql</artifactId>
@@ -181,15 +133,7 @@
             <artifactId>testcontainers-junit-jupiter</artifactId>
             <scope>test</scope>
         </dependency>
-        <!--
-          测试跑真 Redis，理由同真 Postgres：内存桩测不出真实行为
-          （尤其 Lua 脚本的原子性，桩根本模拟不了）。
-
-          注意 groupId 是 com.redis 而不是 org.testcontainers ——
-          Redis 模块不在 Testcontainers 官方 BOM 里，是 Redis 官方维护的第三方模块。
-          我第一次写成了 org.testcontainers:testcontainers-redis，查 BOM 才发现不存在。
-          Spring Boot 托管它的版本（testcontainers-redis-module.version = 2.2.4）。
-        -->
+        <!-- 测试跑真 Redis（Lua 脚本的原子性桩模拟不了）。groupId 是 com.redis：Redis 官方维护的模块，不在 Testcontainers 的 BOM 里，版本由 Boot 托管 -->
         <dependency>
             <groupId>com.redis</groupId>
             <artifactId>testcontainers-redis</artifactId>

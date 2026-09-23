@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 回滚（M6-④）：把 previous 换回 current 再 up。数据库不动（取舍 9：迁移只前进，上一版代码兼容新 schema）。
+# 回滚：把 previous 换回 current 再 up。数据库不动（迁移只前进，上一版代码兼容新 schema）。
 # 被换下的镜像打成 chainpay:failed，留着查。用法：deploy/rollback.sh
 set -euo pipefail
 cd "$(dirname "$0")/.."

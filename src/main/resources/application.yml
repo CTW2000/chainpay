@@ -4,46 +4,31 @@ spring:
 
   task:
     scheduling:
-      # ★ 每个 @Scheduled 任务至少一条线程 ★（M3-⑤ 演练实测，2026-09-08）
-      # Spring 默认只有一条调度线程，索引器（12 秒一轮）和入账任务（30 秒一轮）排队用它：
-      # 入账事务等锁时 chain_head 也停了更新，确认数冻结、降级检测不跑、一条 ERROR 都没有。
-      # 现在两个任务、留有余量；加定时任务时同步加大，ChainIndexerBootSmokeTest 断言「线程数 ≥ 注册的任务数」。
+      # 每个 @Scheduled 任务至少一条线程。默认只有一条：一个任务等锁时全体停摆（chain_head 不更新、降级检测不跑、一条 ERROR 都没有）。
+      # 加任务时同步加大；ChainIndexerBootSmokeTest 断言「线程数 ≥ 注册的任务数」。
       pool:
         size: 8   # 六个任务（索引 / 入账 / 发送 / 追踪 / 对账 / 告警）+ 余量
 
   datasource:
-    # 对应 docker-compose.yml 里绑在 127.0.0.1:5433 的 Postgres 18。
-    #
-    # 主机名必须写 localhost，不能写 127.0.0.1 —— 这是实测出来的，原因未查明：
-    #   InetAddress.getByName("127.0.0.1")   → 正常
-    #   JDBC 连 jdbc:postgresql://127.0.0.1  → UnknownHostException: 127.0.0.1
-    #   JDBC 连 jdbc:postgresql://localhost   → 正常
-    # 同一个 JVM、同一个 pgjdbc 42.7.11、同一个数据库，只差主机名写法。
-    # 已排除：macOS SOCKS 代理、HTTP(S)_PROXY 环境变量、preferIPv4Stack。
-    # 这是「知其然不知其所以然」的修法。查清之后把这段注释换成真正的原因。
+    # 宿主上跑时连 compose 绑在 127.0.0.1:5433 的 Postgres；容器里由 CHAINPAY_DB_URL 覆盖。
+    # 主机名必须写 localhost：同一个 JVM 里 JDBC 连 127.0.0.1 报 UnknownHostException，InetAddress 解析却正常
+    # （已排除 SOCKS 代理、*_PROXY、preferIPv4Stack）。原因未查明，查清后把这段换成真正的原因。
     url: ${CHAINPAY_DB_URL:jdbc:postgresql://localhost:5433/chainpay}
-    # ★ 运行时用普通角色，不用超级用户 ★（2026-08-31 起）
-    # chainpay_app 不是超级用户、不是表的所有者，RLS 对它无条件生效。
-    # 角色由 db/init/01-roles.sql 创建；密码同 secret-key / admin-token 一样
-    # 故意不给默认值——配错了就起不来，而不是带着开发密码上生产。
+    # 普通角色：非超级用户、非属主，RLS 对它无条件生效（角色由 db/init/01-roles.sql 建）。
+    # 密码故意不给默认值：配错了就起不来，好过带着开发密码上生产。
     username: ${CHAINPAY_DB_USER:chainpay_app}
     password: ${CHAINPAY_DB_PASSWORD}
     hikari:
-      # 故意开小：并发测试时更容易把连接池竞争暴露出来。
-      # 池子开得大，很多并发问题会被"恰好没撞上"掩盖过去。
+      # 故意开小：池子大了，很多并发问题会被「恰好没撞上」掩盖
       maximum-pool-size: 10
       connection-timeout: 3000
 
   data:
     redis:
-      # 对应 docker-compose.yml 里绑在 127.0.0.1:6380 的 Redis 8。
-      # 主机名同样写 localhost 而不是 127.0.0.1（原因见上面数据源那段注释）。
+      # 宿主上跑时连 compose 绑在 127.0.0.1:6380 的 Redis；主机名写 localhost，原因同数据源
       host: ${CHAINPAY_REDIS_HOST:localhost}
       port: ${CHAINPAY_REDIS_PORT:6380}
-      # ★ 超时必须设，而且要短 ★
-      # 不设的话，Redis 挂掉时每个请求都会在这里卡住默认的几十秒，
-      # 线程池被耗尽，整个服务跟着一起死 —— 一个「保护措施」把主业务拖垮。
-      # 设成 1 秒：Redis 正常时远远够用；Redis 挂了时快速失败、立刻走降级路径。
+      # 超时必须短：不设时 Redis 一挂，每个请求卡几十秒、线程池耗尽，保护措施把主业务拖垮。1 秒 = 挂了快速失败、走降级
       timeout: 1s
       connect-timeout: 1s
       lettuce:
@@ -52,60 +37,44 @@ spring:
   flyway:
     enabled: true
     locations: classpath:db/migration
-    # 迁移用属主身份跑（建表、改策略、授权），和运行时的普通角色分开。
-    # Boot 的 spring.flyway.user/password 一旦设置，Flyway 会用自己的连接，不走上面的池。
+    # 迁移用属主身份（建表、改策略、授权），和运行时的普通角色分开；设了 user/password，Flyway 用自己的连接，不走上面的池
     user: ${CHAINPAY_FLYWAY_USER:chainpay}
     password: ${CHAINPAY_FLYWAY_PASSWORD}
-    # 迁移失败必须让应用启动失败，不能带着半个 schema 跑起来。
-    # 这是 flow-pay 部署链条里缺的一格（见 LEARNING-PATH.md M6）。
+    # 先核对库里已执行的迁移与本地文件一致（校验和连注释也算），对不上就启动失败
     validate-on-migrate: true
-    # M6-④ 取舍 9：迁移只前进，代码兼容前一版 schema。回滚到上一版镜像时库里有它不认识的更高版本，
-    # 校验必须放过「未来」版本，否则回滚起不来。代价：每条迁移都得让上一版代码也能跑（先加后删，expand / contract）
+    # 迁移只前进，代码兼容前一版 schema：回滚到上一版镜像时库里有它不认识的更高版本，校验要放过「未来」版本，否则回滚起不来。
+    # 代价：每条迁移都要让上一版代码也能跑（先加后删）
     ignore-migration-patterns: "*:future"
 
 chainpay:
-  # 加密 API secret 用的 AES-256 密钥（Base64 的 32 字节）。
-  # 生成：openssl rand -base64 32
-  #
-  # ★ 故意不给默认值 ★
-  # 没设这个环境变量，应用**直接起不来**。这是刻意的：
-  # 如果这里写一个默认值，它迟早会被带进生产 —— 而一个人人都知道的默认密钥
-  # 等于没有加密，且不会有任何报错，没有人会发现。
-  # 「配错了就起不来」远好过「配错了但看起来正常」。
-  #
-  # 测试用的固定密钥在 src/test/resources/application.yml，只对测试生效。
+  # 加密 API secret 的 AES-256 密钥（Base64 的 32 字节：openssl rand -base64 32）。
+  # 故意不给默认值：人人都知道的默认密钥等于没加密，而且不报错、没人发现。测试的固定密钥在 src/test/resources/application-test.yml
   secret-key: ${CHAINPAY_SECRET_KEY}
 
-  # M6-⑤ · 控制面（/admin/**）的门：管理员会话，不再有静态令牌（能配钥匙的钥匙吊销不掉）。
-  # 第一个管理员用 --create-admin 建（口令只从环境变量 CHAINPAY_ADMIN_PASSWORD 来）；登录拿短期会话令牌；敏感操作要最近再认证。
-  # 另一层「只认本机回环、无代理头」仍在（AdminAuthFilter）。
+  # 控制面（/admin/**）：本机回环且无代理头（AdminAuthFilter）+ 管理员会话 + 敏感操作近期再认证。
+  # 第一个管理员用 --create-admin 建，口令只从环境变量 CHAINPAY_ADMIN_PASSWORD 来
   admin:
     session-ttl: 12h        # 会话绝对寿命：一直在动也到点失效
     idle-timeout: 30m       # 闲置多久失效
-    reauth-window: 5m       # 敏感操作（发凭证、建商户、核准 / 拒绝提现、改限额、登记注资）要在这么久之内用口令再认证过
+    reauth-window: 5m       # 敏感操作（建商户、发凭证、核准 / 拒绝提现、改限额、登记注资）要在这么久之内用口令再认证过
     max-failures: 5         # 连续错几次锁
     lock-for: 15m           # 锁多久
 
-  # M3 · 系统连接：入账、结算这类无人值守、跨所有商户动钱的操作，以独立角色 chainpay_system 连库。
-  # 它带 BYPASSRLS：系统权限是连接身份，不再是 Java 里一个谁都能调的开关（TenantScope.asSystem 只剩测试注资在用，M4 删）。
-  # 密码同样故意不给默认值。角色由 db/init/01-roles.sql 创建；已有的开发库卷要手工补，见 README「把应用跑起来」。
+  # 系统连接：入账、结算、对账、控制面这类跨所有商户的操作，以独立角色 chainpay_system（BYPASSRLS，非超级用户、非属主）连库。
+  # 密码同样故意不给默认值
   system-db:
     username: ${CHAINPAY_SYSTEM_DB_USER:chainpay_system}
     password: ${CHAINPAY_SYSTEM_DB_PASSWORD}
-    # 只有定时任务用它，两条连接足够；开小是为了让并发问题暴露（同 spring.datasource.hikari）
+    # 开小让并发问题暴露（同 spring.datasource.hikari）
     maximum-pool-size: 2
-    # 等锁的上限（M3-⑤ 演练实测）。没有它，别的事务握着账本表时入账事务会无限期等下去，还拖住调度线程。
-    # 超时按瞬时失败处理：这一轮提前结束、下一轮再来，不进 HELD。5 秒：账本事务都很短，等得更久说明有人握着不该握的锁
+    # 等锁上限。超时按瞬时失败处理：这一轮提前结束、下一轮再来，不进 HELD。账本事务都很短，等 5 秒还拿不到说明有人握着不该握的锁
     lock-timeout: 5s
 
-  # M2 · 区块索引器（Sepolia）。
-  # rpc-url 故意不在这里给：设了环境变量 CHAINPAY_CHAIN_RPC_URL 才装配索引器
-  #（ChainIndexerConfig 上的 @ConditionalOnProperty），不设时应用照常启动。
-  # 现在用 publicnode 的免 key 节点：https://ethereum-sepolia-rpc.publicnode.com
-  # 需要 key 的时候（撞限流、要归档数据）再去 Alchemy / Infura 申请。
+  # 索引器。节点地址带 key、按口令对待，只从环境变量来：设了 CHAINPAY_CHAIN_RPC_URL 才装配，不设时应用照常启动；
+  # 审计节点 CHAINPAY_CHAIN_AUDIT_RPC_URL 可不设
   chain:
     chain-name: sepolia
-    # ★ 必须加引号 ★ YAML 1.1 把不加引号的 0x 十六进制当整数，转回字符串就成了十进制数（2026-09-03 实测）
+    # 必须加引号：YAML 1.1 把不加引号的 0x… 当十六进制整数，转回字符串成了十进制
     token-address: "0x779877A7B0D9E8603169DdbD7836e478b4624789"   # Sepolia 上的 LINK
     cursor-name: sepolia:link:transfer
     batch-blocks: 100
@@ -113,29 +82,25 @@ chainpay:
     poll-interval: 12s
     # 没有书签时从哪开始（该块视为已处理）。不配 = 没书签就停下，不猜。
     # start-block: 11623000
-    # 每次轮询抽几个已 finalized、已索引的块用回执对账（M2-⑤）
+    # 每轮抽几个已 finalized、已索引的块用回执对账
     reconcile-samples: 3
-    # 连续几次瞬时失败（或审计节点连续几次答不出）后把状态标成 DEGRADED、每轮报错。12 秒一轮，30 次约 6 分钟
+    # 连续几次瞬时失败（或审计节点连续几次答不出）后标 DEGRADED、每轮报错。12 秒一轮，30 次约 6 分钟
     degraded-after-failures: 30
-    # 一次轮询最多花多久追赶（M6-②）。落后时连续推批到追平或预算用完，下一轮接着追；正常时一轮一批用不到它。
-    # 封顶的是时间不是批数：一轮跑太久压住的是自己的降级检测与状态更新。停两天约 14000 块，10 块一批半秒一批，5 分钟能追 6000 块
+    # 一轮最多花多久追赶：落后时连续推批到追平或预算用完，下一轮接着追。
+    # 按时间封顶不按批数：一轮跑太久，压住的是自己的降级检测与状态更新
     catch-up-budget: 5m
-    # 审计节点同样只从环境变量来：CHAINPAY_CHAIN_AUDIT_RPC_URL，可不设
 
-  # M3 · 收款。xpub 故意不在这里给：设了环境变量 CHAINPAY_DEPOSIT_XPUB 才装配收款地址模块；
-  # 入账任务还要同时有主节点（chain.rpc-url），两者都有才装配。
+  # 收款。xpub 只从环境变量来：设了 CHAINPAY_DEPOSIT_XPUB 才装配收款地址模块；入账任务还要同时有主节点
   deposit:
     # 入账任务多久跑一轮。finalized 本身落后十几分钟，比 30 秒更勤没有意义
     post-interval: 30s
     # 每轮最多处理几条 FINAL 日志
     batch-size: 50
-    # 两个节点的 finalized 差多少块之内算「还没跟上」：这一轮延后、不占坑，下一轮再看，节点追上来就自己记上。
-    # 超出它（或库里的视图比两个节点都超前这么多）才判 HELD_NODE_DISAGREE 叫人。64 块 ≈ 两个 epoch，
-    # 正常的不同步（两家更新 finalized 的时刻差几秒）到不了这里。调大 = 卡住的节点更晚被发现。
+    # 两个节点的 finalized 差多少块之内算「还没跟上」：这一轮延后、不占坑，下一轮再看。
+    # 超出它（或库里的视图比两个节点都超前这么多）才判 HELD_NODE_DISAGREE。64 块 ≈ 两个 epoch；调大 = 卡住的节点更晚被发现
     finality-tolerance-blocks: 64
 
-  # M4 · 付款。热钱包私钥故意不在这里给：设了环境变量 CHAINPAY_PAYOUT_HOT_WALLET_KEY 才装配付款模块；
-  # 发送任务还要同时有主节点（chain.rpc-url），两者都有才装配。
+  # 付款。热钱包私钥只从环境变量来：设了 CHAINPAY_PAYOUT_HOT_WALLET_KEY 才装配付款模块；发送任务还要同时有主节点
   payout:
     # 签进交易里的链号（EIP-155）。Sepolia = 11155111；签错链号的交易别的链不认
     chain-id: 11155111
@@ -145,17 +110,16 @@ chainpay:
     batch-size: 10
     # 小费地板（gwei）：节点建议低于它时按它出，太低会一直排不上
     priority-floor-gwei: 1
-    # 总费率上限（gwei）：2 × 基础费 + 小费超过它这一轮不发，等回落。Sepolia 平时几 gwei，涌堵时几十
+    # 总费率上限（gwei）：2 × 基础费 + 小费超过它这一轮不发，等回落。Sepolia 平时几 gwei，拥堵时几十
     max-fee-gwei: 100
     # gasLimit 上限：LINK 转账实测 5 万出头，估算 × 1.2 超过它说明这笔交易不正常
     gas-limit-cap: 200000
     # 追踪任务多久跑一轮：问回执、核 FINAL、结算。回执一块一变，比出块略慢即可
     track-interval: 15s
-    # 广播后多久还没上链算卡住：同编号加价 25% 再发一笔。Sepolia 12 秒一块，3 分钟约 15 块；太短会白白多付小费
+    # 广播后多久还没上链算卡住：同编号加价 25% 再发一笔。Sepolia 3 分钟约 15 块；太短会白白多付小费
     stuck-after: 3m
 
-  # M5 · 对账：站在两个节点都认的 finalized 块上，把链上事实和库内记录逐项比对；结论落 audit_run，差异落 audit_finding。
-  # 设了主节点才装配（同索引器）。
+  # 对账：站在两个节点都认的 finalized 块上，把链上事实和库内记录逐项比对；结论落 audit_run，差异落 audit_finding。设了主节点才装配
   audit:
     # 多久对一次账。上次 OK / DIFF 距今超过两个周期，GET /admin/v1/audit 报 stale：「没跑」和「跑了没事」必须分得开
     interval: 1h
@@ -164,12 +128,10 @@ chainpay:
     # 「FINAL 的收款日志应该已经入账」的宽限块数：给入账任务几轮时间，不把刚 FINAL 的报成漏账
     lag-blocks: 10
 
-# M6-⓪ · 健康检查与指标：只在回环的管理端口上答，主端口上没有 /actuator。
-# 探针不能带令牌（进程管理器、容器 HEALTHCHECK 都不会带），放主端口就等于对公网开一个无认证接口。
-# 三个组回答三个不同的问题：
-#   liveness  进程在不在（在就 UP；进程管理器据此决定要不要重启）
-#   readiness 能不能接请求（两个连接池都通、迁移对得上；容器 HEALTHCHECK 打这个）
-#   work      能不能干活（索引器 / 热钱包 / 判官 / Redis；给告警和人看，不影响进程去留：索引器停了要叫人，不是下线整个进程）
+# 健康检查与指标：只在回环的管理端口上答，主端口上没有 /actuator。探针不带令牌，放主端口就等于对外开一个无认证接口。
+#   liveness  进程在不在（进程管理器据此决定要不要重启）
+#   readiness 能不能接请求（两个连接池都通；容器 HEALTHCHECK 打这个）
+#   work      能不能干活（索引器 / 入账 / 热钱包 / 对账 / Redis）：给告警和人看，不影响进程去留
 management:
   server:
     port: ${CHAINPAY_MANAGEMENT_PORT:8096}
@@ -186,7 +148,7 @@ management:
       probes:
         enabled: true
       status:
-        # 多出来的一档 DEGRADED（还在跑，但有人该来看看）：排在 DOWN 后、UP 前；HTTP 仍是 200，容器不重启
+        # 多一档 DEGRADED（还在跑，但该有人来看）：排在 DOWN 后、UP 前；HTTP 仍是 200，容器不重启
         order: DOWN,OUT_OF_SERVICE,DEGRADED,UP,UNKNOWN
         http-mapping:
           down: 503
@@ -200,8 +162,8 @@ management:
         work:
           include: indexer,deposit,hotWallet,audit,redis
 
-# M6-③ · 告警：定时看 work 组（索引器 / 热钱包 / 判官 / Redis），只在变化时叫：不是 UP 叫一次，恢复再叫一次；没送到下一轮再叫。
-# 出口是一个 HTTP webhook，地址只从环境变量来、按密码对待（入站 webhook 的令牌常在 URL 里）；不设 = 只打 ERROR 日志
+# 告警：定时看 work 组，只在变化时叫（不是 UP 叫一次，恢复再叫一次；没送到下一轮再叫）。
+# 出口是一个 webhook，地址只从环境变量来、按口令对待（令牌常在 URL 里）；不设 = 只打 ERROR 日志
 chainpay.alert:
   webhook-url: ${CHAINPAY_ALERT_WEBHOOK_URL:}
   # generic（自己的接收端，结构化 JSON）/ slack / dingtalk / feishu
@@ -212,17 +174,13 @@ chainpay.alert:
 
 logging:
   level:
-    # 想看每条 SQL 时把这行打开 —— 账本层的一个核心目的就是"SQL 看得见"
+    # 想看每条 SQL 时打开这行：账本层的一个核心目的就是「SQL 看得见」
     # org.springframework.jdbc.core: DEBUG
-    # 默认 INFO；开发想看每一步（含 SQL 之外的调试行）时 CHAINPAY_LOG_LEVEL=DEBUG（env/local.env.example）。
-    # DEBUG 上生产会把请求细节、地址、金额全打进日志（安全扫描第 15 条，M6-②）
+    # 默认 INFO；开发时 CHAINPAY_LOG_LEVEL=DEBUG。DEBUG 会把请求细节、地址、金额打进日志，生产不开
     com.chainpay: ${CHAINPAY_LOG_LEVEL:INFO}
 
 server:
-  # 8095 而不是 8090：flow-pay 后端占用 8090，两个项目同时开着会撞。
-  # 用 ${VAR:默认值} 语法可被环境变量覆盖，换端口不用改代码也不用重新打包：
-  #     CHAINPAY_PORT=9099 java -jar target/chainpay-0.1.0-SNAPSHOT.jar
+  # 8095：flow-pay 后端占着 8090
   port: ${CHAINPAY_PORT:8095}
-  # 默认只绑回环：宿主上直接跑 jar 时不对所有网卡开放（安全扫描第 15 条，M6-②）。
-  # 容器里必须放开到 0.0.0.0（docker-compose.yml 的 app 服务给 CHAINPAY_BIND_ADDRESS），否则宿主发布的端口连不进去；对外只绑宿主回环由 compose 管
+  # 默认只绑回环：宿主上直接跑时不对所有网卡开放。容器里 compose 给 0.0.0.0，否则发布的端口连不进来；对外只绑宿主回环由 compose 管
   address: ${CHAINPAY_BIND_ADDRESS:127.0.0.1}

@@ -1,9 +1,5 @@
-# flow-pay 就是缺了这个文件 —— 一旦 Dockerfile 里出现 COPY . .，
-# .git/、target/、env/*.env（真密钥）会一起被打进镜像层。
-#
-# 关键：镜像的层是不可变的。COPY 进去再 RUN rm 删掉，
-# 密钥仍然留在前一层里，任何人 docker save 都能扒出来。
-# M6-①：Dockerfile 只 COPY pom.xml 与 src（ContainerGuardTest 禁 COPY . .），这里是第二道墙；第三道是打完镜像跑 tools/image-check.sh。
+# 第二道墙：Dockerfile 只 COPY pom.xml 与 src（ContainerGuardTest 禁 COPY . .）；第三道是打完镜像跑 tools/image-check.sh。
+# 镜像的层不可变：密钥 COPY 进去再 RUN rm，仍留在前一层里，docker save 就能扒出来。
 #
 # 构建上下文里不该有的东西。第一条是密钥：env/ 整个目录不进镜像，样板也不需要
 env/

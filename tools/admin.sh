@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 管理接口（/admin/**）的调用器（M6-⑤ 起是管理员会话，不再有静态令牌）。
+# 管理接口（/admin/**）的调用器。
 # 控制面只认「本机回环 + 会话」：应用在容器里跑时宿主打发布端口的源地址是网桥网关，会 401，所以在容器里发 curl。
 #
 #   tools/admin.sh login <用户名>          提示输入口令（不回显），打印一行 export CHAINPAY_ADMIN_SESSION=…，eval 它
