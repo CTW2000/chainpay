@@ -3,8 +3,12 @@ package com.chainpay.security;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.chainpay.ledger.service.LedgerService;
+import com.chainpay.ledger.service.LedgerService.TransferCode;
+import com.chainpay.ledger.service.LedgerService.TransferCommand;
 import com.chainpay.security.service.TenantScope;
 import com.chainpay.support.AbstractPostgresTest;
+import java.math.BigDecimal;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -31,6 +35,10 @@ class TenantIsolationTest extends AbstractPostgresTest {
 
     @Autowired
     private TenantScope tenantScope;
+
+    /** 应用侧的账本 bean（普通角色 chainpay_app）：幂等键那条测试要以商户身份真的记一笔。 */
+    @Autowired
+    private LedgerService ledger;
 
     /**
      * <b>应用自己的</b>连接——和基类里做 seed 的 {@code jdbc}（属主）不是同一个。
@@ -144,15 +152,35 @@ class TenantIsolationTest extends AbstractPostgresTest {
     }
 
     @Test
-    @DisplayName("★ 把自己的账户改成别人的 —— 也被拒绝")
+    @DisplayName("★ 把自己的账户改成别人的 —— 两道都拦：先是列权限（V29），把权限给回去还有 RLS 的 WITH CHECK")
     void cannotGiveAwayAnAccountByChangingItsOwner() {
         // 只写 USING 不写 WITH CHECK 的话，这条 UPDATE 会成功 ——
         // 商户可以一次性把账户「送」给别人（或者把别人的账户认领过来）。
-        assertThatThrownBy(() -> tenantScope.asMerchant(acmeId, () ->
-                appJdbc.sql("UPDATE account SET merchant_id = :other WHERE id = :id")
-                        .param("other", evilcoId).param("id", acmeAccount)
-                        .update()))
-                .hasStackTraceContaining("row-level security policy");
+        //
+        // 2026-09-22（V29）之后它连跑都跑不起来：应用角色对 account 只剩 UPDATE(balance)，
+        // 而权限检查在行级安全之前，所以报的是 permission denied，不再是 row-level security policy。
+        //
+        // **两层都要断言**：只断言权限的话，V6 那道 WITH CHECK 就没人守了——哪天有人给 account
+        // 重新 GRANT 整行 UPDATE（比如为了让某个新功能能改别的列），这条测试照样绿，
+        // 而「把账户送给别人」又成了可能。这是删接口那天踩到的空转的另一种形态。
+        assertThatThrownBy(() -> tenantScope.asMerchant(acmeId, this::giveAwayTheAccount))
+                .as("V29：应用角色没有 account.merchant_id 的 UPDATE 权限")
+                .hasStackTraceContaining("permission denied");
+
+        jdbc.sql("GRANT UPDATE (merchant_id) ON account TO chainpay_app").update();
+        try {
+            assertThatThrownBy(() -> tenantScope.asMerchant(acmeId, this::giveAwayTheAccount))
+                    .as("就算把列权限给回来，行级安全的 WITH CHECK 仍然拦住")
+                    .hasStackTraceContaining("row-level security policy");
+        } finally {
+            jdbc.sql("REVOKE UPDATE (merchant_id) ON account FROM chainpay_app").update();
+        }
+    }
+
+    private int giveAwayTheAccount() {
+        return appJdbc.sql("UPDATE account SET merchant_id = :other WHERE id = :id")
+                .param("other", evilcoId).param("id", acmeAccount)
+                .update();
     }
 
     // ==================================================================
@@ -167,14 +195,22 @@ class TenantIsolationTest extends AbstractPostgresTest {
         // 注意这里**不**直接改 balance 列：第一版我写了 UPDATE account SET balance = 5，
         // 结果被 @AfterEach 里的 balanceDrift() 抓住 ——
         // 物化余额和分录求和对不上了。判官连我自己的测试都一起管，这是对的。
+        //
+        // 2026-09-22（V29）也不再改 code：应用角色对 account 只剩 UPDATE(balance)，
+        // 改别的列要属主身份。所以「自己的账户照常读写」里那个「写」，
+        // 换成应用角色真正会做的那一种——在自己名下插一个账户（RLS 的 WITH CHECK 只允许挂在自己名下），
+        // 再读回来。余额那条路由账本的测试覆盖：它改 balance 时同时写分录，判官才平。
         var result = tenantScope.asMerchant(acmeId, () -> {
-            appJdbc.sql("UPDATE account SET code = 'user:acme:USDT:renamed' WHERE id = :id")
-                    .param("id", acmeAccount).update();
-            return appJdbc.sql("SELECT code FROM account WHERE id = :id")
-                    .param("id", acmeAccount).query(String.class).single();
+            appJdbc.sql("""
+                            INSERT INTO account(code, currency, kind, merchant_id)
+                            VALUES ('user:acme:USDT:2', 'USDT', 'LIABILITY', :m)
+                            """)
+                    .param("m", acmeId).update();
+            return appJdbc.sql("SELECT code FROM account WHERE code = 'user:acme:USDT:2'")
+                    .query(String.class).single();
         });
 
-        assertThat(result).isEqualTo("user:acme:USDT:renamed");
+        assertThat(result).isEqualTo("user:acme:USDT:2");
     }
 
     @Test
@@ -199,6 +235,51 @@ class TenantIsolationTest extends AbstractPostgresTest {
     }
 
     // ==================================================================
+    // 幂等键的作用域（2026-09-22 从 ApiSecurityTest 下移到这里）
+    // ==================================================================
+
+    @Test
+    @DisplayName("★ 两个商户各用同一个幂等键 —— 各自成一笔，互不干扰")
+    void theIdempotencyKeyNamespaceIsPerMerchant() {
+        // 历史（M1.5 质询扫描 9.8）：V1 那行 UNIQUE (idempotency_key) 的作用域是**全表**。
+        // evilco 用了 acme 用过的键 → UNIQUE 冲突 → ON CONFLICT DO NOTHING 返回空 →
+        // 回读那一笔又被 RLS 藏住 → 0 行 → .single() 炸 → 500，而 9001 还标着「可重试」。
+        // 两个后果：① 跨租户的存在性预言机（看 200 还是 500 就能探出别人用过哪些键）；
+        //          ② 可抢占——预先占掉受害者要用的键，让他永久拿 500。
+        // 修法是 V7：UNIQUE NULLS NOT DISTINCT (submitter_merchant_id, idempotency_key)，
+        // 而 submitter_merchant_id 由 SQL 里的 current_merchant_id() 填——「谁提交的」由租户变量说，
+        // 不由调用方的参数说。NULLS NOT DISTINCT 是为了系统身份（商户为 NULL）之间也不许撞。
+        //
+        // 这条性质原先由 ApiSecurityTest 经通用转账接口守着；接口 2026-09-22 删了，
+        // 而约束本身在数据库，所以测试下移到这里，夹具也便宜（不必起 HTTP、不必发签名请求）。
+        long acmeTo = account("user:acme-2:USDT", acmeId);
+        long evilcoTo = account("user:evilco-2:USDT", evilcoId);
+        // 借方允许为负：这条测试只关心幂等键的作用域，不关心余额，免得再搭一套注资夹具
+        long acmeFrom = overdraftAccount("user:acme-src:USDT", acmeId);
+        long evilcoFrom = overdraftAccount("user:evilco-src:USDT", evilcoId);
+
+        long acmeTransfer = tenantScope.asMerchant(acmeId, () ->
+                ledger.transfer(new TransferCommand("order-1", "USDT", new BigDecimal("1"),
+                        acmeFrom, acmeTo, TransferCode.INTERNAL, null)));
+        long evilcoTransfer = tenantScope.asMerchant(evilcoId, () ->
+                ledger.transfer(new TransferCommand("order-1", "USDT", new BigDecimal("1"),
+                        evilcoFrom, evilcoTo, TransferCode.INTERNAL, null)));
+
+        assertThat(evilcoTransfer)
+                .as("同一个键在另一个商户名下必须是全新的一笔，不能撞到 acme 那笔")
+                .isNotEqualTo(acmeTransfer);
+        assertThat(transferCount()).as("两笔都真的落库了").isEqualTo(2);
+    }
+
+    // ==================================================================
+
+    private long overdraftAccount(String code, long merchantId) {
+        return jdbc.sql("""
+                        INSERT INTO account(code, currency, kind, merchant_id, allow_negative)
+                        VALUES (:c, 'USDT', 'LIABILITY', :m, TRUE) RETURNING id
+                        """)
+                .param("c", code).param("m", merchantId).query(Long.class).single();
+    }
 
     private long account(String code, Long merchantId) {
         return jdbc.sql("""

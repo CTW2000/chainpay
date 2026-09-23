@@ -1,11 +1,9 @@
 package com.chainpay.common.web;
 
 import com.chainpay.merchant.service.AdminService;
-import com.chainpay.security.service.AccountAccessService;
 
 import com.chainpay.chain.deposit.service.DepositAddressService.UnsupportedTokenException;
 import com.chainpay.merchant.service.AdminService.AlreadyExistsException;
-import com.chainpay.security.service.AccountAccessService.AccessDeniedException;
 import com.chainpay.ledger.service.LedgerException;
 import java.util.Map;
 import org.slf4j.Logger;
@@ -68,24 +66,10 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
             // 刻意折叠：不存在 与 无权访问 必须不可区分
             LedgerException.Reason.ACCOUNT_NOT_FOUND,       ErrorCode.ACCESS_DENIED);
 
-
-    /**
-     * 无权访问账户 → 403 Forbidden。
-     *
-     * <p>403 与 401 的区别，容易混：
-     * <ul>
-     *   <li><b>401 Unauthorized</b>：我不知道你是谁（凭证缺失/无效）——「请先证明身份」</li>
-     *   <li><b>403 Forbidden</b>：我知道你是谁，但你不能干这个 ——「换个身份也没用，别再试了」</li>
-     * </ul>
-     * 回错了会误导客户端：401 会让它去刷新凭证再重试，而这里重试多少次都没用。
-     */
-    @ExceptionHandler(AccessDeniedException.class)
-    public ResponseEntity<ApiResponse<Void>> handleAccessDenied(AccessDeniedException e) {
-        // 记服务端日志，但响应里不加任何额外信息
-        log.warn("拒绝访问账户 {}", e.accountId());
-        return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                .body(ApiResponse.error(ErrorCode.ACCESS_DENIED, e.getMessage()));
-    }
+    // 3001（ACCESS_DENIED）此前还有第二个来源：AccountAccessService.AccessDeniedException，专门回答
+    // 「请求体里给的账户 id 不是你的」，回 403。2026-09-22 通用转账接口连同那个服务一起删了——商户接口
+    // 从此不收任何账本账户 id，账户归属不再是应用层要回答的问题（只剩 RLS 那道），所以那个处理器也没了。
+    // 3001 仍然可达：上面最后一行，账本自己抛的 ACCOUNT_NOT_FOUND 折叠成它。
 
     /**
      * 要建的东西已经存在 --&gt; 409 Conflict。

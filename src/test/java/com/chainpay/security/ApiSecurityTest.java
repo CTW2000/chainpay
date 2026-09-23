@@ -5,13 +5,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.chainpay.security.crypto.SecretCipher;
 import com.chainpay.support.AbstractPostgresTest;
 import com.chainpay.support.SignedRequests;
-import java.math.BigDecimal;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -36,10 +36,45 @@ import org.springframework.boot.test.web.server.LocalServerPort;
  * 而 MockMvc 绕过了真实的 Servlet 容器和过滤器链</b>，
  * 用它测出来的「通过」不能证明真实请求也通过。
  * 这和我们坚持用真 Postgres 而不是 H2 是同一条理由。
+ *
+ * <p><b>2026-09-22 换靶子（用户定：移除通用转账接口）。</b>此前每条测试打的都是
+ * {@code POST /api/v1/transfers} 或 {@code GET /api/v1/accounts/{id}/balance}，两个接口都删了——
+ * 商户接口从此不收任何账本账户 id。签名层的性质与打哪个接口无关，靶子换成白名单接口
+ * （{@code /api/v1/withdrawal-addresses}：登记幂等、不依赖链上配置、空列表也回 200）。
+ * <b>不换会怎样</b>：过滤器在路由之前跑，打一条不存在的路径照样回 401，那 8 条签名测试会「绿着但什么都不证明」
+ * ——和 2026-09-02 扫描抓到的空转是同一种（见 tamperedBodyIsRejected 里的注释）。
+ *
+ * <p>随接口一起删掉的用例，以及它们的性质现在住在哪里：
+ * <ul>
+ *   <li>「evilco 转走 acme 的钱 → 403」「贷方也必须是自己的」：请求体里递账户 id 这种形状没有了，
+ *       {@code ControllerBoundaryTest} 守着不许再有；数据库层由 {@code TenantIsolationTest}
+ *       「往别人的账户写分录 → 被数据库拒」兜着</li>
+ *   <li>「偷看别人的余额 → 403」：没有按 id 读余额的接口了；跨商户读由
+ *       {@code WithdrawalApiTest}「别的商户看不到」覆盖</li>
+ *   <li>「无权访问 与 不存在 回答一致」：<b>删接口那天它变成了空转</b>（两边都是 404「路径不存在」，
+ *       body 一样，照样绿）。搬到下面 ② 层的 disable 接口——那里 RLS 让「不是你的」和「不存在」
+ *       都是「改了 0 行」，是结构性成立的</li>
+ *   <li>「余额不足 → 4001」「金额格式非法 → 400」「同键不同体 → 4003」「正常转账成功」：
+ *       {@code WithdrawalApiTest} 在真实业务路径上都有</li>
+ *   <li>「非法枚举值不泄露合法值」：全项目再没有客户端给的枚举（提现列表的 {@code status}
+ *       是字符串过滤，不转枚举）</li>
+ *   <li>「两个商户各用同一个幂等键互不干扰」：约束是账本的 {@code UNIQUE (submitter_merchant_id,
+ *       idempotency_key)}，测试下移到 {@code LedgerInvariantTest}（夹具也便宜）</li>
+ * </ul>
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @DisplayName("M1 · API 安全契约")
 class ApiSecurityTest extends AbstractPostgresTest {
+
+    /** 签名层的靶子：登记幂等、无副作用、不依赖链上配置。GET 空列表也回 200。 */
+    private static final String TARGET = "/api/v1/withdrawal-addresses";
+
+    /** acme 预先登记的白名单地址（② 层里「别人的对象」）。 */
+    private static final String ACME_ADDRESS = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    /** 测试自己登记用的地址。 */
+    private static final String NEW_ADDRESS = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    /** 篡改请求体时换成的地址。 */
+    private static final String OTHER_ADDRESS = "0xcccccccccccccccccccccccccccccccccccccccc";
 
     @LocalServerPort
     private int port;
@@ -53,15 +88,14 @@ class ApiSecurityTest extends AbstractPostgresTest {
 
     private String acmeSecret;
     private String evilSecret;
-    private long acmeAccountA;
-    private long acmeAccountB;
-    private long evilAccount;
+    private long acmeAddressId;
 
     @BeforeEach
     void seedMerchantsAndCredentials() {
         // 基类的 @BeforeEach 已 TRUNCATE 账本三表；商户相关的表要单独清。
-        // 顺序：先删引用方（凭证），再删被引用方（商户），否则外键会拦。
+        // 顺序：先删引用方（凭证、白名单），再删被引用方（商户），否则外键会拦。
         jdbc.sql("DELETE FROM api_credential").update();
+        jdbc.sql("DELETE FROM payout_address").update();
         jdbc.sql("DELETE FROM merchant").update();
 
         long acme = createMerchant("acme", "Acme 商贸");
@@ -72,14 +106,24 @@ class ApiSecurityTest extends AbstractPostgresTest {
         createCredential(acme, "ak_acme", acmeSecret);
         createCredential(evil, "ak_evilco", evilSecret);
 
-        acmeAccountA = createOwnedAccount("user:acme-a:USDT", acme);
-        acmeAccountB = createOwnedAccount("user:acme-b:USDT", acme);
-        evilAccount = createOwnedAccount("user:evil:USDT", evil);
+        // 白名单那一行用属主连接写：这张表有 RLS，商户接口只能登记自己的，
+        // 而这里要的正是「一条属于 acme 的行，供 evilco 去碰」。
+        acmeAddressId = jdbc.sql("""
+                        INSERT INTO payout_address(merchant_id, address, label)
+                        VALUES (:m, :a, 'acme 的提现地址') RETURNING id
+                        """)
+                .param("m", acme).param("a", ACME_ADDRESS)
+                .query(Long.class).single();
+    }
 
-        // 注资是管理操作，走 SQL 而不是商户接口 ——
-        // 商户接口做不到从平台账户注资，这本身就是「默认拒绝」的体现。
-        long mint = createAccount("house:mint:USDT", "USDT", "EQUITY", true);
-        seedBalance(mint, acmeAccountA, new BigDecimal("1000"));
+    /**
+     * 谁创建谁清理。基类每个测试只 TRUNCATE entry / transfer / account，白名单表留着，
+     * 而它指向 merchant——别的测试类做 `DELETE FROM merchant` 时会撞外键，那边的商户就删不掉
+     * （2026-09-22 实测：留下的白名单行让另外两个测试类一口气红 14 条）。
+     */
+    @AfterEach
+    void removeWhitelistRows() {
+        jdbc.sql("DELETE FROM payout_address").update();
     }
 
     // ==================================================================
@@ -89,34 +133,34 @@ class ApiSecurityTest extends AbstractPostgresTest {
     @Test
     @DisplayName("正确签名的请求放行")
     void validSignatureIsAccepted() {
-        var response = signedGet(acmeSecret, "ak_acme", balancePath(acmeAccountA));
+        var response = signedGet(acmeSecret, "ak_acme", TARGET);
 
         assertThat(response.statusCode()).isEqualTo(200);
-        assertThat(response.body()).contains("1000");
+        assertThat(response.body()).as("看到的是自己那一条").contains("\"status\":\"ACTIVE\"");
     }
 
     @Test
     @DisplayName("完全没有凭证 —— 401")
     void requestWithoutCredentialsIsRejected() {
-        var response = send(HttpRequest.newBuilder().uri(url(balancePath(acmeAccountA))).GET());
+        var response = send(HttpRequest.newBuilder().uri(url(TARGET)).GET());
 
         assertThat(response.statusCode()).isEqualTo(401);
     }
 
     @Test
-    @DisplayName("★ 改请求体（金额 1 → 9999），签名不变 —— 401")
+    @DisplayName("★ 改请求体（换一个地址），签名不变 —— 401")
     void tamperedBodyIsRejected() {
-        // 签名机制存在的头号理由：攻击者截获一个合法请求，只改金额。
-        // 若签名不覆盖 body，这一步会成功。
-        String honestBody = transferBody("t-1", "1", acmeAccountA, acmeAccountB);
-        String tamperedBody = transferBody("t-1", "9999", acmeAccountA, acmeAccountB);
+        // 签名机制存在的头号理由：攻击者截获一个合法请求，只改内容。
+        // 若签名不覆盖 body，这一步会成功——进白名单的就成了攻击者的地址。
+        String honestBody = addressBody(NEW_ADDRESS, "honest");
+        String tamperedBody = addressBody(OTHER_ADDRESS, "honest");
 
         long ts = System.currentTimeMillis();
         String nonce = SignedRequests.newNonce();
-        String signature = sign(acmeSecret, ts, nonce, "POST", "/api/v1/transfers", honestBody);
+        String signature = sign(acmeSecret, ts, nonce, "POST", TARGET, honestBody);
 
         var response = send(HttpRequest.newBuilder()
-                .uri(url("/api/v1/transfers"))
+                .uri(url(TARGET))
                 .header("Content-Type", "application/json")
                 .header("X-CP-API-KEY", "ak_acme")
                 .header("X-CP-API-TIMESTAMP", String.valueOf(ts))
@@ -129,20 +173,20 @@ class ApiSecurityTest extends AbstractPostgresTest {
         // 签名必然对不上——把 body 改回原样照样 401。
         // 「签名覆盖 body」这个断言当时什么都没守：摘掉 body 的覆盖它也绿。
         assertThat(response.statusCode()).as("签名必须覆盖 body").isEqualTo(401);
-        assertThat(transferCount()).as("被拒的请求不能留下任何记录").isEqualTo(1);
+        assertThat(addressCount()).as("被拒的请求不能留下任何记录（只剩 seed 那一条）").isEqualTo(1);
     }
 
     @Test
-    @DisplayName("★ 拿查余额的签名去打转账接口（换 path）—— 401")
+    @DisplayName("★ 拿另一个路径的签名来打这个接口 —— 401")
     void signatureFromAnotherPathIsRejected() {
         long ts = System.currentTimeMillis();
         String otherNonce = SignedRequests.newNonce();
-        String otherPathSignature =
-                sign(acmeSecret, ts, otherNonce, "GET", balancePath(acmeAccountA), "");
-        String body = transferBody("t-2", "1", acmeAccountA, acmeAccountB);
+        String body = addressBody(NEW_ADDRESS, "x");
+        // 方法与请求体都一样，只有 path 不同
+        String otherPathSignature = sign(acmeSecret, ts, otherNonce, "POST", "/api/v1/withdrawals", body);
 
         var response = send(HttpRequest.newBuilder()
-                .uri(url("/api/v1/transfers"))
+                .uri(url(TARGET))
                 .header("Content-Type", "application/json")
                 .header("X-CP-API-KEY", "ak_acme")
                 .header("X-CP-API-TIMESTAMP", String.valueOf(ts))
@@ -151,12 +195,13 @@ class ApiSecurityTest extends AbstractPostgresTest {
                 .POST(HttpRequest.BodyPublishers.ofString(body)));
 
         assertThat(response.statusCode()).as("签名必须覆盖 path").isEqualTo(401);
+        assertThat(addressCount()).isEqualTo(1);
     }
 
     @Test
     @DisplayName("★ 6 秒前的签名（超出时间窗）—— 401")
     void expiredTimestampIsRejected() {
-        var response = signedGetAtTime(acmeSecret, "ak_acme", balancePath(acmeAccountA),
+        var response = signedGetAtTime(acmeSecret, "ak_acme", TARGET,
                 System.currentTimeMillis() - 6_000);
 
         assertThat(response.statusCode()).as("时间窗必须挡住过期签名").isEqualTo(401);
@@ -167,7 +212,7 @@ class ApiSecurityTest extends AbstractPostgresTest {
     void futureTimestampIsRejected() {
         // 时间窗必须双向。只卡「过期」不卡「未来」的话，
         // 攻击者可以预先用未来时间戳签好请求，等到那一刻再发。
-        var response = signedGetAtTime(acmeSecret, "ak_acme", balancePath(acmeAccountA),
+        var response = signedGetAtTime(acmeSecret, "ak_acme", TARGET,
                 System.currentTimeMillis() + 6_000);
 
         assertThat(response.statusCode()).as("时间窗必须双向都卡").isEqualTo(401);
@@ -176,7 +221,7 @@ class ApiSecurityTest extends AbstractPostgresTest {
     @Test
     @DisplayName("用别人的 secret 签名 —— 401")
     void signatureWithWrongSecretIsRejected() {
-        var response = signedGet(evilSecret, "ak_acme", balancePath(acmeAccountA));
+        var response = signedGet(evilSecret, "ak_acme", TARGET);
 
         assertThat(response.statusCode()).isEqualTo(401);
     }
@@ -185,8 +230,8 @@ class ApiSecurityTest extends AbstractPostgresTest {
     @DisplayName("不存在的 key 与签名错误，回答必须完全一致")
     void authFailuresAreIndistinguishable() {
         // 若两者回答不同，攻击者就能据此枚举出哪些 api_key 是真实存在的。
-        var unknownKey = signedGet(acmeSecret, "ak_does_not_exist", balancePath(acmeAccountA));
-        var wrongSecret = signedGet(evilSecret, "ak_acme", balancePath(acmeAccountA));
+        var unknownKey = signedGet(acmeSecret, "ak_does_not_exist", TARGET);
+        var wrongSecret = signedGet(evilSecret, "ak_acme", TARGET);
 
         assertThat(unknownKey.statusCode()).isEqualTo(wrongSecret.statusCode());
         assertThat(unknownKey.body())
@@ -195,114 +240,44 @@ class ApiSecurityTest extends AbstractPostgresTest {
     }
 
     // ==================================================================
-    // 第 ② 层 · 归属授权
+    // 第 ② 层 · 拿着别人的对象 id 来碰（商户接口唯一还收 id 的地方）
     // ==================================================================
 
     @Test
-    @DisplayName("★ evilco 用自己合法的凭证转走 acme 的钱 —— 403")
-    void crossMerchantTransferIsForbidden() {
-        // 这是 M1 第二步实测成功过的攻击（当时 HTTP 200，钱真的到手了）。
-        // 认证这关 evilco 是光明正大过的 —— 它确实是 evilco。
-        String body = transferBody("steal-1", "100", acmeAccountA, evilAccount);
-        var response = signedPost(evilSecret, "ak_evilco", "/api/v1/transfers", body);
-
-        assertThat(response.statusCode()).isEqualTo(403);
-        assertThat(response.body()).contains("\"code\":\"3001\"");
-        assertThat(balanceOf(acmeAccountA)).as("acme 的余额一分不能少")
-                .isEqualByComparingTo("1000");
-    }
-
-    @Test
-    @DisplayName("evilco 偷看 acme 的余额 —— 403")
-    void crossMerchantBalanceReadIsForbidden() {
-        var response = signedGet(evilSecret, "ak_evilco", balancePath(acmeAccountA));
-
-        assertThat(response.statusCode()).isEqualTo(403);
-    }
-
-    @Test
-    @DisplayName("★ 无权访问 与 账户不存在，回答必须完全一致")
-    void accessDeniedAndNotFoundAreIndistinguishable() {
-        // 若两者回答不同，攻击者拿 id 挨个试就能画出系统的账户分布：
-        // 回「无权访问」的是真实账户，回「不存在」的是空号。
-        var othersAccount = signedGet(evilSecret, "ak_evilco", balancePath(acmeAccountA));
-        var nonexistent = signedGet(evilSecret, "ak_evilco", "/api/v1/accounts/999999/balance");
-
-        assertThat(othersAccount.statusCode()).isEqualTo(nonexistent.statusCode());
-        assertThat(digitsMasked(othersAccount.body())).isEqualTo(digitsMasked(nonexistent.body()));
-    }
-
-    @Test
-    @DisplayName("贷方账户也必须是自己的（防止把接口当账户探测器）")
-    void creditAccountMustAlsoBeOwned() {
-        // 放开贷方看似无害（你的钱爱给谁给谁），但那样一来，
-        // 给任意 id 转一个极小金额、成功即说明该账户存在。
-        String body = transferBody("probe-1", "1", acmeAccountA, evilAccount);
-        var response = signedPost(acmeSecret, "ak_acme", "/api/v1/transfers", body);
-
-        assertThat(response.statusCode()).isEqualTo(403);
-    }
-
-    // ==================================================================
-    // 第 ③ 层 · 业务错误必须用正确的状态码
-    // ==================================================================
-
-    @Test
-    @DisplayName("★ 余额不足 —— 400 而不是 500")
-    void insufficientBalanceIsBadRequestNotServerError() {
-        // 500 对调用方的含义是「我坏了，请重试」，实际含义是「你余额不够，别再试」。
-        // 回 500 会让商户客户端无限重试一个永远不会成功的请求。
-        String body = transferBody("too-much", "99999", acmeAccountA, acmeAccountB);
-        var response = signedPost(acmeSecret, "ak_acme", "/api/v1/transfers", body);
+    @DisplayName("★ evilco 用自己合法的凭证停用 acme 的白名单地址 —— 拒绝，且那一行没动")
+    void evilcoCannotDisableAcmesWhitelistAddress() {
+        // 这是 M1 第二步那个攻击的今天形态：认证这关 evilco 是光明正大过的，
+        // 它确实是 evilco；要挡住的是「合法身份 + 别人的对象 id」。
+        // 2026-09-22 之前这条打的是转账接口（请求体里递 acme 的账户 id），那种形状已经没有了。
+        //
+        // 挡住它的不再是应用层的归属检查（那个服务连同转账接口一起删了），而是 RLS：
+        // UPDATE payout_address … WHERE id = :id 跑在商户连接上，别人的行不在可见范围里，
+        // 改了 0 行 → 服务判为「白名单里没有这个地址」。
+        var response = signedPost(evilSecret, "ak_evilco", TARGET + "/" + acmeAddressId + "/disable", "");
 
         assertThat(response.statusCode()).isEqualTo(400);
-        assertThat(response.body()).contains("\"code\":\"4001\"");
+        assertThat(response.body()).contains("\"code\":\"2009\"");
+        assertThat(statusOf(acmeAddressId)).as("acme 的白名单地址必须一点没动").isEqualTo("ACTIVE");
     }
 
     @Test
-    @DisplayName("金额格式非法 —— 400，且不回显内部细节")
-    void malformedAmountIsBadRequest() {
-        String body = transferBody("bad-amount", "abc", acmeAccountA, acmeAccountB);
-        var response = signedPost(acmeSecret, "ak_acme", "/api/v1/transfers", body);
+    @DisplayName("★ 别人的 id 与不存在的 id，回答必须完全一致")
+    void foreignIdAndNonexistentIdAnswerTheSame() {
+        // 若两者回答不同，攻击者拿 id 挨个试就能画出系统里有哪些对象：
+        // 回「不是你的」的是真实存在的行，回「不存在」的是空号。
+        var othersRow = signedPost(evilSecret, "ak_evilco", TARGET + "/" + acmeAddressId + "/disable", "");
+        var nonexistent = signedPost(evilSecret, "ak_evilco", TARGET + "/999999/disable", "");
 
-        assertThat(response.statusCode()).isEqualTo(400);
-        assertThat(response.body())
-                .as("不能把异常消息回显给调用方")
-                .doesNotContain("NumberFormatException")
-                .doesNotContain("java.");
-    }
-
-    @Test
-    @DisplayName("业务类型非法 —— 400，且不泄露枚举的合法值")
-    void unknownTransferCodeIsBadRequest() {
-        String body = transferBody("bad-code", "1", acmeAccountA, acmeAccountB)
-                .replace("\"INTERNAL\"", "\"HAHA\"");
-        var response = signedPost(acmeSecret, "ak_acme", "/api/v1/transfers", body);
-
-        assertThat(response.statusCode()).isEqualTo(400);
-        assertThat(response.body())
-                .as("异常消息里含全部枚举值，回显等于免费送情报")
-                .doesNotContain("WITHDRAWAL")
-                .doesNotContain("DEPOSIT");
+        assertThat(othersRow.statusCode()).isEqualTo(nonexistent.statusCode());
+        assertThat(digitsMasked(othersRow.body())).isEqualTo(digitsMasked(nonexistent.body()));
     }
 
     // ==================================================================
-    // 正常路径 —— 防护不能把合法请求也挡住
+    // 第 ③ 层 · 重放与幂等
     // ==================================================================
 
     @Test
-    @DisplayName("acme 在自己两个账户之间转账 —— 成功且余额正确")
-    void ownTransferSucceeds() {
-        String body = transferBody("ok-1", "250", acmeAccountA, acmeAccountB);
-        var response = signedPost(acmeSecret, "ak_acme", "/api/v1/transfers", body);
-
-        assertThat(response.statusCode()).isEqualTo(200);
-        assertThat(balanceOf(acmeAccountA)).isEqualByComparingTo("750");
-        assertThat(balanceOf(acmeAccountB)).isEqualByComparingTo("250");
-    }
-
-    @Test
-    @DisplayName("★ 原样重放 —— 被 nonce 挡住；换新 nonce 的重试 —— 被幂等键兜住")
+    @DisplayName("★ 原样重放 —— 被 nonce 挡住；换新 nonce 的重试 —— 被接口的幂等兜住")
     void replayIsBlockedAndLegitimateRetryStillWorks() {
         // ★ 这条测试在 M1.5 变了语义，值得记下来为什么 ★
         //
@@ -316,15 +291,16 @@ class ApiSecurityTest extends AbstractPostgresTest {
         //
         // 答案是两个机制各管一件事：
         //   nonce  —— 防「别人」截获你的请求原样重发
-        //   幂等键 —— 防「你自己」超时后重发
-        // 所以客户端重试的正确姿势是：**换一个新 nonce 重新签名，保持 clientTransferId 不变**。
-        String body = transferBody("replay-1", "10", acmeAccountA, acmeAccountB);
+        //   幂等   —— 防「你自己」超时后重发
+        // 所以客户端重试的正确姿势是：**换一个新 nonce 重新签名，请求体保持不变**。
+        // （2026-09-22：靶子从转账接口换成白名单登记——它同样幂等，已有就返回已有的那一条。）
+        String body = addressBody(NEW_ADDRESS, "replay");
         long ts = System.currentTimeMillis();
         String nonce = SignedRequests.newNonce();
-        String signature = sign(acmeSecret, ts, nonce, "POST", "/api/v1/transfers", body);
+        String signature = sign(acmeSecret, ts, nonce, "POST", TARGET, body);
 
-        var first = sendSigned(ts, nonce, signature, "ak_acme", body);
-        var identicalReplay = sendSigned(ts, nonce, signature, "ak_acme", body);
+        var first = sendSignedPost(TARGET, ts, nonce, signature, "ak_acme", body);
+        var identicalReplay = sendSignedPost(TARGET, ts, nonce, signature, "ak_acme", body);
 
         assertThat(first.statusCode()).isEqualTo(200);
         assertThat(identicalReplay.statusCode())
@@ -332,105 +308,40 @@ class ApiSecurityTest extends AbstractPostgresTest {
                 .isEqualTo(401);
         assertThat(identicalReplay.body()).contains("\"code\":\"1002\"");
 
-        // 合法重试：新 nonce、新签名，但 clientTransferId 不变
+        // 合法重试：新 nonce、新签名，请求体不变
         String retryNonce = SignedRequests.newNonce();
-        var legitimateRetry = sendSigned(ts, retryNonce,
-                sign(acmeSecret, ts, retryNonce, "POST", "/api/v1/transfers", body),
+        var legitimateRetry = sendSignedPost(TARGET, ts, retryNonce,
+                sign(acmeSecret, ts, retryNonce, "POST", TARGET, body),
                 "ak_acme", body);
 
         assertThat(legitimateRetry.statusCode())
                 .as("换新 nonce 的重试必须放行 —— 否则超时的客户端会永远卡住")
                 .isEqualTo(200);
-        assertThat(balanceOf(acmeAccountB))
-                .as("而且只能到账一次 —— 这是幂等键的活")
-                .isEqualByComparingTo("10");
-    }
-
-    // ==================================================================
-    // 幂等键的作用域与内容（质询扫描 9.8 / 8.4 修复）
-    // ==================================================================
-
-    @Test
-    @DisplayName("★ 同一个幂等键、不同的请求体 —— 409 拒绝，一分钱不动")
-    void sameKeyWithDifferentBodyIsRejected() {
-        // 扫描前的行为：第二笔回 200 + 第一笔的 id，777 一分没动，
-        // 而响应体里没有金额，商户无从察觉。这是清单 9.8 那句
-        // 「返回上次结果 = 用同一个键把另一笔钱吞掉」的原型。
-        //
-        // 系统手里有判断所需的全部信息（上一笔的金额、方向；这一笔的金额、方向），
-        // 之前只看了键就返回了。修法：键相同时必须比对请求体。
-        //   键相同 + 体相同 → 超时重发，幂等返回（下一条测试守着）
-        //   键相同 + 体不同 → 复用了键，409
-        String first = transferBody("order-1001", "10", acmeAccountA, acmeAccountB);
-        assertThat(signedPost(acmeSecret, "ak_acme", "/api/v1/transfers", first).statusCode())
-                .isEqualTo(200);
-
-        String different = transferBody("order-1001", "777", acmeAccountA, acmeAccountB);
-        var rejected = signedPost(acmeSecret, "ak_acme", "/api/v1/transfers", different);
-
-        assertThat(rejected.statusCode())
-                .as("同键不同体必须被拒，而不是伪装成成功")
-                .isEqualTo(409);
-        assertThat(rejected.body()).contains("\"code\":\"4003\"");
-        assertThat(balanceOf(acmeAccountB))
-                .as("只有第一笔的 10 到账，777 不能动")
-                .isEqualByComparingTo("10");
-        assertThat(transferCount()).isEqualTo(2);   // seed 那一笔 + order-1001
-    }
-
-    @Test
-    @DisplayName("★ 两个商户各用同一个幂等键 —— 互不干扰，各自 200")
-    void sameKeyAcrossMerchantsIsIndependent() {
-        // 扫描前：evilco 用 acme 用过的键 → UNIQUE 冲突 → 回读被 RLS 藏住 → 0 行
-        // → .single() 炸 → 500，且 9001 标了可重试。
-        // 后果：① 跨租户存在性预言机（200/500 就能探测别人的键）
-        //      ② 可抢占——预先占掉受害者要用的键，让他永久拿 500
-        // 根源在 V1 那行 UNIQUE (idempotency_key)：作用域是全表而不是每个商户。
-        long evilAccount2 = createOwnedAccount("user:evil-2:USDT", merchantIdOf("evilco"));
-        long mint = jdbc.sql("SELECT id FROM account WHERE code = 'house:mint:USDT'")
-                .query(Long.class).single();
-        seedBalance(mint, evilAccount, new BigDecimal("100"));
-
-        var acme = signedPost(acmeSecret, "ak_acme", "/api/v1/transfers",
-                transferBody("order-1", "5", acmeAccountA, acmeAccountB));
-        var evil = signedPost(evilSecret, "ak_evilco", "/api/v1/transfers",
-                transferBody("order-1", "7", evilAccount, evilAccount2));
-
-        assertThat(acme.statusCode()).isEqualTo(200);
-        assertThat(evil.statusCode())
-                .as("同一个键在另一个商户名下必须是全新的一笔，不能撞到 acme 的")
-                .isEqualTo(200);
-        assertThat(evil.body()).doesNotContain(digitsOnly(acme.body()));
-        assertThat(balanceOf(acmeAccountB)).isEqualByComparingTo("5");
-        assertThat(balanceOf(evilAccount2)).isEqualByComparingTo("7");
-    }
-
-    private String digitsOnly(String body) {
-        return body.replaceAll("\\D", "");
-    }
-
-    private long merchantIdOf(String code) {
-        return jdbc.sql("SELECT id FROM merchant WHERE code = :c").param("c", code)
-                .query(Long.class).single();
+        assertThat(addressCount())
+                .as("而且只登记一条 —— 这是接口幂等的活（seed 那条 + 这条）")
+                .isEqualTo(2);
     }
 
     // ==================================================================
     // 辅助
     // ==================================================================
 
-    private String balancePath(long accountId) {
-        return "/api/v1/accounts/" + accountId + "/balance";
+    private String addressBody(String address, String label) {
+        return "{\"address\":\"%s\",\"label\":\"%s\"}".formatted(address, label);
     }
 
-    /** 两条响应里只有账户 id 不同，比较时把数字抹掉。 */
+    /** 两条响应里只有 id 不同，比较时把数字抹掉。 */
     private String digitsMasked(String body) {
         return body.replaceAll("\\d+", "N");
     }
 
-    private String transferBody(String key, String amount, long debit, long credit) {
-        return ("{\"clientTransferId\":\"%s\",\"currency\":\"USDT\",\"amount\":\"%s\","
-                + "\"debitAccountId\":%d,\"creditAccountId\":%d,\"code\":\"INTERNAL\"}")
-                .formatted(key, amount, debit, credit);
+    private long addressCount() {
+        return jdbc.sql("SELECT count(*) FROM payout_address").query(Long.class).single();
+    }
+
+    private String statusOf(long addressId) {
+        return jdbc.sql("SELECT status FROM payout_address WHERE id = :id")
+                .param("id", addressId).query(String.class).single();
     }
 
     /**
@@ -461,21 +372,14 @@ class ApiSecurityTest extends AbstractPostgresTest {
     private HttpResponse<String> signedPost(String secret, String apiKey, String path, String body) {
         long ts = System.currentTimeMillis();
         String nonce = SignedRequests.newNonce();
-        return send(HttpRequest.newBuilder()
-                .uri(url(path))
-                .header("Content-Type", "application/json")
-                .header("X-CP-API-KEY", apiKey)
-                .header("X-CP-API-TIMESTAMP", String.valueOf(ts))
-                .header("X-CP-API-NONCE", nonce)
-                .header("X-CP-API-SIGN", sign(secret, ts, nonce, "POST", path, body))
-                .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8)));
+        return sendSignedPost(path, ts, nonce, sign(secret, ts, nonce, "POST", path, body), apiKey, body);
     }
 
-    /** nonce 显式传入：重放测试要用同一个 nonce 发两次。 */
-    private HttpResponse<String> sendSigned(long ts, String nonce, String signature,
-                                            String apiKey, String body) {
+    /** nonce 与签名显式传入：重放测试要用同一个 nonce 发两次。 */
+    private HttpResponse<String> sendSignedPost(String path, long ts, String nonce, String signature,
+                                                String apiKey, String body) {
         return send(HttpRequest.newBuilder()
-                .uri(url("/api/v1/transfers"))
+                .uri(url(path))
                 .header("Content-Type", "application/json")
                 .header("X-CP-API-KEY", apiKey)
                 .header("X-CP-API-TIMESTAMP", String.valueOf(ts))
@@ -514,47 +418,5 @@ class ApiSecurityTest extends AbstractPostgresTest {
                 .param("apiKey", apiKey)
                 .param("secret", cipher.encrypt(secret))
                 .update();
-    }
-
-    private long createOwnedAccount(String code, long merchantId) {
-        return jdbc.sql("""
-                        INSERT INTO account(code, currency, kind, merchant_id)
-                        VALUES (:code, 'USDT', 'LIABILITY', :merchantId)
-                        RETURNING id
-                        """)
-                .param("code", code).param("merchantId", merchantId)
-                .query(Long.class).single();
-    }
-
-    /** 直接用 SQL 注资：注资是管理操作，商户接口做不到，这本身就是「默认拒绝」的体现。 */
-    private void seedBalance(long from, long to, BigDecimal amount) {
-        long transferId = jdbc.sql("""
-                        INSERT INTO transfer(idempotency_key, currency, amount,
-                                             debit_account_id, credit_account_id, code)
-                        VALUES ('seed-' || :to, 'USDT', :amount, :from, :to, 'SEED')
-                        RETURNING id
-                        """)
-                .param("from", from).param("to", to).param("amount", amount)
-                .query(Long.class).single();
-
-        jdbc.sql("""
-                        INSERT INTO entry(transfer_id, account_id, currency, amount) VALUES
-                            (:t, :from, 'USDT', :negative),
-                            (:t, :to,   'USDT', :positive)
-                        """)
-                .param("t", transferId).param("from", from).param("to", to)
-                .param("negative", amount.negate()).param("positive", amount)
-                .update();
-
-        jdbc.sql("UPDATE account SET balance = balance - :amount WHERE id = :id")
-                .param("amount", amount).param("id", from).update();
-        jdbc.sql("UPDATE account SET balance = balance + :amount WHERE id = :id")
-                .param("amount", amount).param("id", to).update();
-    }
-
-    private BigDecimal balanceOf(long accountId) {
-        return jdbc.sql("SELECT balance FROM account WHERE id = :id")
-                .param("id", accountId)
-                .query(BigDecimal.class).single();
     }
 }

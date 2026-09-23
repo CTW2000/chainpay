@@ -38,6 +38,42 @@ class SchemaGuardTest extends AbstractPostgresTest {
     }
 
     @Test
+    @DisplayName("★ 账本三表只追加：两个角色对 transfer / entry 都没有 UPDATE / DELETE，account 只能改 balance 一列（V29）")
+    void theLedgerIsAppendOnlyForBothRoles() {
+        // 2026-09-22 清点权限时发现：transfer / entry 上两个角色都有 UPDATE，而全仓库没有一条 SQL 用它。
+        // 「账本只追加」当时只靠「没人写那种 SQL」这条纪律撑着——纪律会被新接口、手工 SQL、将来的自己绕过。
+        // V29 撤掉之后这条规矩由权限守；这个测试守的是「V29 不许被改回去」。
+        for (String role : List.of("chainpay_app", "chainpay_system")) {
+            for (String table : List.of("transfer", "entry")) {
+                assertThat(can(role, table, "INSERT")).as("%s 必须能往 %s 追加", role, table).isTrue();
+                assertThat(can(role, table, "SELECT")).as("%s 必须能读 %s", role, table).isTrue();
+                assertThat(can(role, table, "UPDATE")).as("%s 不该能改写 %s 的历史", role, table).isFalse();
+                assertThat(can(role, table, "DELETE")).as("%s 不该能删 %s 的行", role, table).isFalse();
+            }
+            // 余额要改，但「能不能透支」「这是谁的钱」不该被应用连接改——所以是列级授权
+            assertThat(can(role, "account", "UPDATE")).as("%s 不该有 account 的整行 UPDATE", role).isFalse();
+            assertThat(canUpdateColumn(role, "account", "balance")).as("%s 必须能改余额", role).isTrue();
+            for (String column : List.of("allow_negative", "merchant_id", "currency", "kind", "code")) {
+                assertThat(canUpdateColumn(role, "account", column))
+                        .as("%s 不该能改 account.%s", role, column).isFalse();
+            }
+            assertThat(can(role, "account", "DELETE")).as("%s 不该能删账户", role).isFalse();
+        }
+    }
+
+    private boolean can(String role, String table, String privilege) {
+        return jdbc.sql("SELECT has_table_privilege(:r, :t, :p)")
+                .param("r", role).param("t", table).param("p", privilege)
+                .query(Boolean.class).single();
+    }
+
+    private boolean canUpdateColumn(String role, String table, String column) {
+        return jdbc.sql("SELECT has_column_privilege(:r, :t, :c, 'UPDATE')")
+                .param("r", role).param("t", table).param("c", column)
+                .query(Boolean.class).single();
+    }
+
+    @Test
     @DisplayName("★ 判官视图（*_invariant / *_consistency）必须授权给系统角色：它是唯一被声明能看全部行的身份")
     void judgeViewsAreReadableByTheSystemRole() {
         List<String> judges = jdbc.sql("""

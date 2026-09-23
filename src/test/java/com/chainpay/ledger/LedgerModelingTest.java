@@ -89,6 +89,23 @@ class LedgerModelingTest extends AbstractPostgresTest {
     }
 
     @Test
+    @DisplayName("★ 币种不符 —— 账本入口自己先拒，回 CURRENCY_MISMATCH，不靠数据库兜底")
+    void theLedgerEntranceRefusesACurrencyThatDoesNotMatchTheAccounts() {
+        // 上面那条守的是「绕过 Java 直接写 SQL 也存不进去」；这一条守的是入口自己那道
+        // requireCurrencyMatches。两道都要有：数据库那道拦得住任何写路径，但它给的是
+        // DataIntegrityViolationException，落到 HTTP 上是 500；入口这道给的是 CURRENCY_MISMATCH，
+        // 映射成 400 + 2006，客户端知道该改什么。
+        //
+        // 2026-09-22 从 ApiContractTest 下移到这里：商户接口不再收账户 id，币种由 token（提现）
+        // 或收款地址（入账）决定，HTTP 上已经造不出这个组合；而账本入口仍被那两条路径调用。
+        assertThatThrownBy(() -> ledger.transfer(new TransferCommand(
+                "xc-entrance", "BTC", new BigDecimal("1"), mint, alice, TransferCode.INTERNAL, null)))
+                .isInstanceOf(LedgerException.class)
+                .extracting(e -> ((LedgerException) e).reason())
+                .isEqualTo(LedgerException.Reason.CURRENCY_MISMATCH);
+    }
+
+    @Test
     @DisplayName("★ 多币种同时在账本里 —— ledger_invariant 必须出现两行，且判官在两行下仍能响")
     void invariantJudgeWorksAcrossMultipleCurrencies() {
         // 质询扫描 5.10：整个测试集只用 USDT，ledger_invariant 从没出现过第二行。

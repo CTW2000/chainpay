@@ -52,8 +52,14 @@ class RateLimitTest extends AbstractPostgresTest {
             .connectTimeout(Duration.ofSeconds(5))
             .build();
 
+    /**
+     * 限流只数请求，打哪个接口都一样——要的是「随便打、无副作用、能回 200」。
+     * 2026-09-22 前打的是余额接口（`/api/v1/accounts/{id}/balance`），它连同通用转账接口一起删了；
+     * 换成白名单列表：不依赖链上配置、空列表也回 200，所以不用再为这个测试建账户。
+     */
+    private static final String TARGET = "/api/v1/withdrawal-addresses";
+
     private String acmeSecret;
-    private long acmeAccount;
 
     @BeforeEach
     void seedMerchant() {
@@ -69,11 +75,6 @@ class RateLimitTest extends AbstractPostgresTest {
                         """)
                 .param("m", acme).param("s", cipher.encrypt(acmeSecret))
                 .update();
-        acmeAccount = jdbc.sql("""
-                        INSERT INTO account(code, currency, kind, merchant_id)
-                        VALUES ('user:acme:USDT','USDT','LIABILITY',:m) RETURNING id
-                        """)
-                .param("m", acme).query(Long.class).single();
     }
 
     // ==================================================================
@@ -295,7 +296,7 @@ class RateLimitTest extends AbstractPostgresTest {
     // ==================================================================
 
     private HttpResponse<String> signedGet() {
-        String path = "/api/v1/accounts/" + acmeAccount + "/balance";
+        String path = TARGET;
         long ts = System.currentTimeMillis();
         String nonce = SignedRequests.newNonce();
         return send(HttpRequest.newBuilder()
@@ -310,7 +311,7 @@ class RateLimitTest extends AbstractPostgresTest {
 
     /** 坏签名 + 一个自称的来源 IP。真实的 TCP 对端始终是 127.0.0.1。 */
     private HttpResponse<String> badSignatureGetClaimingToBeFrom(String claimedIp) {
-        String path = "/api/v1/accounts/" + acmeAccount + "/balance";
+        String path = TARGET;
         return send(HttpRequest.newBuilder()
                 .uri(URI.create("http://localhost:" + port + path))
                 .header("X-Forwarded-For", claimedIp)
@@ -322,7 +323,7 @@ class RateLimitTest extends AbstractPostgresTest {
     }
 
     private HttpResponse<String> badSignatureGet() {
-        String path = "/api/v1/accounts/" + acmeAccount + "/balance";
+        String path = TARGET;
         return send(HttpRequest.newBuilder()
                 .uri(URI.create("http://localhost:" + port + path))
                 .header("X-CP-API-KEY", "ak_acme")

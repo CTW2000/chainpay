@@ -51,6 +51,38 @@ class ControllerBoundaryTest {
     }
 
     /**
+     * 2026-09-22（用户定「移除通用转账接口」）：HTTP 入口不得自己挑账本的借贷双方，也不得指定业务类型。
+     *
+     * <p>删掉的那个通用转账接口（{@code POST /api/v1/transfers}）两样都干：账户 id 与 {@code code} 都从请求体来，
+     * 授权只问「这账户是不是你的」。而商户的冻结账户**确实是商户的**——于是商户可以自己拼出一笔
+     * 「冻结 → 可用」的 {@code WITHDRAWAL_REVERSE}，把提现途中冻着的钱捞回可用余额，而链上的币照样发出去
+     * （实测：冻结账户余额为 0 时回 4001「余额不足」，说明授权与业务类型两道门都已放行，只差账户里有钱）。
+     * 真实业务各走专用流程：入账与提现三笔流的借贷双方都由服务端定，商户填不了。
+     *
+     * <p>所以规矩不是「那个接口别回来」，而是**任何控制器都不准碰这两样**：
+     * 扫到 {@code TransferCode} 或 {@code ledger.transfer(} / {@code new TransferCommand} 就红。
+     */
+    @Test
+    @DisplayName("★ 没有任何 controller 能自己选借贷双方或业务类型（TransferCode / ledger.transfer）")
+    void controllersNeverChooseLedgerAccountsThemselves() throws IOException {
+        List<Path> controllers;
+        try (Stream<Path> files = Files.walk(Path.of("src/main/java"))) {
+            controllers = files
+                    .filter(p -> p.toString().endsWith(".java") && p.toString().contains("/controller/"))
+                    .toList();
+        }
+
+        assertThat(controllers).as("守卫的匹配集合不能是空的").hasSizeGreaterThanOrEqualTo(3);
+        for (Path controller : controllers) {
+            String source = Files.readString(controller);
+            assertThat(source).as(controller.toString())
+                    .doesNotContain("TransferCode")
+                    .doesNotContain("ledger.transfer(")
+                    .doesNotContain("new TransferCommand");
+        }
+    }
+
+    /**
      * 扫描补丁（2026-09-09）：「校验放在请求记录，坏数据到不了 service」这条规矩此前只写在 AdminController 的注释里，
      * 转账接口没跟上，null 字段一路走到 NPE 变成 500。规矩从此由这条测试强制：每个 @RequestBody 参数都必须带 @Valid。
      */

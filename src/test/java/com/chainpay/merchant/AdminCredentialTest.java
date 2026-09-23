@@ -162,9 +162,8 @@ class AdminCredentialTest extends AbstractPostgresTest {
         // 分开测两边各自都对、合起来不通，是集成层最常见的失败。
         long merchantId = createMerchant("acme", "Acme");
         var issued = issueCredential(merchantId, "primary");
-        long accountId = createMerchantAccount(merchantId, "user:acme:USDT");
 
-        assertThat(signedBalanceGet(accountId, issued).statusCode()).isEqualTo(200);
+        assertThat(signedGetWith(issued).statusCode()).isEqualTo(200);
     }
 
     @Test
@@ -192,13 +191,12 @@ class AdminCredentialTest extends AbstractPostgresTest {
         // 如果表结构限制「一个商户一把钥匙」，轮换就只能是
         // 「先作废旧的、再发新的」—— 中间那段时间商户的线上业务全挂。
         long merchantId = createMerchant("acme", "Acme");
-        long accountId = createMerchantAccount(merchantId, "user:acme:USDT");
 
         var oldKey = issueCredential(merchantId, "old");
         var newKey = issueCredential(merchantId, "new");
 
-        assertThat(signedBalanceGet(accountId, oldKey).statusCode()).isEqualTo(200);
-        assertThat(signedBalanceGet(accountId, newKey).statusCode()).isEqualTo(200);
+        assertThat(signedGetWith(oldKey).statusCode()).isEqualTo(200);
+        assertThat(signedGetWith(newKey).statusCode()).isEqualTo(200);
     }
 
     // ==================================================================
@@ -209,7 +207,6 @@ class AdminCredentialTest extends AbstractPostgresTest {
     @DisplayName("★ 吊销一把凭证 —— 那把立刻失效，同商户的另一把不受影响")
     void revokingOneCredentialLeavesTheOthersAlive() {
         long merchantId = createMerchant("acme", "Acme");
-        long accountId = createMerchantAccount(merchantId, "user:acme:USDT");
         var oldKey = issueCredential(merchantId, "old");
         var newKey = issueCredential(merchantId, "new");
 
@@ -217,10 +214,10 @@ class AdminCredentialTest extends AbstractPostgresTest {
                 "", adminSessionToken());
         assertThat(revoke.statusCode()).isEqualTo(204);
 
-        assertThat(signedBalanceGet(accountId, oldKey).statusCode())
+        assertThat(signedGetWith(oldKey).statusCode())
                 .as("被吊销的那把必须立刻失效")
                 .isEqualTo(401);
-        assertThat(signedBalanceGet(accountId, newKey).statusCode())
+        assertThat(signedGetWith(newKey).statusCode())
                 .as("同商户的另一把不受影响 —— 这正是零停机轮换")
                 .isEqualTo(200);
     }
@@ -229,15 +226,14 @@ class AdminCredentialTest extends AbstractPostgresTest {
     @DisplayName("★ 停用商户 —— 他名下所有凭证同时失效")
     void suspendingAMerchantKillsEveryCredentialAtOnce() {
         long merchantId = createMerchant("acme", "Acme");
-        long accountId = createMerchantAccount(merchantId, "user:acme:USDT");
         var first = issueCredential(merchantId, "first");
         var second = issueCredential(merchantId, "second");
 
         var suspend = post("/admin/v1/merchants/" + merchantId + "/suspend", "", adminSessionToken());
         assertThat(suspend.statusCode()).isEqualTo(204);
 
-        assertThat(signedBalanceGet(accountId, first).statusCode()).isEqualTo(401);
-        assertThat(signedBalanceGet(accountId, second).statusCode()).isEqualTo(401);
+        assertThat(signedGetWith(first).statusCode()).isEqualTo(401);
+        assertThat(signedGetWith(second).statusCode()).isEqualTo(401);
         assertThat(jdbc.sql("SELECT COUNT(*) FROM api_credential WHERE merchant_id = :m")
                 .param("m", merchantId).query(Long.class).single())
                 .as("停用不能靠删凭证实现 —— 删了就查不出这把 key 曾属于谁，审计断链")
@@ -285,16 +281,13 @@ class AdminCredentialTest extends AbstractPostgresTest {
                 jsonField(response.body(), "secret"));
     }
 
-    private long createMerchantAccount(long merchantId, String code) {
-        return jdbc.sql("""
-                        INSERT INTO account(code, currency, kind, merchant_id)
-                        VALUES (:c, 'USDT', 'LIABILITY', :m) RETURNING id
-                        """)
-                .param("c", code).param("m", merchantId).query(Long.class).single();
-    }
-
-    private HttpResponse<String> signedBalanceGet(long accountId, IssuedCredential credential) {
-        String path = "/api/v1/accounts/" + accountId + "/balance";
+    /**
+     * 用这把凭证发一个签过名的 GET，只看它能不能进门（200 / 401）——打哪个接口不重要。
+     * 2026-09-22 前打的是余额接口，那个接口连同通用转账接口一起删了（商户接口不再收账本账户 id）；
+     * 换成白名单列表：不依赖链上配置、没有副作用、空列表也回 200。
+     */
+    private HttpResponse<String> signedGetWith(IssuedCredential credential) {
+        String path = "/api/v1/withdrawal-addresses";
         long ts = System.currentTimeMillis();
         String nonce = SignedRequests.newNonce();
         return send(HttpRequest.newBuilder()
