@@ -2,6 +2,7 @@ package com.chainpay.ops;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.chainpay.support.SecretNames;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -18,7 +19,8 @@ import org.junit.jupiter.api.Test;
 @DisplayName("M6-① · 容器文件守卫")
 class ContainerGuardTest {
 
-    private static final Pattern SECRET_NAME = Pattern.compile("CHAINPAY_[A-Z_]*(PASSWORD|KEY|TOKEN|RPC_URL|XPUB)");
+    /** 密钥形态的变量名：只在 tools/image-check.sh 写一份（进程拆分 ① 收口，此前这里抄了一份，两份一起漏掉告警地址）。 */
+    private static final Pattern SECRET_NAME = SecretNames.inText();
 
     @Test
     @DisplayName("Dockerfile：运行阶段是 JRE 而不是 JDK、最后以非 root 用户跑、有打 readiness 的 HEALTHCHECK、没有任何密钥形态的 ARG / ENV")
@@ -68,6 +70,8 @@ class ContainerGuardTest {
         assertThat(app).contains("/actuator/health/readiness");
         assertThat(app).contains("restart: unless-stopped");
         assertThat(app).as("主端口默认只绑回环，容器里必须显式放开到 0.0.0.0，否则宿主发布的端口连不进去").contains("CHAINPAY_BIND_ADDRESS: \"0.0.0.0\"");
+        assertThat(app).as("进程角色必须显式给（进程拆分 ①）：没有角色的容器起不来。拆成两个服务（第 ⑥ 步）之前，唯一的容器以 worker 身份跑")
+                .containsPattern("SPRING_PROFILES_ACTIVE:\\s*worker");
     }
 
     @Test

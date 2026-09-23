@@ -144,3 +144,38 @@ tools/admin.sh logout
 **审计**：`admin_action` 每次调用一行（谁、方法、路径、状态、来源），登录成败也在；只追加。查最近的：
 `docker exec chainpay-postgres psql -U chainpay -d chainpay -c "SELECT at, username, method, path, status, remote_addr FROM admin_action ORDER BY id DESC LIMIT 50"`。
 **没做的**：TOTP 二次验证、提现冷却期、管理员的增删与停用接口（现在只有 `--create-admin`；停用改库 `status = 'DISABLED'`）。
+
+# 运维手册 · 进程角色（进程拆分 ①）
+
+同一个镜像起成两种常驻进程：`web` 对外接商户请求，`worker` 跑定时任务与控制面、握着重钥匙。角色由环境变量 `SPRING_PROFILES_ACTIVE` 给，**恰好一个**。
+拆成两个服务（进程拆分第 ⑥ 步）之前，compose 里唯一的 `app` 以 `worker` 身份跑（`docker-compose.yml` 的 `environment`）。
+
+启动日志里有一行 `进程角色：worker（禁用名单 N 项，环境里一项都没有）`。起不来时看退出前那段报错：
+
+| 报错 | 意思 | 做什么 |
+|---|---|---|
+| 进程角色必须恰好是 web、worker 之一……现在激活的 profile 是 […] | 没给角色，或给了两个 | 在这个进程的环境里设 `SPRING_PROFILES_ACTIVE=web` 或 `worker`。别写进 application.yml：给个默认角色，等于没有角色 |
+| web（或 worker）进程的环境里有它不该拿的凭证，拒绝启动：CHAINPAY_…（它能干什么） | 这把钥匙不属于这个进程 | 从这个进程的 env 文件里按名字删掉点名的变量（只删行，不要 cat 文件），再起。报错里只有变量名，永远没有值 |
+
+禁用名单（`ops/role/ProcessRole`；`EnvInventoryTest` 把它和 env 样例的变量清单对齐）：
+
+| 变量 | web | worker |
+|---|---|---|
+| `CHAINPAY_SYSTEM_DB_PASSWORD` | 禁 | 要 |
+| `CHAINPAY_FLYWAY_PASSWORD` | 禁 | 第 ⑤ 步起禁（在那之前唯一的容器启动时还要自己迁移） |
+| `CHAINPAY_PAYOUT_HOT_WALLET_KEY` | 禁 | 要 |
+| `CHAINPAY_CHAIN_RPC_URL` / `_AUDIT_RPC_URL` | 禁 | 要 |
+| `CHAINPAY_ALERT_WEBHOOK_URL` | 禁 | 要 |
+| `CHAINPAY_ADMIN_PASSWORD` | 禁 | 禁：它只属于 `--create-admin` 那一条一次性命令（另一个 JVM，守卫不管） |
+
+`--migrate-only`、`--create-admin` 两个一次性命令不属于任何角色，守卫不拦它们。
+
+**测试探针的节点地址**（`CHAINPAY_SEPOLIA_RPC` / `_AUDIT_RPC`）不放 `env/local.env`：那份文件整份进容器的环境，而应用从不读它们。放 `env/probe.env`（照 `env/probe.env.example`），跑探针前 `set -a; . env/probe.env; set +a`。已经在 `env/local.env` 里的，按名字挪过去（值不经过终端；Linux 上把 `sed -i ''` 换成 `sed -i`）：
+
+```bash
+grep -E '^CHAINPAY_SEPOLIA_' env/local.env >> env/probe.env && chmod 600 env/probe.env && sed -i '' '/^CHAINPAY_SEPOLIA_/d' env/local.env
+```
+
+**已退役的 `CHAINPAY_ADMIN_TOKEN`**（M6-⑤ 起没有代码读它，回滚链上的镜像也都不需要它了）：按名字删掉，`sed -i '' '/^CHAINPAY_ADMIN_TOKEN=/d' env/local.env`。
+
+镜像扫描（`tools/image-check.sh`）按值查的变量名从这一步起多了两类结尾：`WEBHOOK_URL`（告警地址里带令牌）与 `RPC`（探针的节点地址）。

@@ -70,6 +70,9 @@ services:
     env_file:
       - env/local.env
     environment:
+      # 进程角色（进程拆分 ①）：恰好一个，没有就起不来。拆成 web + worker 两个服务（第 ⑥ 步）之前，唯一的容器以 worker 身份跑——
+      # 它今天还装着全部的活，web 不许拿的凭证它都有。角色不是密钥，放 environment 与拓扑一起
+      SPRING_PROFILES_ACTIVE: worker
       CHAINPAY_DB_URL: jdbc:postgresql://postgres:5432/chainpay
       CHAINPAY_REDIS_HOST: redis
       CHAINPAY_REDIS_PORT: "6379"

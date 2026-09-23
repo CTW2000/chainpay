@@ -1,8 +1,10 @@
-# 进程拆分 · web 与 worker（M6 之后 · 交接文档）
+# 进程拆分 · web 与 worker（M6 之后）
 
-> 写于 2026-09-15，交给另一个会话实现。
+> 写于 2026-09-15（交接文档）；2026-09-22 起实施。
 > 用户的决定：**把入账、发送、追踪、对账拆成独立进程，只有它配 `chainpay_system` 账号，Web 进程不配。** 这是几个方案里边界最硬的一个。
-> 本文**已定的只有上面这一句**；其余标「建议」的，都要先和用户逐条确认（第二节）。
+> **2026-09-23 用户定：第二节九条取舍全部按建议**（第 8、9 条是 09-22 / 23 讲解与对标时加的，定下来的版本见第二节末「定下来的」）。
+> 同日用户问「别的项目都不拆数据库账号，我们还要不要拆」：要。不拆，web 就握着系统角色——能自己写核准标记、往账本插转账给自己加余额，取舍 8 的复核核什么都核得过；对标里 Peatio 就是这个形状（「二·五」结论 1、第五节坑 4）。
+> 下面「开场白」与「交接须知」是 09-15 的状态，留作经过。
 
 **给新会话的开场白**（用户复制过去即可）：
 
@@ -98,6 +100,8 @@ flowchart LR
 | 5 | 告警由谁发 | A 两个进程各发各的：web 看 Redis，worker 看索引器、热钱包、判官；B 只有 worker 发，worker 连 Redis 只为做健康检查 | **B**。这样 web 保持「零定时任务」，这是一条能测的不变量。以后 web 多开几份时，A 会让同一条告警重复发好几遍。代价是 worker 要多拿 Redis 的主机和端口，这两个不是密钥 |
 | 6 | 用什么把一份代码装配成两个进程 | A Spring profile `web` / `worker`，启动时核对恰好激活了一个；B 自定义属性加 `@ConditionalOnProperty`；C 拆成两个 Maven 模块 | **A**。每个进程的健康分组、端口、Flyway 开关放在各自的 `application-web.yml` / `application-worker.yml` 里。C 的边界最硬（web 模块连 `SystemLedger` 都 import 不到），但学习项目中途大搬家不划算，所以放进「不做的」，并写明什么时候回来换 |
 | 7 | compose 与发布 | 服务改名为 `web` + `worker`，还是保留 `app` 再加一个 `worker`；以及发布顺序 | **改名**，反正部署脚本、守卫测试和 `admin.sh` 都要动。两个服务用同一个镜像标签，顺序是：迁移 → 换 worker → 验证 → 换 web → 验证，任何一步失败两个一起回滚。先换 worker，是因为它出问题时商户 API 还没动 |
+| 8 | worker 信不信 web 写进库里的行（2026-09-22 / 23 加） | A worker 在动钱之前复核；B 让数据库守（外键、触发器）；C 不补，接受「上限是各商户可用余额」写进文档 | **A，再把 B 里便宜的交给库**。出金（8a）：签名前复核白名单、平台地址、冻结、限额或核准；入金（8b）：记账前用 xpub 重新派生收款地址。只核**应用角色写不了的事实**才有用。见第五节坑 4、坑 5 |
+| 9 | 私钥要不要再拆成独立的签名进程（2026-09-23 加） | A 这次不拆、留接缝；B 拆 signer，同时把核准权拆出 worker；C 私钥交给 KMS / 多签 | **A，并把 C 写成上主网、碰真钱之前的前提**。worker 握着系统角色，signer 要核的每个事实它都能先改好：不拆核准权，signer 是摆设 |
 
 ### 为什么 1 是前提，不是选项
 
@@ -126,18 +130,64 @@ PostgreSQL 有一种 `SECURITY DEFINER` 函数，执行时用的是**函数属�
 
 这里藏着一个坑，见第五节坑 3。
 
-## 三、拆成八个小步（每步：红测 → 绿 → 拆墙 → 全套 → 真跑 → 讲）
+### 定下来的（2026-09-23，用户：「按你的建议来」）
+
+1. **B**，外加**启动时核对库的版本**：web / worker 里 Flyway 只校验、不迁移——库里缺迁移就拒绝启动，库比代码新（回滚后的状态）照常放行。相当于 Airflow 的 `check-migrations`，做在进程自己身上。代价：应用角色要能读迁移历史表。
+2. **A**。函数属主用 `chainpay_system`（不用超级用户属主）；`SECURITY DEFINER`、钉死 `search_path`、`REVOKE … FROM PUBLIC` 与建函数在同一个事务里（Flyway 每条迁移本就是一个事务）；函数里自检执行身份。**撤回** 09-15 补的「worker 启动时登记热钱包行」：那段空窗由 8a 的签名前复核兜住。
+3. **B**。 4. **A**。 5. **B**。
+6. **A**。「恰好一个角色」的检查只放在完整应用里：`--migrate-only` / `--create-admin` 的最小上下文不属于任何角色。
+7. **改名**，顺序 迁移 → worker → web，失败两个一起回滚。
+8. **A + B 的便宜部分**。8a 出金：签名前复核——白名单里且 ACTIVE、不是平台地址、冻结分录对得上（同商户、同币、同额）、限额内或有人核准；「有人核准」的标记只有系统角色能写（应用角色的 INSERT 收成列级，写不了它）；库守两条：收款地址外键指向白名单、应用角色插入时状态只能是「待核准 / 放行」。8b 入金：记账前用 xpub 按那一行的序号重新派生，对不上不记、叫人——**worker 因此要拿 xpub**（与原计划相反；xpub 转不走钱，worker 用系统角色本来就看得到全部收款地址）；撤掉应用角色对 `deposit_address` 的 UPDATE（全仓无人使用）。复核在签名之前、落库之前做。
+9. **A**：签名前复核写成边界清楚的部件，入口只有「签第 N 笔提现」，将来整体搬出去调用方不改；**C 写成上主网、碰真钱之前的前提条件**。
+
+## 二·五、对标（2026-09-22 / 23）
+
+用户要求「参考主流项目」，接着指出「这是管钱的项目，要对标金融项目和交易所」。两轮都是浅克隆原文、对到文件与行号，用完即删（出处表在本节末）。
+
+**通用项目**（Twelve-Factor、Airflow、Sentry 自托管、Mastodon、GitLab Helm chart、Apache Fineract）：
+- 共识：一份代码、一个镜像、按角色起不同进程（Fineract 连命令都不换，只换开关）；迁移单独一步，Airflow、GitLab 让常驻进程先确认迁移已跑完（Airflow chart 的前置容器跑 `airflow db check-migrations`）；定时调度只留一份（Mastodon 文档明确警告调度队列只能一个进程跑）。
+- 我们更严的两处：**没有一个默认按进程分数据库账号**，也没有一个用单独的属主口令迁移。依据是本地 OWASP 清单：`~/Documents/CodeProject/flow-pay-backend/docs/ai/knowledge/owasp-cheatsheets/Database_Security.md` 36–40（一个账号只给一个应用或服务）、63–70（应用账号不能是库的属主）；`Secrets_Management.md` 489–495（没有哪个主体能读到全部密钥）。OWASP 讲的是「每个应用」，用到「每个进程」是我们的推论。
+- 抄来的教训：Airflow 的 compose 把迁移失败吞掉（`|| true`，init 照样退出 0）→ 一次性步骤的退出码必须如实；Fineract 同一个开关三种拼法、角色开关默认全开 → 禁用名单的名字要真实存在、角色要默认关闭（第 ① 步两条都做成了测试）。
+
+**金融与交易所**（Peatio / OpenDAX / Barong、OpenCEX；BTCPay / NBXplorer、Bitcart；Web3Signer、FireFly Signer、BitGo Express；Hyperswitch 与卡数据保险库、Mojaloop、Kill Bill、Blnk；geth 交易池）：
+1. **按组件分数据库账号：一个默认这么做的都没有，交易所也一样。** OpenDAX 默认让交易所核心、认证服务、撮合引擎共用一个 `root`；BTCPay、Bitcart 的 Docker 部署免密登录 `postgres` 超级用户。最接近的是 Mojaloop：按服务分账号，从配置看对外的适配服务连数据库凭证都没有。这些都是开源仓库的默认部署，背后公司的生产环境看不到。
+2. **私钥：认真的项目都不让对外进程碰私钥，但单独的签名服务不等于安全。** Peatio 的钱包口令用 Vault 加密，API 的策略只能加密（`opendax templates/config/vault/peatio_rails.hcl.erb:17-20`），后台加密进程才能解密（`peatio_crypto.hcl.erb:13-16`）；但 OpenDAX 的部署把它还了回去：撮合引擎的策略能解开所有钥匙（`peatio_matching.hcl.erb:5-7`），明文钱包口令的种子文件挂进 API 容器，所有 Peatio 进程共享一个带认证服务私钥的 env（`peatio.env.erb:40`）。Web3Signer / FireFly Signer 对以太坊交易谁来都签（`SendTransactionHandler.java:78-83`）；Hyperswitch 的调用方照样能从保险库取回明文卡号。替「该不该签」把关的只有 Web3Signer 的防罚没（先查再记，一个事务里加锁，`DbSlashingProtection.java:204-246`）与 BitGo 的联署（策略在独立的联署方；仓库里只有示例）。
+3. **执行一侧复核：金融平台都做，开源交易所都不做。** Mojaloop 的头寸处理器在行锁下重核流动性与净借记上限（`src/models/position/facade.js:145-194`）；Kill Bill 锁账户后重读、再问网关（`IncompletePaymentTransactionTask.java:141-146`）；Blnk 锁余额、重读、重核。Peatio 签名前只核「处理中」与热钱包余额（`app/workers/amqp/withdraw_coin.rb:22-61`），它的管理接口文档说后台会查可疑活动，代码里没有；OpenCEX 连状态都不核。取舍 8 站在金融平台这一边。
+- **异步与频率**：BTCPay 的自动付款默认每小时一轮（可调 1 分钟到 1 天），一轮合成一笔比特币交易（ERC-20 搬不来）；Kill Bill 的数据库队列默认 3 秒轮询；Mojaloop 超时检查 15 秒；Hyperswitch 生产者 30 秒、消费者 3 秒。受理后异步执行是常态，我们的 10 秒偏快。
+- **geth 交易池默认值**（`core/txpool/legacypool/legacypool.go:160-174`）：每个发送地址保证 16 个可执行位、最多 64 个编号有空缺的排队位、排队的空闲 3 小时清掉。发送任务一轮最多 10 笔在 16 以内；在途积压超过 16 时池子一满超出的先被踢 → 更合理的封顶是「在途笔数」（与拆分无关，记着）。
+
+| 仓库 | 提交 |
+|---|---|
+| heroku/12factor | 1385d2c80bac |
+| apache/airflow | b6538c32c8b1 |
+| getsentry/self-hosted | df6109d84df7 |
+| mastodon/mastodon · mastodon/documentation | c99beb2e2543 · bbf263446459 |
+| gitlab.com/gitlab-org/charts/gitlab | 2d1fbe943b35 |
+| apache/fineract | c5160136a663 |
+| postgres/postgres（REL_18_STABLE）· supabase/supabase | 9733eb9e8df7 · cd77bebafd93 |
+| openware/peatio · opendax · barong | bafe53030bfe · e204b565e687 · 1f488179596f |
+| Polygant/OpenCEX · OpenCEX-backend | 12d721419cc4 · 927b333d2c0e |
+| btcpayserver/btcpayserver · btcpayserver-docker · dgarage/NBXplorer | a305e9517617 · 09ef31435e31 · 27585a7a83b1 |
+| bitcart/bitcart · bitcart-docker | b43fef51b9db · cb6fd31eeff1 |
+| Consensys/web3signer · doc.web3signer | 504118ddfeec · 6d2d2911e6e8 |
+| hyperledger/firefly-signer · BitGo/BitGoJS · ethereum/go-ethereum | 7387445a3262 · 71498239fb43 · 572bd3696587 |
+| juspay/hyperswitch · hyperswitch-card-vault | fb887f53fc09 · 394bf6481ba7 |
+| mojaloop/central-ledger · mojaloop/helm | 9aa0385feadd · 876e6ce03e01 |
+| killbill/killbill · killbill-commons · blnkfinance/blnk | cb60779c1713 · 35aaa60c202f · 91bb84d0611c |
+
+## 三、拆成九个小步（每步：红测 → 绿 → 拆墙 → 全套 → 真跑 → 讲；2026-09-23 加了取舍 8 那一步，其后顺延）
 
 | 步 | 做什么 | 红测 / 守卫（先写） |
 |---|---|---|
-| ⓪ 开工前 | 请用户处理未提交的索引器改动；写 `docs/retro/M6-split-before.md`（只提问）；和用户逐条确认第二节 | — |
-| ① 进程身份，凭证放错就不启动 | **profile**：`web` / `worker` 必须恰好激活一个，否则拒绝启动。**web 的禁用名单**：`chainpay.system-db.password`、`spring.flyway.password`、`chainpay.payout.hot-wallet-key`、`chainpay.chain.rpc-url`、`chainpay.chain.audit-rpc-url`、`chainpay.alert.webhook-url`，出现任何一个就拒绝启动。**worker 的禁用名单**：`spring.flyway.password`、`chainpay.deposit.xpub`。**怎么查**：在 `Environment` 上查，环境变量、系统属性、yml 都算；报错只写变量名，不带值（判断「有没有」的口径见第五节最后一段） | 每个禁用的名字各写一条：上下文起不来，报错里点出名字、不含值。两个 profile 都激活或都没激活，也起不来 |
-| ② 拆掉 web 对系统身份的最后一处依赖 | **新迁移**：建取舍 2 的函数，同时查 `deposit_address` 和 `hot_wallet`。要点有四条：<br>• 声明 `SECURITY DEFINER`。<br>• 钉死 `SET search_path`。开发库的属主是超级用户，不钉就可能被人换掉查找路径。<br>• 先 `REVOKE EXECUTE ... FROM PUBLIC`（PostgreSQL 默认给 PUBLIC 执行权），再只授权给 `chainpay_app`。<br>• 函数体里先核对执行身份能不能看到全部行（超级用户或 BYPASSRLS），看不到就抛异常，照 V22 判官「拒绝盲跑」的做法（`V22__scan_patch.sql:18-31`）。<br>**`WithdrawalService`**：去掉 `SystemLedger` 和 `Optional<HotWalletSigner>`。<br>**发送侧第二道**：目标是任何平台地址就不广播。按关键字没搜到现成的检查，先读一遍 `PayoutSender` 确认 | **只有应用角色的上下文里**：提现到别家商户的收款地址 → 400 `INTERNAL_ADDRESS`；提现到热钱包地址 → 400。<br>**函数守卫**：确认是 SECURITY DEFINER、search_path 已钉死、PUBLIC 没有执行权。<br>**坑 3 的专门测试**：在测试库里建一个非超级用户、非 BYPASSRLS 的角色当属主，调用时必须抛异常，不能返回 false。<br>**发送侧**：目标是热钱包自己时不广播 |
-| ③ 装配拆开 | • 按第一节「拆后」那一列，给配置类和控制器挂上 profile。<br>• 把 `@EnableScheduling` 从 `ChainIndexerConfig` 挪到一个只在 worker 生效、**不看节点配置**的类上（坑 2）。<br>• `DepositPostingConfig` 的装配条件去掉 xpub。<br>• 拆开 `OpsHealthConfig`。<br>• `work` 分组只写在 worker 的 profile yml 里。Boot 4.1 启动时默认会校验分组成员是否存在（`management.endpoint.health.validate-group-membership` 默认 true，已查元数据确认），写错就起不来，这是好事。<br>• worker 主端口默认绑回环；compose 里不要像 `app` 那样设 `0.0.0.0`。宿主上直接跑 jar 时，两个进程的端口不能撞。<br>• 测试基类拆成 web 和 worker 两个。目前有 39 个文件带 `@SpringBootTest`（含基类） | **web 上下文**：<br>• 没有 `SystemLedger`、`systemDataSource`、`systemTransactionManager`、`HotWalletSigner`、`ChainReaders` 这些 bean。<br>• 注册的定时任务数是 0（数法照 `Migrate.Outcome.scheduledTasks`）。<br>• 没有任何 `/admin/` 映射。<br>• `db` 健康项里只有主池。<br>**worker 上下文**：<br>• 没有 `/api/` 映射。<br>• 不配节点时也会调度告警任务，证明调度不再依赖节点配置。<br>• 配了节点时是 6 个任务，调度线程数不少于任务数。<br>`ControllerBoundaryTest` 的源码扫描保留 |
-| ④ 迁移凭证只在迁移那一步 | • web 和 worker 的 profile yml 里设 `spring.flyway.enabled: false`。**不能改基础 yml**，因为 `Migrate` 读的就是它（`Migrate.java:15-30`）。<br>• 部署时的「只迁移」使用单独的 `env/migrate.env`。<br>• 要实测：只给属主凭证时 `--migrate-only` 能不能起来。它的最小上下文会装配主数据源，而 `spring.datasource.password` 没有默认值（`application.yml:30`） | web 和 worker 的上下文里没有 Flyway bean；只有属主凭证时 `MigrateOnlyTest` 仍然全绿 |
-| ⑤ env、compose、部署脚本 | • 三份 env 文件，各配一份 `.example`，内容见第四节。<br>• compose：`web` 和 `worker` 用同一个镜像，靠 `SPRING_PROFILES_ACTIVE` 区分。加固项照抄现在的 `app`：去掉全部能力、禁止提权、根文件系统只读、tmpfs、限内存、限进程数、healthcheck 打 readiness、`restart: unless-stopped`。worker 不写 `ports:`。<br>• `deploy.sh` / `rollback.sh` 按取舍 7 改。<br>• `tools/admin.sh` 和 `--create-admin` 都改为指向 worker | • `ContainerGuardTest` 两个服务都要守。<br>• 新增一条：`web.env.example` 里不能出现第四节中 web 列标 ✗ 的任何名字。<br>• `DeployGuardTest` 的顺序断言把两个服务都加进去 |
-| ⑥ 真跑与演练 | • 两个容器都 healthy，readiness 都返回 200。<br>• 商户流程用 `tools/api.py`：分配收款地址、发起提现。<br>• 管理流程用 `tools/admin.sh`：批准提现。<br>• 演练一：停掉 worker，web 的 `/api` 照常工作，提现照样受理并冻结；worker 恢复后，队列被消化掉。<br>• 演练二：停掉 Redis，worker 发出告警。<br>• 演练三：部署一次，再回滚一次 | • web 容器里按名字查（`env \| cut -d= -f1`），第四节 web 列标 ✗ 的一个都没有。<br>• worker 容器里没有属主凭证，也没有 xpub |
-| ⑦ 文档 | • CLAUDE.md「数据库身份与作用域」的表格加一列「在哪个进程」，包结构和控制面那几段跟着改。<br>• `docs/runbook/ops.md` 加一节「两个进程」：看哪个进程的健康、日志在哪、怎么只重启其中一个。<br>• LEARNING-PATH 加一条记录。<br>• `m6-launch.md` 的「不做的 · 多实例」补一句：web 已经没有定时任务，可以多开了，但这次仍然不做。<br>• 本文第七节打勾 | — |
+| ⓪ 开工前 ✅ | 2026-09-23：九条取舍按建议定下（第二节末）；对标写进「二·五」；before 的 17 问在 `docs/retro/M6-split-before.md`，用户选择边学边答 | — |
+| ① 进程身份，凭证放错就不启动 ✅ | **实际做法见第七节 ①**。与下面原计划的差别：worker 的名单去掉 xpub（取舍 8b 要用），属主口令挪到第 ⑤ 步（在那之前唯一的容器以 worker 身份跑、启动时还要迁移），两个角色都加上建管理员的口令。原计划：**profile**：`web` / `worker` 必须恰好激活一个，否则拒绝启动。**web 的禁用名单**：`chainpay.system-db.password`、`spring.flyway.password`、`chainpay.payout.hot-wallet-key`、`chainpay.chain.rpc-url`、`chainpay.chain.audit-rpc-url`、`chainpay.alert.webhook-url`，出现任何一个就拒绝启动。**worker 的禁用名单**：`spring.flyway.password`、`chainpay.deposit.xpub`。**怎么查**：在 `Environment` 上查，环境变量、系统属性、yml 都算；报错只写变量名，不带值（判断「有没有」的口径见第五节最后一段） | 每个禁用的名字各写一条：上下文起不来，报错里点出名字、不含值。两个 profile 都激活或都没激活，也起不来 |
+| ② 拆掉 web 对系统身份的最后一处依赖 | **新迁移**：建取舍 2 的函数，同时查 `deposit_address` 和 `hot_wallet`。要点有四条：<br>• 声明 `SECURITY DEFINER`。<br>• 钉死 `SET search_path`。开发库的属主是超级用户，不钉就可能被人换掉查找路径。<br>• 先 `REVOKE EXECUTE ... FROM PUBLIC`（PostgreSQL 默认给 PUBLIC 执行权），再只授权给 `chainpay_app`。<br>• 函数体里先核对执行身份能不能看到全部行（超级用户或 BYPASSRLS），看不到就抛异常，照 V22 判官「拒绝盲跑」的做法（`V22__scan_patch.sql:18-31`）。<br>**`WithdrawalService`**：去掉 `SystemLedger` 和 `Optional<HotWalletSigner>`。<br>~~发送侧第二道~~：并入第 ③ 步的签名前复核（2026-09-22 读过 `PayoutSender`：签名前什么都不复核） | **只有应用角色的上下文里**：提现到别家商户的收款地址 → 400 `INTERNAL_ADDRESS`；提现到热钱包地址 → 400。<br>**函数守卫**：确认是 SECURITY DEFINER、search_path 已钉死、PUBLIC 没有执行权。<br>**坑 3 的专门测试**：在测试库里建一个非超级用户、非 BYPASSRLS 的角色当属主，调用时必须抛异常，不能返回 false。<br>**发送侧**：目标是热钱包自己时不广播 |
+| ③ worker 不信 web 写的行（取舍 8，新） | **8a 出金**：签名前（落库之前）复核——收款地址在这个商户的白名单里且 ACTIVE、不是平台地址、冻结分录对得上（同商户、同币、同额、类型是冻结）、限额内或有人核准；不成立就不签，这笔停下、告警。「有人核准」的标记只有系统角色能写：应用角色对 `payout` 的 INSERT 收成列级。库守：`(merchant_id, to_address)` 外键指向白名单；应用角色插入时状态只能是「待核准 / 放行」。**8b 入金**：记账前用 xpub 按那一行的序号重新派生，对不上不记、叫人（worker 拿 xpub）；撤掉应用角色对 `deposit_address` 的 UPDATE。复核写成边界清楚的部件，入口只有「签第 N 笔提现」（取舍 9 的接缝） | **以应用身份直接写库**（模拟被攻破的 web）：插一行「放行」、收款地址不在白名单 → 不签、这笔停下；冻结金额与提现金额不符 → 不签；超限却写成「放行」→ 不签；插一行假收款地址再造一条转入 → 不记账；应用角色插不进「已签名」等后续状态、写不了核准标记、改不了收款地址。每条先红后绿 |
+| ④ 装配拆开（原 ③） | • 按第一节「拆后」那一列，给配置类和控制器挂上 profile。<br>• 把 `@EnableScheduling` 从 `ChainIndexerConfig` 挪到一个只在 worker 生效、**不看节点配置**的类上（坑 2）。<br>• `DepositPostingConfig` 的装配条件去掉 xpub。<br>• 拆开 `OpsHealthConfig`。<br>• `work` 分组只写在 worker 的 profile yml 里。Boot 4.1 启动时默认会校验分组成员是否存在（`management.endpoint.health.validate-group-membership` 默认 true，已查元数据确认），写错就起不来，这是好事。<br>• worker 主端口默认绑回环；compose 里不要像 `app` 那样设 `0.0.0.0`。宿主上直接跑 jar 时，两个进程的端口不能撞。<br>• 测试基类拆成 web 和 worker 两个。目前有 39 个文件带 `@SpringBootTest`（含基类） | **web 上下文**：<br>• 没有 `SystemLedger`、`systemDataSource`、`systemTransactionManager`、`HotWalletSigner`、`ChainReaders` 这些 bean。<br>• 注册的定时任务数是 0（数法照 `Migrate.Outcome.scheduledTasks`）。<br>• 没有任何 `/admin/` 映射。<br>• `db` 健康项里只有主池。<br>**worker 上下文**：<br>• 没有 `/api/` 映射。<br>• 不配节点时也会调度告警任务，证明调度不再依赖节点配置。<br>• 配了节点时是 6 个任务，调度线程数不少于任务数。<br>`ControllerBoundaryTest` 的源码扫描保留 |
+| ⑤ 迁移凭证只在迁移那一步（原 ④；加：worker 名单添上属主口令、启动时 Flyway 只校验不迁移） | • web 和 worker 的 profile yml 里设 `spring.flyway.enabled: false`。**不能改基础 yml**，因为 `Migrate` 读的就是它（`Migrate.java:15-30`）。<br>• 部署时的「只迁移」使用单独的 `env/migrate.env`。<br>• 要实测：只给属主凭证时 `--migrate-only` 能不能起来。它的最小上下文会装配主数据源，而 `spring.datasource.password` 没有默认值（`application.yml:30`） | web 和 worker 的上下文里没有 Flyway bean；只有属主凭证时 `MigrateOnlyTest` 仍然全绿 |
+| ⑥ env、compose、部署脚本（原 ⑤；env 按进程拆成三份，测试探针与已退役的变量不进任何一份） | • 三份 env 文件，各配一份 `.example`，内容见第四节。<br>• compose：`web` 和 `worker` 用同一个镜像，靠 `SPRING_PROFILES_ACTIVE` 区分。加固项照抄现在的 `app`：去掉全部能力、禁止提权、根文件系统只读、tmpfs、限内存、限进程数、healthcheck 打 readiness、`restart: unless-stopped`。worker 不写 `ports:`。<br>• `deploy.sh` / `rollback.sh` 按取舍 7 改。<br>• `tools/admin.sh` 和 `--create-admin` 都改为指向 worker | • `ContainerGuardTest` 两个服务都要守。<br>• 新增一条：`web.env.example` 里不能出现第四节中 web 列标 ✗ 的任何名字。<br>• `DeployGuardTest` 的顺序断言把两个服务都加进去 |
+| ⑦ 真跑与演练（原 ⑥） | • 两个容器都 healthy，readiness 都返回 200。<br>• 商户流程用 `tools/api.py`：分配收款地址、发起提现。<br>• 管理流程用 `tools/admin.sh`：批准提现。<br>• 演练一：停掉 worker，web 的 `/api` 照常工作，提现照样受理并冻结；worker 恢复后，队列被消化掉。<br>• 演练二：停掉 Redis，worker 发出告警。<br>• 演练三：部署一次，再回滚一次 | • web 容器里按名字查（`env \| cut -d= -f1`），第四节 web 列标 ✗ 的一个都没有。<br>• worker 容器里没有属主凭证，也没有 xpub |
+| ⑧ 文档（原 ⑦） | • CLAUDE.md「数据库身份与作用域」的表格加一列「在哪个进程」，包结构和控制面那几段跟着改。<br>• `docs/runbook/ops.md` 加一节「两个进程」：看哪个进程的健康、日志在哪、怎么只重启其中一个。<br>• LEARNING-PATH 加一条记录。<br>• `m6-launch.md` 的「不做的 · 多实例」补一句：web 已经没有定时任务，可以多开了，但这次仍然不做。<br>• 本文第七节打勾 | — |
 
 ## 四、每个进程拿哪些变量（只列名字）
 
@@ -150,13 +200,15 @@ PostgreSQL 有一种 `SECURITY DEFINER` 函数，执行时用的是**函数属�
 | `CHAINPAY_PAYOUT_HOT_WALLET_KEY` | ✗ 有就拒绝启动 | ✓ | ✗ |
 | `CHAINPAY_CHAIN_RPC_URL` / `_AUDIT_RPC_URL` | ✗ 有就拒绝启动 | ✓ | ✗ |
 | `CHAINPAY_CHAIN_START_BLOCK`（不是密钥） | ✗ | ✓ | ✗ |
-| `CHAINPAY_DEPOSIT_XPUB` | ✓ | ✗ 有就拒绝启动（③ 改掉入账的装配条件以后） | ✗ |
+| `CHAINPAY_DEPOSIT_XPUB` | ✓ | ✓（取舍 8b：记账前用它重新派生收款地址。2026-09-23 改，原计划是禁） | ✗ |
 | `CHAINPAY_SECRET_KEY` | ✓（验签） | ✓（发凭证时加密） | ✗ |
 | `CHAINPAY_REDIS_HOST` / `_PORT` | ✓ | ✓（只为健康检查，取舍 5） | ✗ |
 | `CHAINPAY_ALERT_WEBHOOK_URL` | ✗ 有就拒绝启动 | ✓ | ✗ |
 | `CHAINPAY_ALERT_FORMAT`（不是密钥） | ✗ | ✓ | ✗ |
 | `CHAINPAY_PORT` / `_MANAGEMENT_PORT` / `_BIND_ADDRESS` / `_LOG_LEVEL` | ✓ | ✓（主端口绑容器内回环） | ✗ |
-| `CHAINPAY_ADMIN_PASSWORD`（只出现在 `--create-admin` 那一条命令的环境里） | ✗ | ✓ | ✗ |
+| `CHAINPAY_ADMIN_PASSWORD`（只出现在 `--create-admin` 那一条一次性命令的环境里） | ✗ 有就拒绝启动 | ✗ 有就拒绝启动（一次性命令是另一个 JVM、不受守卫管；常驻的 worker 不许有） | ✗ |
+| `CHAINPAY_SEPOLIA_RPC` / `_AUDIT_RPC`（只给测试探针；2026-09-23 挪到 `env/probe.env.example`） | ✗ | ✗ | ✗ |
+| `CHAINPAY_ADMIN_TOKEN`（M6-⑤ 已退役，没有代码读它；开发机的 env 里还有，可以删） | ✗ | ✗ | ✗ |
 
 ## 五、给实现会话：写 before 时可以问的，以及写本文时发现的坑
 
@@ -195,6 +247,19 @@ PostgreSQL 有一种 `SECURITY DEFINER` 函数，执行时用的是**函数属�
 - 所以这个函数在开发库和全部测试里都表现正确。换到属主不是超级用户的库，它一行都看不到，对所有地址都返回 false：提现检查被静默放行，而所有测试照样是绿的。
 - ② 里的两项就是冲着它去的：函数体先核对执行身份、看不到全部行就抛异常；外加一条专门用非超级用户属主去调用的测试。
 
+### 坑 4：提现队列——应用角色能插任意状态的提现，发送任务签名前不复核（2026-09-22 读库核实）
+
+- `payout` 上应用角色有 SELECT、INSERT（`V21__payout.sql:215`），策略只核 `merchant_id = current_merchant_id()`（`V22__scan_patch.sql:139-142`），而商户号是连接自己设的会话变量（`V6__row_level_security.sql:71-75`）。
+- 状态的 CHECK 允许全部八种（`V21:147-148`），收款地址只查形状、没有外键指向白名单（`V21:123`、`:144`），全库没有触发器。白名单、限额、平台地址三道门只写在 web 的 `WithdrawalService` 里。
+- `PayoutSender` 取「放行」的行就签名，不复核白名单、限额、核准、冻结。
+- 连起来：被攻破的 web 冒充商户 → 冻结它的可用余额（冻结本身合法）→ 插一行「放行」、收款地址是攻击者的 → worker 照签照发。上限是各商户的可用余额。今天一个 SQL 注入就能走这条路，与拆分无关；拆分之后它是「web 失守 → 钱出门」剩下的主要通道。→ 取舍 8a、第 ③ 步。对标：Peatio 的签名进程同形状（「二·五」结论 3）。
+
+### 坑 5：收款地址——应用角色能插、能改收款地址，入账不重新派生（2026-09-23 读库核实）
+
+- `GRANT SELECT, INSERT, UPDATE ON deposit_address TO chainpay_app`；全仓没有代码用到 UPDATE。
+- 入账任务靠那一行决定「记给谁」（`DepositRepository.java:43-49`），不按 xpub 重新派生核对。
+- 连起来：被攻破的 web 插一行收款地址 = 攻击者的新地址 → 攻击者自己转一笔进去 → 入账照记成商户余额（余额核对也过：那个地址确实收到了）→ 按正常流程提走热钱包的真钱 → 再把那个地址里的币转走。对账每小时一次会报托管总额对不上，但钱已经出去了；8a 拦不住（账本看来是合法入账之后的合法提现）。→ 取舍 8b、第 ③ 步。
+
 ### 另外几处要实测的
 
 - 只给属主凭证时，`--migrate-only` 能不能起来（见 ④）。
@@ -224,11 +289,22 @@ PostgreSQL 有一种 `SECURITY DEFINER` 函数，执行时用的是**函数属�
 
 ## 七、进度
 
-- ⬜ ⓪ 开工前
-- ⬜ ① 进程身份，凭证放错就不启动
+- ✅ ⓪ 开工前（2026-09-23：九条取舍按建议定下，对标见「二·五」）
+- ✅ ① 进程身份，凭证放错就不启动（2026-09-23，记录见下）
 - ⬜ ② 拆掉 web 对系统身份的最后一处依赖
-- ⬜ ③ 装配拆开
-- ⬜ ④ 迁移凭证只在迁移那一步
-- ⬜ ⑤ env、compose、部署脚本
-- ⬜ ⑥ 真跑与演练
-- ⬜ ⑦ 文档
+- ⬜ ③ worker 不信 web 写的行（取舍 8，新）
+- ⬜ ④ 装配拆开
+- ⬜ ⑤ 迁移凭证只在迁移那一步，外加启动时核对库版本
+- ⬜ ⑥ env、compose、部署脚本
+- ⬜ ⑦ 真跑与演练
+- ⬜ ⑧ 文档
+
+### ① 的实际做法（2026-09-23）
+
+- `ops/role/ProcessRole`：`web` / `worker` 两个角色，各带一张禁用名单，每项写运维设的环境变量名、应用读它用的配置键、它能干什么。web 七项：系统角色口令、属主口令、热钱包私钥、两个节点地址、告警地址、建管理员的口令；worker 一项：建管理员的口令（属主口令第 ⑤ 步加）。`resolve` 先查恰好一个角色，再查名单；报错只写变量名。「有没有」：非空白、不是 false，解析不出的占位符算没配。
+- `ops/role/ProcessRoleConfig`：静态、`PriorityOrdered` 最高优先级的 BeanFactoryPostProcessor，在读完 bean 图纸、造 bean 之前调 `resolve`；只在完整应用里（一次性命令的最小上下文不扫描这个包）。
+- compose 的 `app` 设 `SPRING_PROFILES_ACTIVE: worker`（第 ⑥ 步拆服务之前）；测试基类 `@ActiveProfiles({"test", "worker"})`。
+- 「密钥形态的变量名」收口到 `tools/image-check.sh` 那一行（补 `WEBHOOK_URL`、`RPC`），测试经 `support/SecretNames` 读；探针的节点地址挪到 `env/probe.env.example`。
+- 测试：`ProcessRoleTest` 13、`ProcessRoleBootTest` 10、`EnvInventoryTest` 4，`ContainerGuardTest` 加一条（compose 必须给角色）。拆墙七处都有测试红：守卫没接进应用 / 写成普通 bean（根因变成 `Connection refused`）→ 启动测试全红；配置键拼错 → 只有启动测试那一项红（派生自名单的单元测试照样绿）；名单漏项、扫描名单漏项 → 清单测试红；把 false 当成配了、两个角色都开也放行 → 单元测试红。
+- 真跑：部署 57 秒、健康 9 秒；容器日志「进程角色：worker（禁用名单 1 项，环境里一项都没有）」；演练：同一份环境起 web → 拒绝启动、点名六个变量、没建任何连接池；不给角色 → 拒绝启动；两份输出逐个比对，没有任何密钥值。报错里各项的分隔从顿号改成分号（说明文字里就有顿号），重跑全套 674 条全绿、再部署 52 秒（`chainpay:4f04124-dirty.db817c1`）。
+- 开发机的 `env/local.env` 里还有两行探针地址与退役的 `CHAINPAY_ADMIN_TOKEN`（只看了变量名）：怎么按名字挪走 / 删掉见 `docs/runbook/ops.md`「进程角色」，由用户决定。

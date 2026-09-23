@@ -36,7 +36,10 @@ import org.testcontainers.utility.MountableFile;
  * <p>容器是 {@code static} 的，整个测试类共享一个，不会每个方法起一次。
  */
 @SpringBootTest
-@ActiveProfiles("test")   // 加载 application.yml + application-test.yml，后者只覆盖差异
+// test：加载 application.yml + application-test.yml，后者只覆盖差异。
+// worker：进程角色（进程拆分 ①），恰好一个，否则起不来。这个上下文装着全部的活和全部凭证（系统角色、属主……），今天只有 worker 容得下；
+// 第 ④ 步装配拆开时，测试基类跟着拆成 web 与 worker 两个
+@ActiveProfiles({"test", "worker"})
 public abstract class AbstractPostgresTest {
 
     /**

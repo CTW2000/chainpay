@@ -75,7 +75,9 @@ if [[ ! -f $ENV_FILE ]]; then
 else
   scanned=0
   while IFS='=' read -r k v; do
-    [[ $k =~ ^CHAINPAY_[A-Z_]*(PASSWORD|KEY|TOKEN|RPC_URL|XPUB)$ ]] || continue
+    # 「什么样的变量名算密钥」只在这一行写一份：Java 测试（ContainerGuardTest、EnvInventoryTest）从这里读，不另抄。
+    # 进程拆分 ① 补上 WEBHOOK_URL（告警地址里带令牌）与 RPC（测试探针的节点地址）：此前两份副本一起漏了它们
+    [[ $k =~ ^CHAINPAY_[A-Z_]*(PASSWORD|KEY|TOKEN|RPC_URL|RPC|XPUB|WEBHOOK_URL)$ ]] || continue
     v=${v%\"}; v=${v#\"}
     if [[ ${#v} -lt 12 ]]; then echo "· $k 的值只有 ${#v} 个字符，太短，按值扫会误报，跳过（这一项没查）"; continue; fi
     scanned=$((scanned+1))
