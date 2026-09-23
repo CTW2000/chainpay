@@ -7,7 +7,7 @@ import java.time.ZoneOffset;
 import java.util.Optional;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
-/** 会话表：只存令牌的散列。这里只管「没吊销」；过期与闲置由服务按它的表判（可注入的时钟）。 */
+/** 会话表：只存令牌的散列。这里只管「没吊销、管理员没停用」；过期与闲置由服务判（时钟可注入）。 */
 public class AdminSessionRepository {
 
     private final JdbcClient jdbc;

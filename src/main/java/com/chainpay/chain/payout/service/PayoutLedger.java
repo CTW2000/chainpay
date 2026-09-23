@@ -16,7 +16,7 @@ import org.springframework.jdbc.core.simple.JdbcClient;
  *   失败   user:acme:LINK:frozen → user:acme:LINK          WITHDRAWAL_REVERSE   键 withdrawal:&lt;提现 id&gt;:reverse
  * </pre>
  *
- * <p>三笔都是普通的 {@link LedgerService#transfer}，「同一笔业务只结算一次」由 M0 的幂等键唯一约束守；
+ * <p>三笔都是普通的 {@link LedgerService#transfer}，「同一笔业务只结算一次」由幂等键的唯一约束守；
  * 「结算过的不能再解冻」由冻结账户不许为负守——第二个结局在余额那一层就被拦住，不靠代码记得。
  *
  * <p>本类不挑连接：冻结在申请时走商户自己的连接与 {@code asMerchant} 作用域（冻结账户属于商户，RLS 放行且幂等键落在商户名下）；
@@ -38,7 +38,7 @@ public final class PayoutLedger {
     }
 
     /**
-     * 冻结账户按需建（同 M3 的 ensureAccount：ON CONFLICT DO NOTHING，让唯一约束裁决并发）。
+     * 冻结账户按需建（ON CONFLICT DO NOTHING，让唯一约束裁决并发）。
      * 在申请的事务里调：申请失败整个回滚，不会留下一个没人用的空账户。
      */
     public long ensureFrozenAccount(long merchantId, String merchantCode, String symbol) {

@@ -8,11 +8,8 @@ import org.springframework.boot.health.contributor.Health;
 import org.springframework.boot.health.contributor.HealthIndicator;
 
 /**
- * 入账任务算不算「能干活」（2026-09-16 补）。
- *
- * <p>在此之前 work 组里没有入账这一项：任务因为节点撤了凭证、或者一直答不上来而停住时，
- * 只有日志里每 30 秒一行，告警读的是 work 组、组里没有它，于是没人知道。
- * 索引器早有 {@code indexer} 这一项，入账没有——<b>有意的不一致叫设计，无意的不一致叫漂移</b>。
+ * 入账任务算不算「能干活」。告警只读 work 组：任务因为节点撤了凭证、或者一直答不上来而停住时，
+ * 没有这一项就只剩日志里每 30 秒一行，没人知道。
  *
  * <p>判定：没装配 = UNKNOWN（这个进程不入账，不是坏了）；上一轮 HALTED = DOWN（重试没用，要人来）；
  * 连续 {@link #DEGRADED_AFTER_ROUNDS} 轮没跑完 = DEGRADED（还在跑，但有人该来看看）；其余 UP。

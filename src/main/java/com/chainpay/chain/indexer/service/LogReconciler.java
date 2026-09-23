@@ -39,7 +39,7 @@ import org.slf4j.LoggerFactory;
  *   坐标相同、内容不同 → 不动，记为 disputed，等人看：金额的对错永远不由代码裁决
  * </pre>
  * 「点头」点的是内容，不只是坐标：比较的键是 (blockHash, logIndex)，比较的值是代币、付款人、收款人、金额。
- * 原来只比坐标，主节点记错的金额永远判干净（2026-09-03 用假链复现后补上）。
+ * 只比坐标的话，主节点记错的金额永远判干净。
  * 没配审计节点时两条路径是同一个节点：能抓住「索引漏了」，抓不住「节点整体撒谎」。
  *
  * <p>抽到的块已经 finalized，两个节点对它的哈希还不一致，那不是对账差异，
@@ -171,7 +171,7 @@ public final class LogReconciler {
     /**
      * 回执里有一条解不了的日志。这是审计路径：坏数据的出口是「记为 disputed 等人看」，不是把索引器停掉——
      * 「解码失败即停机」是索引路径的规矩（一条被跳过的日志就是一笔可能丢失的入账），对账不写入账证据，
-     * 那条规矩不适用于这一帧。2026-09-09 之前这个异常谁也没接，一路穿到 tick 让整个索引器 HALTED，且没记块（扫描补丁）。
+     * 那条规矩不适用于这一帧。
      */
     private BlockReconciliation recordUndecodable(long blockNumber, String blockHash, String node, IllegalArgumentException e) {
         log.warn("对账块 {}：{} 的回执里有一条解不了的日志（{}），本块记为 disputed 等人看", blockNumber, node, e.getMessage());

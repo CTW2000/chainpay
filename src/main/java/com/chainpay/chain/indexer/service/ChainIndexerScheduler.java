@@ -33,18 +33,18 @@ import org.springframework.scheduling.annotation.Scheduled;
  *   瞬时的    节点不可达、库暂时拿不到锁      → RETRY_LATER，什么都不动，下一次再来；
  *                                            连续到阈值 → DEGRADED（还在跑，但该有人来看），每轮报错
  *   凭证      节点回 401 / 403                 → HALTED：key 失效或被撤销，重试永远没用
- *   重组      书签接不上链（M2-④ 起）         → 回滚到共同祖先，REORGED；下一次轮询从祖先之后重放
+ *   重组      书签接不上链                    → 回滚到共同祖先，REORGED；下一次轮询从祖先之后重放
  *   结构性的  finalized 倒退、解码失败、
  *             约束违反、没书签也没起点        → HALTED，停下；之后每次轮询直接返回，不再碰节点
  * </pre>
  * 分界线是「重试会不会有用」和「代码能不能自己修」。重组能自己修（链自己告诉了我们真相）；
  * finalized 之下的变动代码不该自作主张。停下来的索引器是一个报警，往前走的是定时炸弹。
  *
- * <p><b>状态落库（M2-⑥ 补丁 3）：</b>「停下叫人」需要的是状态不是事件。停机、降级、恢复都写进
+ * <p><b>状态落库：</b>「停下叫人」需要的是状态不是事件。停机、降级、恢复都写进
  * {@code indexer_state}；进程启动先读它，HALTED 就不碰节点——重启不算恢复，人把它改回 RUNNING 才算。
  * 否则结构性原因在自动拉起下会变成静默的重启死循环。
  *
- * <p>两个实例同时跑不用在这里管：书签的行锁（{@link BlockIndexer} / {@link ReorgRecovery}）已经让它们互斥。
+ * <p>两个实例同时跑不用在这里管：书签的行锁（{@link BatchWriter} / {@link ReorgWriter}）已经让它们互斥。
  */
 public final class ChainIndexerScheduler {
 
@@ -63,8 +63,8 @@ public final class ChainIndexerScheduler {
     private final String token;
     private final Long startBlock;
     private final int degradedAfterFailures;
-    /** 一次轮询最多花多久追赶（M6-②）。M3-⑤ 时是「每轮最多 10 批」，停两天后按 12 秒一轮追 4300 块要几十分钟；
-     *  调度线程池已经每个任务一条线程（M3-⑤ 补丁 2），一轮跑久了压不住别的任务，只压住自己的降级检测与状态更新——所以封顶的是时间不是批数。 */
+    /** 一次轮询最多花多久追赶。封顶的是时间不是批数：按批数封顶，停机后追几千块要几十分钟；
+     *  调度线程池每个任务一条线程，一轮跑久了压不住别的任务，只推迟自己的降级检测与状态更新。 */
     private final Duration catchUpBudget;
     private final LongSupplier nanoTime;
     private final AtomicBoolean halted = new AtomicBoolean(false);

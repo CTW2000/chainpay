@@ -5,11 +5,11 @@ import java.math.BigDecimal;
 import java.math.BigInteger;
 
 /**
- * 链上原始单位 → 账本金额。M3 入账、M4 出金都只经这里。
+ * 链上原始单位 → 账本金额，只经这里。
  *
  * <p>链上没有小数点，decimals 只是「显示时把小数点往左挪几位」。换算是精确除法，永远不四舍五入；
  * 装不下就抛 {@link AmountOverflowException}——在写账本之前，而不是让数据库报「numeric field overflow」，
- * 更不是静默截断。「装得下」是多大，由 {@link LedgerAmounts} 定（2026-09-21 起只在那里写一份，这里不留别名）。
+ * 更不是静默截断。「装得下」是多大只由 {@link LedgerAmounts} 定，这里不留别名。
  */
 public final class TokenAmounts {
 
@@ -27,7 +27,7 @@ public final class TokenAmounts {
                     + " 位小数，装不下，而钱不能四舍五入");
         }
         BigDecimal amount = new BigDecimal(raw).movePointLeft(decimals);
-        // 装不装得下只在 LedgerAmounts.requireFits 判（2026-09-22 收口）：小数位上面已由 decimals 的检查保证，这里拦的是整数位
+        // 小数位已由上面 decimals 的检查保证，requireFits 拦的是整数位
         return LedgerAmounts.requireFits(amount, AmountOverflowException::new).setScale(LedgerAmounts.SCALE);
     }
 }

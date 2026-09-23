@@ -22,11 +22,10 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
 
 /**
- * 商户侧的提现（M4-④）。整段在控制器的 {@code asMerchant} 事务里跑，走商户连接：白名单、提现、账户都有 RLS。
+ * 商户侧的提现。整段在控制器的 {@code asMerchant} 事务里跑，走商户连接：白名单、提现、账户都有 RLS。
  *
- * <p>申请一笔提现的顺序：先把形状与规则都验完（代币、金额、白名单、平台地址），再锁本商户那一行把同一商户的申请串行化，
- * 然后在锁内看幂等键、算当日汇总、定状态、冻结、插行——冻结与插行在同一个事务里，插不进去冻结一起回滚。
- * 「提到平台自己的收款地址」要看所有商户的地址表，商户连接看不到别家的行，所以那一问走系统身份，只回答是或否。
+ * <p>申请一笔提现的顺序：代币、金额 → 锁本商户那一行（同一商户的申请从这里起串行）→ 幂等键 → 平台地址（先于白名单）→ 白名单
+ * → 按限额定状态（算当日汇总）→ 冻结 → 插行。冻结与插行在同一个事务里，插不进去冻结一起回滚。
  */
 @Service
 public class WithdrawalService {
@@ -112,8 +111,7 @@ public class WithdrawalService {
 
     /**
      * 金额：正数、账本装得下、小数位不超过代币的 decimals（否则链上表示不了）。
-     * 「装得下」只在 {@link LedgerAmounts#requireFits} 判（2026-09-22 收口；此前这里只查了小数位，没查整数位）；
-     * decimals 是代币的规矩，留在这里。
+     * 「装得下」只在 {@link LedgerAmounts#requireFits} 判；decimals 是代币的规矩，留在这里。
      */
     private static BigDecimal ledgerAmount(BigDecimal requested, int decimals) {
         if (requested == null || requested.signum() <= 0) {

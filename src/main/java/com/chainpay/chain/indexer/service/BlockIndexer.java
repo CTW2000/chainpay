@@ -17,7 +17,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * M2-② 的核心：一批一批地把链上的 Transfer 写进库，并推进书签。
+ * 一批一批地把链上的 Transfer 写进库，并推进书签。
  *
  * <p><b>一次 {@link #indexNextBatch()} 的形状，顺序不能换：</b>
  * <pre>
@@ -25,40 +25,40 @@ import java.util.Map;
  *   ② 问链头，算范围                        from = 101, to = min(100 + batch, head)
  *   ③ 网络：取 block(from)、block(to)、logs  ← 在事务外面，可能要好几秒
  *   ④ 校验 block(from).parentHash == cursor.hash
- *                                           ← 不等就停：重组。M2-② 只检测，回滚是 M2-④
+ *                                           ← 不等就停：重组。这里只检测，回滚在 ReorgRecovery
  *   ⑤ 解码                                  ← 解不了就停，整批不写
- *   ⑥ 核对这一批的归属（2026-09-03 补丁）
+ *   ⑥ 核对这一批的归属
+ *        每条日志来自我们的合约                 ← 节点不按地址过滤，停下
  *        每条日志的块号在 [from, to] 里         ← 不在 = 节点答非所问，停下
  *        每条日志声称的块哈希 == 该块的头        ← 为有日志的块再取一次头
  *        再读一次 block(from)，哈希与父哈希没变   ← 三次读取之间链换了分支 = 节点前后不一致，作废重试
  *   ⑦ BEGIN
- *        锁书签行、重读：必须仍是 100，否则这批作废
- *        INSERT 事件 ON CONFLICT：CANONICAL 不动，ORPHANED 复活（M2-④）
- *        UPDATE 书签 WHERE last_block_number = 100
+ *        锁书签行、重读：号与哈希必须仍是 100 那一块，否则这批作废
+ *        INSERT 事件 ON CONFLICT：CANONICAL 不动，ORPHANED 复活
+ *        UPDATE 书签 WHERE 号与哈希仍是期望值
  *      COMMIT
  * </pre>
  *
  * <p><b>为什么事件和书签在同一个事务里：</b>崩在两步中间的两种坏法不对称——
  * 先写事件再推书签，崩了是重复，唯一约束会尖叫；先推书签再写事件，崩了是丢失，静默。
- * 放进同一个事务，崩在任何位置，重启后书签和事件永远一致（M2-before 第 8 问）。
+ * 放进同一个事务，崩在任何位置，重启后书签和事件永远一致。
  *
  * <p><b>为什么网络在事务外面：</b>事务开着时那条连接被占着、那行锁被握着。一次 RPC 最长 20 秒，
  * 放进事务就是握着锁等网络：另一个实例干等，连接池少一条。事务要短，网络在外面。
- * 代价是两个实例可能都取了同一段数据，慢的那个在 ⑥ 发现书签已动、白取一次——账是对的。
+ * 代价是两个实例可能都取了同一段数据，慢的那个在 ⑦ 发现书签已动、白取一次——账是对的。
  *
  * <p><b>为什么停下而不是跳过：</b>④ 和 ⑤ 的失败都让整批不写、书签不动、抛出。
  * 一条被跳过的日志就是一笔静默丢失的入账；停下来的索引器是一个报警，往前走的是定时炸弹。
  *
  * <p><b>为什么要核对归属（⑥）：</b>③ 是三次独立的网络读取，中间链可以换分支。父哈希只在取 block(from) 那一刻
  * 核对过一次；一次重组落在它和 getLogs / block(to) 之间，旧分支的行会以 CANONICAL 留下、书签却记下新分支的哈希，
- * 之后每一轮的父哈希检查都通过，永远检测不到（2026-09-03 用假链复现：旧分支的行在视图里是 FINAL）。
+ * 之后每一轮的父哈希检查都通过，永远检测不到，视图还会把旧分支的行判成 FINAL。
  * 日志自带的块号与块哈希是节点「说」的，不是承诺给我们的：不核对，撒谎的节点可以塞进任意坐标的转账。
  * 所以落库前把这一批当成一个快照来验：范围、每条日志的头、from 块没变。代价是为有日志的块多取一次头。
  *
- * <p><b>第 ⑦ 步在 {@link BatchWriter}</b>（2026-09-15 由手工模板改为注解）：注解的边界是一个方法，留在本类里要么整个方法进事务、握着连接等网络，
- * 要么自己调自己绕过代理、悄悄没有事务。
+ * <p><b>第 ⑦ 步在 {@link BatchWriter}</b>，为什么单独成类见那里。
  *
- * <p>它不是 Spring bean：装配在 {@code ChainIndexerConfig}（配了 RPC 地址才装），
+ * <p>它不是组件扫描出来的 bean：只由 {@code ChainIndexerConfig} 装配（配了 RPC 地址才装），
  * 测试里直接 new，把 {@link ChainReader} 换成内存里的链。
  */
 public final class BlockIndexer {
@@ -73,8 +73,8 @@ public final class BlockIndexer {
     /** 当前 eth_getLogs 的窗口（块数）。 */
     private final java.util.concurrent.atomic.AtomicInteger window;
     /**
-     * 失败过的尺寸里最小的那个（0 = 还没撞过上限）。有它在，成功后只向它二分逼近，不翻倍撞回去。
-     * 2026-09-08 真环境实测：Alchemy 免费层限 10 块，「成功后翻倍」在这个固定上限上永远震荡，一半调用注定失败。
+     * 失败过的尺寸里最小的那个（0 = 还没撞过上限）。有它在，成功后只向它二分逼近，不翻倍撞回去：
+     * 在固定上限上（如 Alchemy 免费层的 10 块）「成功后翻倍」会永远震荡，一半调用注定失败。
      */
     private final java.util.concurrent.atomic.AtomicInteger knownTooLarge;
     /** 最近成功过的最大尺寸：再撞上限时退到这里，不必从一半重新爬。 */
@@ -168,9 +168,8 @@ public final class BlockIndexer {
     }
 
     /**
-     * 合约地址必须是 0x + 40 位十六进制，构造时就拒绝。
-     * 不这么做的后果实测过：YAML 把不加引号的地址转成十进制数，应用起来了、书签放了、链头刷新了，
-     * 然后每一次 eth_getLogs 都是 Invalid params，窗口一路减到 1 块再停机——错误离它的原因隔了四层。
+     * 合约地址必须是 0x + 40 位十六进制，构造时就拒绝。YAML 会把不加引号的地址转成十进制数；
+     * 不在这里拦，要等每一次 eth_getLogs 都报 Invalid params、窗口一路减到 1 块才停机，错误离原因隔了四层。
      */
     static String requireAddress(String address) {
         if (!EthAddress.isWellFormed(address)) {
@@ -185,7 +184,7 @@ public final class BlockIndexer {
         return cursors.find(cursorName).isPresent();
     }
 
-    /** 处理下一批。见类注释里的 ①～⑥。 */
+    /** 处理下一批。见类注释里的 ①～⑦。 */
     public BatchResult indexNextBatch() {
         // ① 读书签，不加锁
         IndexerCursor cursor = cursors.find(cursorName)
@@ -205,8 +204,7 @@ public final class BlockIndexer {
         if (!first.parentHash().equalsIgnoreCase(cursor.lastBlockHash())) {
             throw new ReorgDetectedException(from, cursor.lastBlockHash(), first.parentHash());
         }
-        // ⑤ 取日志。撞上提供商的上限（带 code 的错）就对半分重试；成功后不翻倍撞回去，而是记住失败过的尺寸、
-        //    向它二分逼近（shrinkAfterFailure / growAfterSuccess，M3-⑤ 演练补丁）。
+        // 取日志（仍属 ③）。撞上提供商的上限（带 code 的错）就缩窗口重试（shrinkAfterFailure / growAfterSuccess）；
         //    减到一块还失败就停下——那不是范围问题。传输失败（code 为空）是瞬时的，不缩窗口、原样抛出
         long to;
         List<RawLog> raw;
@@ -227,8 +225,8 @@ public final class BlockIndexer {
                 if (requested <= 1) {
                     if (head - to <= TIP_TOLERANCE_BLOCKS) {
                         // 链头附近的单块也取不到：不是范围问题，是提供商前后不一致——eth_blockNumber 的后端已经看到这块，
-                        // getLogs 的后端还没有（2026-09-09 真实启动实测，Alchemy 原话 "block range extends beyond current head block"，
-                        // 此前按「不是范围问题」停机叫人）。按瞬时处理，下一轮再来；一路减半得到的「范围信息」也是假的，整体恢复
+                        // getLogs 的后端还没有（Alchemy 报 "block range extends beyond current head block"）。
+                        // 按瞬时处理，下一轮再来；一路减半得到的「范围信息」也是假的，整体恢复
                         window.set(windowBefore);
                         knownTooLarge.set(knownTooLargeBefore);
                         knownGood.set(knownGoodBefore);
@@ -247,16 +245,16 @@ public final class BlockIndexer {
         if (last.number() != to) {
             throw new IllegalStateException("节点返回了错误的区块：要 " + to + "，给了 " + last.number());
         }
-        // ⑥ 解码。任何一条解不了，整批不写
+        // ⑤ 解码。任何一条解不了，整批不写
         List<Erc20Transfer> transfers = raw.stream().map(TransferLogDecoder::decode).toList();
 
-        // ⑦ 核对这一批的归属：合约地址、坐标都是节点说的；③④⑤ 之间链可以换分支
+        // ⑥ 核对这一批的归属：合约地址、坐标都是节点说的；③ 的几次读取之间链可以换分支
         requireOurContract(transfers);
         requireWithinRange(transfers, from, to);
         requireLogsMatchHeaders(transfers, first, last);
         requireStillOnTheSameBranch(first);
 
-        // ⑧ 事务：锁、重读、写、推（BatchWriter，经代理进事务）
+        // ⑦ 事务：锁、重读、写、推（BatchWriter，经代理进事务）
         return writer.persist(cursorName, cursor, transfers, last, from, to);
     }
 

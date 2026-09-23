@@ -12,7 +12,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * {@link BlockIndexer} 的第 ⑦ 步：锁书签、重读、写事件、推书签，在一个事务里（2026-09-15 由手工模板改为注解，用户选）。
+ * {@link BlockIndexer} 的第 ⑦ 步：锁书签、重读、写事件、推书签，在一个事务里。
  *
  * <p>单独成类，是因为注解的边界是「一个方法」：留在 BlockIndexer 里，要么整个 indexNextBatch 进事务、握着连接等网络，
  * 要么自己调自己绕过代理、悄悄没有事务。网络全在 BlockIndexer，这里只有数据库。
@@ -42,7 +42,6 @@ public class BatchWriter {
         if (!untouched) {
             // 别的实例在我们取数据期间推走了书签，或者重组恢复后重放到了同一个号的另一条分支。
             // 书签的身份是「号 + 哈希」：同号不同哈希是另一个世界的这一块，按旧分支算的这批作废。
-            // 2026-09-09 之前这里只比号——ReorgRecovery 比了哈希，这边没跟上（扫描补丁）
             return BatchResult.skipped(from, to, transfers.size());
         }
         int inserted = transferLogs.recordCanonical(transfers);

@@ -23,17 +23,16 @@ import tools.jackson.databind.ObjectMapper;
 /**
  * 最薄的 JSON-RPC 2.0 客户端：JDK 的 {@link HttpClient} + 已在类路径上的 Jackson 3。
  *
- * <p><b>为什么不用 web3j：</b>它 5.0.3 的直接依赖里有 OkHttp、RxJava2、WebSocket、
- * jnr-unixsocket、tuweni、AWS KMS SDK——为解码一个 Transfer 事件背这些，
- * 违背 M0 定下的「抽象越薄越好」。索引器是账本的上游，它出错就是账本出错，
- * 每一行都要看得见。
+ * <p><b>为什么不用 web3j 的 RPC 客户端：</b>它的 core 模块（按 5.0.3 看）直接依赖 OkHttp、RxJava2、WebSocket、
+ * jnr-unixsocket、tuweni、AWS KMS SDK；而整段超时、正文封顶、错误分类是我们的策略，不是轮子。
+ * 索引器是账本的上游，它出错就是账本出错，每一行都要看得见。
  *
  * <p><b>JSON-RPC 的失败长什么样（和我们自己的 API 相反）：</b>
  * HTTP 状态码照样是 200，失败信息在响应体的 {@code error} 对象里。
  * 只看状态码的客户端会把节点报错当成功——drpc 的「chain is not available on free plan」
  * 就是 HTTP 200 + {@code error.code = 35}。
  *
- * <p><b>读法的两个洞（M2-⑤ 补上）：</b>JDK 的 {@code HttpRequest.timeout} 只管到响应头到达，
+ * <p><b>读法的两个洞：</b>JDK 的 {@code HttpRequest.timeout} 只管到响应头到达，
  * 正文滴流它不管；正文没有上限，坏节点可以一直发到我们内存耗尽。
  * 这里对「发出到正文读完」整段计时，正文按 {@link #MAX_BODY_BYTES} 封顶。
  */
@@ -101,7 +100,7 @@ public class JsonRpcClient {
         // ★ 先看正文里的 error 对象，再看 HTTP 状态码 ★
         // 规范说 JSON-RPC 的失败是 HTTP 200 + error 对象；但 Alchemy 这类提供商会把 error 对象
         // 配上 HTTP 400 一起发。先看状态码的话，code 就丢了——撞上限的对半分永远不会触发，
-        // 只会每 12 秒「瞬时失败、下次再来」（2026-09-03 本地起应用时实测）。
+        // 只会每 12 秒「瞬时失败、下次再来」。
         JsonNode root = parseOrNull(raw.body());
         JsonNode error = root == null ? null : root.get("error");
         if (error != null && !error.isNull()) {

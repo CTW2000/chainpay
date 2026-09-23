@@ -7,7 +7,7 @@ import java.util.Arrays;
 import org.bouncycastle.math.ec.ECPoint;
 
 /**
- * BIP-32 扩展私钥（xprv）。<b>服务端永远不构造它</b>：只有 {@link XpubTool} 和测试用它，WalletBoundaryTest 扫源码守着。
+ * BIP-32 扩展私钥（xprv）。<b>服务端永远不构造它</b>：只有离线工具（{@link XpubTool} 等）和测试用它，WalletBoundaryTest 扫源码守着。
  *
  * <pre>
  *   主密钥：I = HMAC-SHA512(key = "Bitcoin seed", data = 种子)，I_L 是主私钥，I_R 是主链码
@@ -88,12 +88,12 @@ public final class ExtendedPrivateKey {
         return current;
     }
 
-    /** 去掉私钥，得到同一位置的 xpub。这是交给服务器的那份。 */
     /** 这一层的私钥标量。只给本包用（HotWalletDerivation）；包外拿不到私钥，WalletBoundaryTest 守着。 */
     BigInteger key() {
         return key;
     }
 
+    /** 去掉私钥，得到同一位置的 xpub。这是交给服务器的那份。 */
     public ExtendedPublicKey neuter() {
         return new ExtendedPublicKey(depth, parentFingerprint, childNumber, chainCode, publicPoint());
     }

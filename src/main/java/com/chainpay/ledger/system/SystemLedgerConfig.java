@@ -12,10 +12,13 @@ import org.springframework.jdbc.support.JdbcTransactionManager;
 /**
  * 装配系统账本：同一个库（复用 spring.datasource.url），不同的身份。凭证见 {@link SystemDbProperties}。
  *
- * <p>系统池与系统事务管理器是容器里的 bean（2026-09-15 起），限定名 {@value SystemLedger#QUALIFIER}，而且都是
- * {@code defaultCandidate = false}：按类型注入 DataSource / 事务管理器 / JdbcClient 的地方拿不到它们，只有写明限定名才拿得到。
- * 于是主连接的自动配置不退让（Boot 4.1 实测：主数据源、主事务管理器、JdbcClient、TransactionTemplate 照常各一个），
- * 而 Boot 的 db 健康检查（组合项，子项 dataSource / systemDataSource）与 hikaricp.* 指标自动覆盖系统池。
+ * <p>系统池与系统事务管理器是限定名 {@value SystemLedger#QUALIFIER} 的 bean，而且都是 {@code defaultCandidate = false}：
+ * 按类型注入 DataSource / 事务管理器 / JdbcClient 的地方拿不到它们，只有写明限定名才拿得到。于是主连接的自动配置照常
+ * 各建一份（主数据源、主事务管理器、JdbcClient、TransactionTemplate），Boot 的 db 健康检查与 hikaricp.* 指标也自动覆盖系统池。
+ *
+ * <p><b>两个 {@code defaultCandidate = false} 都是承重墙：</b>去掉池上的，Boot 对主数据源的自动配置整体退让，
+ * 应用侧的 JdbcClient 悄悄连成系统身份（带 BYPASSRLS，读会绕过租户隔离）；去掉事务管理器上的，
+ * {@code asMerchant} 的事务开在系统池上，租户变量设不上。SystemPoolBeansTest 抓得住两者。
  */
 @Configuration
 @EnableConfigurationProperties(SystemDbProperties.class)

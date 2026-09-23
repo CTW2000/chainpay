@@ -18,19 +18,11 @@ import org.springframework.web.context.request.WebRequest;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExceptionHandler;
 
 /**
- * 把内部异常翻译成对调用方有意义的 HTTP 响应。
+ * 把内部异常翻译成对调用方有意义的 HTTP 响应（信封见 {@link ApiResponse}，错误码见 {@link ErrorCode}）。
  *
- * <p><b>为什么这个类是必需的，而不是锦上添花：</b>
- *
- * <p>没有它之前，实测「alice 只有 1 块却要转 99999」返回的是 <b>500</b>。
- * 但 500 对调用方的含义是「<b>我坏了，请重试</b>」，而实际含义是
- * 「<b>你余额不够，别再试了</b>」。商户的客户端看到 500 会重试，
- * 重试还是 500，于是无限重试一个永远不会成功的请求 ——
- * 一个正常的业务拒绝，被伪装成了服务故障。
- *
- * <p>OWASP REST Security 的原话：<i>"don't just use 200 for success or 404 for error.
- * Always use the semantically appropriate status code."</i>
- * <b>状态码不是装饰，它是给机器读的指令。</b>
+ * <p>业务拒绝不能落成 500：500 对调用方的含义是「<b>我坏了，请重试</b>」，客户端会无限重试一个永远不会成功的请求
+ * （比如余额不足）。OWASP REST Security：<i>"Always use the semantically appropriate status code."</i>
+ * <b>状态码是给机器读的指令。</b>
  */
 @RestControllerAdvice
 public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
@@ -38,21 +30,14 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
     private static final Logger log = LoggerFactory.getLogger(ApiExceptionHandler.class);
 
     /**
-     * 账本拒绝原因 → 对外错误码。
-     *
-     * <p><b>为什么要一张显式的映射表，而不是直接用 {@code reason().name()}：</b>
+     * 账本拒绝原因 → 对外错误码。用显式映射表，不直接用 {@code reason().name()}：
      *
      * <ul>
-     *   <li><b>内部枚举名不该是对外契约。</b>直接暴露的话，
-     *       哪天为了代码可读性把 {@code SAME_ACCOUNT} 改个名字，
-     *       所有客户端一起坏掉 —— 而改名的人完全不知道自己动了公开接口。</li>
-     *   <li><b>ACCOUNT_NOT_FOUND 必须被折叠成「无权访问」。</b>
-     *       分开回答等于给攻击者一个账户枚举器。
-     *       这里映射到 ACCESS_DENIED，连状态码一起变成 403，
-     *       让「不存在」和「不是你的」在<b>码、消息、状态码</b>三个维度上都一样。</li>
-     *   <li><b>漏一项会立刻炸。</b>新增 Reason 却忘了映射，
-     *       下面 {@code LEDGER_CODES.get()} 返回 null，测试当场变红。
-     *       比「默认回一个通用码」好 —— 后者会悄悄把新错误伪装成老错误。</li>
+     *   <li><b>内部枚举名不该是对外契约。</b>为了可读性改个名字，所有客户端一起坏掉，而改名的人不知道自己动了公开接口。</li>
+     *   <li><b>ACCOUNT_NOT_FOUND 必须折叠成「无权访问」</b>（403 + 3001）：分开回答等于给攻击者一个账户枚举器。
+     *       在行级安全下「不存在」和「不是你的」本来就是同一条路径，对外也要一样。</li>
+     *   <li><b>漏一项会立刻炸。</b>新增 Reason 却忘了映射，{@link #errorCodeFor} 返回 null，测试当场变红——
+     *       比「默认回一个通用码」好，后者会悄悄把新错误伪装成老错误。</li>
      * </ul>
      */
     private static final Map<LedgerException.Reason, ErrorCode> LEDGER_CODES = Map.of(
@@ -66,25 +51,6 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
             // 刻意折叠：不存在 与 无权访问 必须不可区分
             LedgerException.Reason.ACCOUNT_NOT_FOUND,       ErrorCode.ACCESS_DENIED);
 
-    // 3001（ACCESS_DENIED）此前还有第二个来源：AccountAccessService.AccessDeniedException，专门回答
-    // 「请求体里给的账户 id 不是你的」，回 403。2026-09-22 通用转账接口连同那个服务一起删了——商户接口
-    // 从此不收任何账本账户 id，账户归属不再是应用层要回答的问题（只剩 RLS 那道），所以那个处理器也没了。
-    // 3001 仍然可达：上面最后一行，账本自己抛的 ACCOUNT_NOT_FOUND 折叠成它。
-
-    /**
-     * 要建的东西已经存在 --&gt; 409 Conflict。
-     *
-     * <p>没有这一条的话，重复创建商户会走到兜底的 500 ——
-     * 而 500 对客户端的含义是「我坏了，请重试」，于是它会不停重试一个
-     * 永远不会成功的请求。这和上面余额不足被伪装成 500 是同一个错误。
-     *
-     * <p>409 的准确含义是「你的请求本身没问题，但和服务端当前状态冲突」。
-     * 客户端据此知道：改个 code 再来，别重试原样的。
-     *
-     * <p>响应里<b>不带</b>数据库的原始报错。Postgres 的唯一约束冲突消息长这样：
-     * {@code duplicate key value violates unique constraint "merchant_code_uk"} ——
-     * 表名和约束名对调用方毫无用处，对想摸清库结构的人却很有用。
-     */
     /** 代币不在白名单 → 400 + 2008。消息里只有代币地址，没有内部结构。 */
     @ExceptionHandler(UnsupportedTokenException.class)
     public ResponseEntity<ApiResponse<Void>> handleUnsupportedToken(UnsupportedTokenException e) {
@@ -97,35 +63,29 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
         return ResponseEntity.status(e.status()).body(ApiResponse.error(e.code(), e.getMessage()));
     }
 
-    /** 管理员认证的拒绝（M6-⑤）：登录失败 401、再认证失败 401、重名 409、口令不合规 400。 */
+    /** 管理员认证的拒绝：登录失败 401、再认证失败 401、重名 409、口令不合规 400。 */
     @ExceptionHandler(com.chainpay.admin.service.AdminAuthException.class)
     public ResponseEntity<ApiResponse<Void>> handleAdminAuth(com.chainpay.admin.service.AdminAuthException e) {
         return ResponseEntity.status(e.status()).body(ApiResponse.error(e.code(), e.getMessage()));
     }
 
-    /** 注资登记的拒绝（M6-②）：状态码与错误码由业务定。 */
+    /** 注资登记的拒绝：状态码与错误码由业务定。 */
     @ExceptionHandler(com.chainpay.chain.payout.service.FundingRejectedException.class)
     public ResponseEntity<ApiResponse<Void>> handleFundingRejected(com.chainpay.chain.payout.service.FundingRejectedException e) {
         return ResponseEntity.status(e.status()).body(ApiResponse.error(e.code(), e.getMessage()));
     }
 
+    /**
+     * 要建的东西已经存在 → 409 Conflict：请求本身没问题，但和服务端当前状态冲突——改个标识再来，别原样重试。
+     * 响应里<b>不带</b>数据库的原始报错：约束名、表名对调用方毫无用处，对想摸清库结构的人却很有用。
+     */
     @ExceptionHandler(AlreadyExistsException.class)
     public ResponseEntity<ApiResponse<Void>> handleAlreadyExists(AlreadyExistsException e) {
         return ResponseEntity.status(HttpStatus.CONFLICT)
                 .body(ApiResponse.error(ErrorCode.ALREADY_EXISTS, e.getMessage()));
     }
 
-    /**
-     * 账本拒绝 → 400 Bad Request。
-     *
-     * <p>code 直接用 {@link LedgerException.Reason} 的名字，客户端可以按它分流：
-     * {@code INSUFFICIENT_BALANCE} 要改金额，{@code CURRENCY_MISMATCH} 要改币种，
-     * 两者都不该重试。
-     */
-    /**
-     * 暴露给测试：{@code ApiContractTest.everyLedgerReasonIsMapped} 遍历全部 Reason
-     * 断言这里不返回 null。没有那条测试之前，「漏映射会让测试变红」只是一句空话。
-     */
+    /** 暴露给测试：{@code ApiContractTest.everyLedgerReasonIsMapped} 遍历全部 Reason，断言这里不返回 null。 */
     static ErrorCode errorCodeFor(LedgerException.Reason reason) {
         return LEDGER_CODES.get(reason);
     }
@@ -133,9 +93,7 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
     @ExceptionHandler(LedgerException.class)
     public ResponseEntity<ApiResponse<Void>> handleLedger(LedgerException e) {
         ErrorCode code = errorCodeFor(e.reason());
-        // 余额不足是 400（你的请求没错，是账户状态不允许）；
-        // ACCOUNT_NOT_FOUND 被映射成 403 + 3001，和「无权访问」完全一致 ——
-        // 见 LEDGER_CODES 上面那段注释。
+        // 余额不足是 400（你的请求没错，是账户状态不允许）；ACCOUNT_NOT_FOUND 折叠成 403 + 3001，见 LEDGER_CODES。
         HttpStatus status = switch (code) {
             case ACCESS_DENIED -> HttpStatus.FORBIDDEN;
             // 409：你的请求本身没错，是和服务端已有状态冲突——和重复建商户同一个语义
@@ -146,13 +104,9 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
     }
 
     /**
-     * 参数格式错误 → 400。
+     * 参数无效 → 400 + 2001（IllegalArgumentException 及其子类，比如 NumberFormatException）。
      *
-     * <p>{@code new BigDecimal("abc")} 抛 NumberFormatException（它是
-     * IllegalArgumentException 的子类），{@code TransferCode.valueOf("HAHA")}
-     * 抛 IllegalArgumentException —— 上一步实测这两个都变成了 500。
-     *
-     * <p>注意响应里没有回显 {@code e.getMessage()}：异常消息可能包含内部实现细节
+     * <p>响应里不回显 {@code e.getMessage()}：异常消息可能包含内部实现细节
      * （比如枚举的全部合法值、类名），那属于免费送给攻击者的情报。
      */
     @ExceptionHandler(IllegalArgumentException.class)
@@ -164,10 +118,10 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
 
     /**
      * 框架自己认得的那 20 来种异常（校验不过、JSON 坏了、参数缺失或类型不对、方法不允许、媒体类型不支持、路径不存在……）
-     * 由父类 {@link ResponseEntityExceptionHandler} 判状态码，全部汇到这里套信封。
+     * 由父类 {@link ResponseEntityExceptionHandler} 判状态码，全部汇到这里套信封、不回显框架细节。
      *
-     * <p>2026-09-09 的补丁只手写了其中四种；2026-09-10 扫描发现漏掉的（405 / 415 / 404）落进下面的兜底回 500 + 9001，
-     * 而 9xxx 对客户端的含义是「稍后重试」——这些请求原样重试永远一样。状态码交给框架判，信封与「不回显框架细节」的规矩在这一处守。
+     * <p>不交给父类判的话，它们（比如 405 / 415 / 404）会落进下面的兜底回 500 + 9001，
+     * 而 9xxx 对客户端的含义是「稍后重试」——这些请求原样重试永远一样。
      */
     @Override
     protected ResponseEntity<Object> handleExceptionInternal(Exception ex, Object body, HttpHeaders headers,
@@ -187,12 +141,9 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
     }
 
     /**
-     * 兜底 → 500，且<b>不泄露任何内部细节</b>。
-     *
-     * <p>OWASP REST Security 明确要求：
-     * <i>"Do not pass technical details (e.g. call stacks or other internal hints) to the client."</i>
-     *
-     * <p>细节记在服务端日志里 —— 排查问题的人有服务器权限，攻击者没有。
+     * 兜底 → 500，且<b>不泄露任何内部细节</b>（OWASP REST Security：
+     * <i>"Do not pass technical details (e.g. call stacks or other internal hints) to the client."</i>）。
+     * 细节记在服务端日志里 —— 排查问题的人有服务器权限，攻击者没有。
      */
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiResponse<Void>> handleUnexpected(Exception e) {

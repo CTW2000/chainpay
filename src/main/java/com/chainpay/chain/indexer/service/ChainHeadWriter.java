@@ -7,7 +7,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * {@link ChainHeadTracker} 的事务那一段：锁链头行、按「只进不退」合并、落库（2026-09-15 由手工模板改为注解，用户选）。
+ * {@link ChainHeadTracker} 的事务那一段：锁链头行、按「只进不退」合并、落库。
  * 网络（问节点三个头、审计节点核对 finalized）全在 ChainHeadTracker，这里只有数据库。类与方法都不能加 final。
  */
 @Component

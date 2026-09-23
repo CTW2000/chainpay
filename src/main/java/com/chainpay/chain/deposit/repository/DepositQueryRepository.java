@@ -86,13 +86,13 @@ public class DepositQueryRepository {
                 .query(ROW).list();
     }
 
-    /** 该商户在这种币上的账本余额（available）；还没申请过地址 = 没有账户 = 空。 */
-    /** 本商户在这种币上冻着的钱（M4-④，账户 user:<code>:<SYM>:frozen）；没有冻结账户 = 0。 */
+    /** 本商户在这种币上冻结账户的余额；没有冻结账户 = 0。 */
     public BigDecimal frozenBalance(String symbol) {
         return jdbc.sql("SELECT a.balance FROM account a JOIN merchant m ON m.id = a.merchant_id WHERE a.code = 'user:' || m.code || ':' || :s || ':frozen'")
                 .param("s", symbol).query(BigDecimal.class).optional().orElse(BigDecimal.ZERO.setScale(LedgerAmounts.SCALE));
     }
 
+    /** 本商户在这种币上的账本余额（available）；还没申请过地址 = 没有账户 = 空。 */
     public Optional<BigDecimal> availableBalance(String token) {
         return jdbc.sql("SELECT a.balance FROM deposit_address da JOIN account a ON a.id = da.account_id WHERE da.token = :t")
                 .param("t", token).query(BigDecimal.class).optional();

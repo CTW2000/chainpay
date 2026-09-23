@@ -24,7 +24,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
 /**
- * 管理员认证（M6-⑤）——控制面的门从「静态令牌」换成「人 + 短期会话」。
+ * 管理员认证：控制面的门是「人 + 短期会话」。
  * <ul>
  *   <li>口令只存 Argon2id 散列（引库）；登录失败一律同一个 401、同一句话；不存在的用户名也做一次散列比对，耗时一样。</li>
  *   <li>连续错 {@code maxFailures} 次锁 {@code lockFor}；锁着时对的口令也不行；成功后清零。</li>

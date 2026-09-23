@@ -9,7 +9,7 @@ import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 
-/** 事件表的写入与重组相关的两个操作。 */
+/** 事件表 chain_transfer_log：批写入，以及重组回滚、对账要用的读与标废。 */
 @Repository
 public class TransferLogRepository {
 
@@ -33,7 +33,7 @@ public class TransferLogRepository {
      *   <li>那行是 ORPHANED  → <b>复活</b>成 CANONICAL，同一行、同一个 id。链翻回原分支时被丢弃的块
      *       又是正经的了，它上面的日志再来一次；DO NOTHING 会让它们永远停在 ORPHANED，一笔存款就没了</li>
      *   <li>那行的<b>内容</b>（代币、付款人、收款人、金额）和这次来的不同 → 抛出，整批回滚。块哈希承诺了内容，
-     *       同一坐标两种内容不可能都对；原来的 upsert 只改 status 列，会让第一次写入的说法永远留下（2026-09-03 补丁）</li>
+     *       同一坐标两种内容不可能都对；不比内容的话，第一次写入的说法会永远留下</li>
      * </ul>
      * 返回写入 + 复活的条数。CHECK 违反照常抛出——那不是重复，是坏数据，要让整批回滚。
      */

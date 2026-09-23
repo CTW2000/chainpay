@@ -17,20 +17,18 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * 系统身份的账本入口：以 {@code chainpay_system}（BYPASSRLS、非超级用户）连库的<b>独立连接池</b>，
- * 加一份绑在这条连接上的账本实现。入账、结算、M4 出账都从这里走。
+ * 加一份绑在这条连接上的账本实现。系统侧的读写（入账、出账、对账、控制面）都从这里走。
  *
- * <p><b>池与事务管理器是容器里的 bean，账本不是</b>（2026-09-15 由用户决定，从「全部藏在本类里」换成官方双数据源的形状，见 CLAUDE.md）。
- * {@code systemDataSource} 与 {@code systemTransactionManager} 由 {@link SystemLedgerConfig} 声明为限定名 {@value #QUALIFIER}、
- * <b>非默认候选</b>的 bean：Boot 的 db 健康检查与 hikaricp.* 指标自动覆盖它们；按类型注入的地方拿不到它们，主连接的自动配置不退让。
- * 绑在系统连接上的 {@code JdbcClient} 与账本仍只在 {@link #inTransaction} 的回调里可见、不是 bean：
- * 「拿到 {@link Session} 才拿得到账本」这条边界照旧由类型守着，{@code ControllerBoundaryTest} 另外扫限定名。
+ * <p><b>池与事务管理器是容器里的 bean，账本不是：</b>前两者是限定名 {@value #QUALIFIER} 的非默认候选 bean
+ * （见 {@link SystemLedgerConfig}）；绑在系统连接上的 {@code JdbcClient} 与账本只在 {@link #inTransaction} 的回调里可见，
+ * 「拿到 {@link Session} 才拿得到账本」这条边界由类型守着。控制器不得碰本类与那两个 bean（{@code ControllerBoundaryTest} 扫源码）。
  *
  * <p><b>为什么账本只在回调里可见：</b>
  * {@link LedgerServiceImpl#transfer} 上的 {@code @Transactional} 是代理魔法，只对容器创建的 bean 生效。
  * 这里的账本是手工 {@code new} 出来的，注解形同虚设——若把它直接暴露出去，调用方在事务外调 transfer，
  * 一条 transfer、两条 entry、两次余额更新各自提交，账本的原子性契约就悄悄没了。
- * 所以事务边界由本类的模板给（模板用的就是容器里那个 system 事务管理器），账本的 SQL 走同一个数据源，自动加入这个事务；
- * 外层若已经有 {@code @Transactional("system")} 开的事务，回调直接加入它（SystemPoolBeansTest 钉住）。
+ * 所以事务边界由本类的模板给（模板用的就是容器里的系统事务管理器），账本的 SQL 走同一个数据源，自动加入这个事务；
+ * 外层若已经有限定名 system 的注解事务，回调直接加入它（SystemPoolBeansTest 钉住）。
  *
  * <p><b>启动即自检：</b>第一次借连接时问一次 {@code pg_roles}，不是 BYPASSRLS（RLS 会让它一行都看不到，
  * 入账任务将静默地无事可做）或者是超级用户（权限没有边界），直接拒绝启动。
@@ -50,7 +48,7 @@ public final class SystemLedger implements AutoCloseable {
     private final TransactionTemplate tx;
     private final Session session;
 
-    /** 池是不是本实例自己建的：容器装配的实例池是 systemDataSource 这个 bean，由容器关，本实例的 close 不能碰它。 */
+    /** 池是不是本实例自己建的（只有 {@link #connect} 建的才是）；不是自己的池，{@link #close} 不能碰。 */
     private final boolean ownsPool;
 
     private SystemLedger(HikariDataSource pool, JdbcTransactionManager transactionManager, boolean ownsPool) {
@@ -85,7 +83,7 @@ public final class SystemLedger implements AutoCloseable {
         pool.setMaximumPoolSize(maximumPoolSize);
         pool.setPoolName("chainpay-system");
         pool.setConnectionTimeout(3_000);
-        // 等锁的上限（M3-⑤ 演练实测）：没有它，一个被别的事务握着的账本表能让入账事务无限期等下去，
+        // 等锁的上限：没有它，一个被别的事务握着的账本表能让入账事务无限期等下去，
         // 而且拖住的是调度线程。超时时 PostgreSQL 抛 SQLSTATE 55P03，被翻译成瞬时异常，入账任务下一轮再来。
         // 会话级 SET：池里每条物理连接建立时执行一次、之后一直带着；值来自 Duration，不是外部字符串。
         pool.setConnectionInitSql("SET lock_timeout = '" + lockTimeout.toMillis() + "ms'");
@@ -139,8 +137,7 @@ public final class SystemLedger implements AutoCloseable {
     /**
      * 等锁超时（SQLSTATE 55P03）是瞬时的：换个时刻再来多半就成了。Spring 7 的 SQLSTATE 翻译器不认识 55 这一类，
      * 会给 {@code UncategorizedSQLException}（非瞬时）——入账任务据此把那笔记成 HELD_ERROR、等人来看，
-     * 每一次等锁超时都变成一张工单。红灯测试实测就是这样（2026-09-09）。
-     * 所以在系统连接上把它翻成 {@link CannotAcquireLockException}（{@code TransientDataAccessException} 的子类），其余交回默认翻译器。
+     * 每一次等锁超时都变成一张工单。所以在系统连接上把它翻成 {@link CannotAcquireLockException}（{@code TransientDataAccessException} 的子类），其余交回默认翻译器。
      */
     private static SQLExceptionTranslator lockTimeoutAsTransient(SQLExceptionTranslator defaults) {
         return (task, sql, ex) -> {
@@ -152,8 +149,7 @@ public final class SystemLedger implements AutoCloseable {
     }
 
     /**
-     * 启动时以系统身份跑一次判官并把可见分录数打进日志（2026-09-09 扫描补丁）。
-     * 判官「能查通」曾经只是超级用户绕过 RLS 的副作用；现在它在一个声明过能看全部行的身份下跑，
+     * 启动时以系统身份跑一次判官并把可见分录数打进日志：判官只在能看到全部行的身份下给结论，
      * 0 处违规才算平账。有违规打 ERROR 但不拒绝启动：失衡要人进来查，起不来反而挡路。
      */
     private void judgeAtBoot() {
@@ -169,12 +165,11 @@ public final class SystemLedger implements AutoCloseable {
         }
     }
 
-    /** 关掉池。只给 {@link #connect} 建的实例用：容器装配的实例，池是 systemDataSource 这个 bean，由容器自己关。 */
+    /** 关掉自己建的池（{@link #connect} 建的）。容器装配的实例池归容器：这里关掉它，之后每次借连接都失败。 */
     @Override
     public void close() {
         if (ownsPool) {
             pool.close();
         }
-        // 容器装配的实例：池是容器的 bean，手动 close 一次也不能把 Boot 名下的池关掉，否则之后每次借连接都失败
     }
 }

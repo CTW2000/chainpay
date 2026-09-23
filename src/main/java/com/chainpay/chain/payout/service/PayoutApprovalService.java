@@ -18,7 +18,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 
 /**
- * 管理侧（M4-④）：待核准列表、核准、拒绝、限额。改的是 payout 的状态与限额表，只有系统身份有 UPDATE，所以整段走 {@link SystemLedger}。
+ * 管理侧：待核准列表、核准、拒绝、限额。改的是 payout 的状态与限额表，只有系统身份有 UPDATE，所以整段走 {@link SystemLedger}。
  * 拒绝 = 解冻 + REJECTED + 原因，一个事务；核准只是 PENDING_APPROVAL → QUEUED，之后和普通申请一样由发送任务处理。
  */
 @Service
@@ -38,8 +38,7 @@ public class PayoutApprovalService {
                         FROM payout p JOIN merchant m ON m.id = p.merchant_id JOIN chain_token t ON t.address = p.token
                         WHERE p.status = 'PENDING_APPROVAL' ORDER BY p.id
                         """).query().listOfRows());
-        // 金额写成字符串只经 LedgerAmounts.text（2026-09-22 收口）：此前这里用 SQL 的 ::text，是写法的第二份定义——输出碰巧一样，
-        // 哪天写法要改（比如去掉尾零），这一处会被漏掉
+        // 金额写成字符串只经 LedgerAmounts.text，不在 SQL 里另写一份：写法要改时这里才不会被漏掉
         return rows.stream().map(PayoutApprovalService::withAmountAsText).toList();
     }
 

@@ -28,11 +28,14 @@ import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
 /**
- * 发送任务的一轮（M4-②）。顺序是硬的：
+ * 发送任务的一轮。顺序是硬的：
  * <ol>
- *   <li><b>对账</b>：链上计数 C（网络，事务外）；事务里锁热钱包行，核 N = C + U——库里的下一个编号 N 是意图，链上的计数 C 是真相，
- *       U 是还没结局的编号数。C &gt; N = 有人在别处用了这把私钥，整把钱包停发叫人；N &gt; C + U = 有编号没有尝试记录，同样停下。</li>
- *   <li><b>重发</b>：所有 SIGNED 的尝试原样重发——进程死在提交与广播之间留下的就是它们；节点回 already known 也算成功。</li>
+ *   <li><b>对账</b>：链上计数 C（网络，事务外）；事务里锁热钱包行，核 C ≤ N ≤ C + U——库里的下一个编号 N 是意图，链上的计数 C 是真相，
+ *       U 是还没结局的尝试数（已上链、追踪还没标的，C 和 U 里都有它，所以是区间不是等式）。
+ *       C &gt; N = 有人在别处用了这把私钥，整把钱包停发叫人；N &gt; C + U = 有编号没有尝试记录，同样停下。</li>
+ *   <li><b>重发</b>：SIGNED 与 DROPPED 的尝试原样重发——SIGNED 是进程死在提交与广播之间留下的，DROPPED 是节点忘了的；
+ *       节点回 already known 也算成功。</li>
+ *   <li><b>加价</b>：广播太久还没上链、节点还认着的，同编号再签一笔费率更高的替身（见 {@link #bumpStuck}）。</li>
  *   <li><b>排队的</b>：每笔先在事务外估 gas、取费率（合约 revert = 这笔发不出去，判失败并解冻，编号还没分）；
  *       再在一个事务里锁行、拿编号、签名、写 SIGNED 尝试、编号 +1、提交；<b>提交之后</b>才广播；成功再开短事务改 BROADCAST。</li>
  * </ol>
@@ -399,10 +402,8 @@ public final class PayoutSender {
     }
 
     /**
-     * 节点撤了我们的凭证（HTTP 401 / 403，2026-09-16 补）。它在传输层和网络抖动长得一模一样——都拿不到回答——
-     * 处置却相反：抖动下一轮就好，被撤销的 key 永远不会。留在瞬时那一桶里的后果是每 10 秒重试一次、永不停发、永不告警
-     * （{@link RpcAuthException} 的类注释早写过这件事，索引器接住了，发送任务一直没接）。
-     * 按 M6-③ 的约定，发送任务的停发走热钱包指示器：钱包标 HALTED → work 组里 hotWallet 变 DOWN → 告警。
+     * 节点撤了我们的凭证（HTTP 401 / 403）。它和网络抖动一样拿不到回答，处置却相反：抖动下一轮就好，被撤销的 key 永远不会——
+     * 当成瞬时的，就会每 10 秒重试一次、永不停发、永不告警。所以把钱包标 HALTED：work 组里 hotWallet 变 DOWN → 告警。
      */
     private String haltForRevokedCredentials(String wallet, RpcAuthException e) {
         String reason = credentialsReason(e);
@@ -443,7 +444,7 @@ public final class PayoutSender {
         });
     }
 
-    /** transfer(address,uint256) 的 calldata，编码在 {@link Abi#transfer}（M2 起的 ABI 编码只有那一处）。 */
+    /** transfer(address,uint256) 的 calldata，编码在 {@link Abi#transfer}（ABI 编码只在那一处）。 */
     static byte[] transferCalldata(String to, BigInteger rawValue) {
         return HexFormat.of().parseHex(Abi.transfer(to, rawValue).substring(2));
     }

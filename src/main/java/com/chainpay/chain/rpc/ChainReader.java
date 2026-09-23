@@ -4,12 +4,11 @@ import java.math.BigInteger;
 import java.util.List;
 
 /**
- * 索引器眼中的「链」：五个只读问题。
+ * 对链的只读问题：索引、入账、付款、对账都经它问节点。
  *
  * <p>生产实现是 {@link EthRpc}（真节点）；测试实现是内存里的 FakeChain——
  * 想让链长什么样就长什么样：头落后、哈希突变、日志缺失，都是一行代码的事。
  * 用 HTTP 假节点也能做到，但每个场景都要拼 JSON，重得没人愿意多写一个用例。
- * 这是依赖注入的第二个用处：第一次是换端点，这次是换整条链。
  */
 public interface ChainReader {
 
@@ -32,7 +31,7 @@ public interface ChainReader {
 
     /**
      * {@code eth_call}：让节点在某个状态上<b>模拟执行</b>一次合约调用，不上链、不花 gas，返回 ABI 编码的返回值。
-     * 这是第一次「调合约」而不是「读日志」：decimals()、symbol()、balanceOf() 都走它。
+     * decimals()、symbol()、balanceOf() 都走它。
      *
      * @param data     选择器 + ABI 编码的参数（见 {@code chain.erc20.Abi}）
      * @param blockTag latest / finalized / 十六进制块号
@@ -41,7 +40,7 @@ public interface ChainReader {
     String call(String to, String data, String blockTag);
 
     /**
-     * 该地址已发出的交易数（M4-②）。{@code latest} = 已上链的笔数，是确定的事实；{@code pending} 把<b>这个节点</b>内存池里
+     * 该地址已发出的交易数。{@code latest} = 已上链的笔数，是确定的事实；{@code pending} 把<b>这个节点</b>内存池里
      * 排队的也算上，是它此刻的视角。付款的对账用 latest。
      */
     BigInteger transactionCount(String address, String tag);

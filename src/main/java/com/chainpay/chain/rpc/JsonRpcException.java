@@ -5,11 +5,12 @@ package com.chainpay.chain.rpc;
  *
  * <p>{@link #code()} 分两类：
  * <ul>
- *   <li><b>非空</b> —— 节点在 HTTP 200 里返回了 {@code error} 对象，这是它的业务错误码
+ *   <li><b>非空</b> —— 响应体里带了 {@code error} 对象（HTTP 200，或提供商配上的其它状态码），这是节点的错误码
  *       （-32602 参数错、提供商自定义的 35 "chain not available on free plan" 等）</li>
- *   <li><b>空</b> —— 传输层失败：连不上、超时、5xx、响应不是 JSON、id 对不上</li>
+ *   <li><b>空</b> —— 没拿到节点的回答：连不上、超时、HTTP 429、非 2xx 且正文没有 error 对象、响应不是 JSON、id 对不上；
+ *       凭证被拒（401 / 403）是子类 {@link RpcAuthException}</li>
  * </ul>
- * 调用方据此决定：前者多半是我们的请求有问题（比如范围太大要减半），后者该换节点或重试。
+ * code 只说失败从哪一层来，不说该怎么处置：按处置分类见 {@link RpcFailure}。
  */
 public class JsonRpcException extends RuntimeException {
 

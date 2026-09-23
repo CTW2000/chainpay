@@ -15,7 +15,7 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 /**
  * deposit 表的 SQL，以及入账时依赖的镜像账户与「事件累计」。
  *
- * <p><b>不是 Spring bean</b>：它跑在系统连接上，由入账任务在 {@code SystemLedger.inTransaction} 的回调里
+ * <p><b>不是 Spring bean</b>：它跑在系统连接上，由入账任务与对账在 {@code SystemLedger.inTransaction} 的回调里
  * 用会话的 JdbcClient 现造一个——同 SystemLedger 的纪律，系统身份的 SQL 只在系统事务里出现。
  */
 public class DepositRepository {
@@ -40,7 +40,7 @@ public class DepositRepository {
 
     /**
      * 入账队列：已 FINAL（视图按 chain_head 算出来的）、收款方是 ACTIVE 的收款地址、代币 ACTIVE、还没有 deposit 行的日志，按链上顺序。
-     * 「谁的钱」由 deposit_address 那一行决定，不接受任何调用方递进来的商户 id（M3-before 第 20 问）。
+     * 「谁的钱」由 deposit_address 那一行决定，不接受任何调用方递进来的商户 id。
      */
     public List<DepositCandidate> findFinalUnposted(int limit) {
         return jdbc.sql("SELECT " + CANDIDATE_COLUMNS + """
@@ -75,7 +75,7 @@ public class DepositRepository {
 
     /**
      * 「合约说的」累计：到某一块为止，这个地址在这种代币上的转入减转出（原始单位，CANONICAL 的日志）。
-     * 入账前拿它和「合约做的」（balanceOf）比。M3 没有归集，等式应精确成立。
+     * 入账前与对账时拿它和「合约做的」（balanceOf）比。没有归集，等式应精确成立。
      */
     public BigInteger netTransfersUpTo(String address, String token, long blockNumber) {
         BigDecimal net = jdbc.sql("""
@@ -92,7 +92,7 @@ public class DepositRepository {
 
     /**
      * 镜像账户 chain:custody:&lt;SYMBOL&gt;：链上托管地址里的币在账本里的影子。入账时它是变负的对手方，
-     * 余额的绝对值 = 所有托管地址链上应有的余额之和（M5 对账的判官）。不存在就建，唯一性由 account_code_uk 裁决。
+     * 余额的绝对值 = 所有托管地址链上应有的余额之和（对账核的就是它）。不存在就建，唯一性由 account_code_uk 裁决。
      */
     public long ensureCustodyAccount(String symbol) {
         String code = "chain:custody:" + symbol;

@@ -7,7 +7,7 @@ import org.springframework.core.env.Environment;
 import org.springframework.core.env.PropertyResolver;
 
 /**
- * 进程角色（进程拆分 ①，2026-09-23）：同一个镜像起成两种常驻进程，靠 Spring profile 区分。
+ * 进程角色：同一个镜像起成两种常驻进程，靠 Spring profile 区分。
  * {@code web} 对外接商户请求；{@code worker} 跑定时任务与控制面，握着重钥匙。
  *
  * <p>两条规矩，任何一条不成立就拒绝启动（{@link ProcessRoleConfig} 在创建任何 bean 之前调 {@link #resolve}）：

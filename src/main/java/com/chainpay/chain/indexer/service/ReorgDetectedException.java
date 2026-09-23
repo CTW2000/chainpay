@@ -3,8 +3,8 @@ package com.chainpay.chain.indexer.service;
 /**
  * 下一批第一个区块的 parentHash 和书签上的哈希对不上：链在书签处（或更深）被重组了。
  *
- * <p>M2-② 的处理是<b>停下</b>：不写、不推书签、抛出。在 M2-④ 写出正确的回滚之前，
- * 继续往前索引等于把一条错的链当事实记下来。停下来的索引器是一个报警，往前走的是定时炸弹。
+ * <p>{@link BlockIndexer} 只检测：不写、不推书签、抛出；由 {@link ChainIndexerScheduler} 交给 {@link ReorgRecovery} 回滚。
+ * 接着往前索引等于把一条错的链当事实记下来。
  */
 public class ReorgDetectedException extends RuntimeException {
 

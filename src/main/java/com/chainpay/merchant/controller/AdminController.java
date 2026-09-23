@@ -21,13 +21,9 @@ import org.springframework.web.bind.annotation.RestController;
 /**
  * 控制面接口：开户、发钥匙、吊销、停用。
  *
- * <p><b>路径前缀 {@code /admin/} 不是装饰，它是安全边界。</b>
- * {@link AdminAuthFilter} 按这个前缀决定拦不拦；
- * {@code ApiKeyAuthFilter} 按 {@code /api/} 前缀决定拦不拦。
- * 两个前缀对应两套完全独立的认证，谁也进不了谁的地盘。
- *
- * <p>把管理接口放在 {@code /api/admin/...} 会同时踩中两个门卫的规则，
- * 那是最容易出错的写法 —— 路径前缀承担了访问控制的职责，就必须泾渭分明。
+ * <p><b>路径前缀 {@code /admin/} 是安全边界：</b>{@code AdminAuthFilter} 按它决定拦不拦，
+ * {@code ApiKeyAuthFilter} 按 {@code /api/} 决定拦不拦，两套认证完全独立。
+ * 别把管理接口放在 {@code /api/admin/...}：同时踩中两个门卫的规则，前缀就不再泾渭分明。
  */
 @RestController
 @RequestMapping("/admin/v1")

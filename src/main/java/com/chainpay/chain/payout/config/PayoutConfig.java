@@ -9,7 +9,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 /**
- * 付款模块的装配：设了热钱包私钥才装配（同 M3 的收款模块设了 xpub 才装配）。
+ * 付款模块的装配：设了热钱包私钥才装配，不设时应用照常启动。
  * 启动日志只打热钱包地址——私钥进程启动后只活在 {@link HotWalletSigner} 里。
  */
 @Configuration

@@ -25,7 +25,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * 商户的提现接口（M4-④）。身份由 {@link ApiKeyAuthFilter} 认证后经请求属性传入；每个方法整段跑在 {@code asMerchant} 的事务里，
+ * 商户的提现接口。身份由 {@link ApiKeyAuthFilter} 认证后经请求属性传入；每个方法整段跑在 {@code asMerchant} 的事务里，
  * 白名单、提现、账户都有 RLS：别的商户的行结构上带不出来。金额一律字符串；地址对外一律 EIP-55 写法，存库一律小写。
  */
 @RestController

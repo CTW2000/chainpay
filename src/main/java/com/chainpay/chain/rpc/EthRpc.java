@@ -14,8 +14,7 @@ import tools.jackson.databind.JsonNode;
  * 那些知识分别在 {@code chain.erc20} 和索引器里。
  *
  * <p>这是外部不可信 JSON 进入系统的唯一一层。节点少给一个字段，Jackson 的 {@code get} 返回 null，
- * 接着的 {@code asString()} 是一个不指名字段的空指针——和本模块其它每一处「形状不对就说清收到了什么」的纪律相反
- * （2026-09-03 质询扫描 10.3）。所以每个字段都经 {@link #text}：缺了就指名道姓地拒绝，交给轮询器停下。
+ * 接着的 {@code asString()} 是一个不指名字段的空指针。所以每个字段都经 {@link #text}：缺了就指名道姓地拒绝，交给轮询器停下。
  */
 public class EthRpc implements ChainReader, ChainSender {
 

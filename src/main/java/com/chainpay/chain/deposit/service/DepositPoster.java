@@ -39,17 +39,16 @@ import org.springframework.jdbc.core.simple.JdbcClient;
  *   <li><b>核对（网络，事务外）</b>：主节点与审计节点各取一次该块的头，哈希必须等于库里那行的 block_hash，
  *       块号必须不高于两个节点各自的 finalized。哈希对不上 = HELD_NODE_DISAGREE 叫人；finalized 还没到则分两种：
  *       两个节点之间的差距、以及「库里的视图比两个节点都超前」的幅度都在 {@code finality-tolerance-blocks} 以内 =
- *       <b>这一轮延后</b>（不占坑、不写库，下一轮再看，节点追上来就自己记上）；超出 = HELD_NODE_DISAGREE 叫人去看节点。
- *       两条路都不记账，动钱的边界没有松。同一轮内的块头与 finalized 复用，不逐笔重问（M3-before 第 25 问）</li>
+ *       <b>这一轮延后</b>（不占坑、不写库，节点追上来就自己记上）；超出 = HELD_NODE_DISAGREE 叫人去看节点。
+ *       两条路都不记账，动钱的边界没有松。同一轮内的块头与 finalized 复用，不逐笔重问</li>
  *   <li><b>判决</b>：零值 = IGNORED_ZERO；金额只经 {@link TokenAmounts#toLedger}，装不下 = HELD_OVERFLOW；
  *       低于代币的最小入账额 = REJECTED_DUST；然后<b>信合约做的，不信合约说的</b>——向两个节点问该地址在那一块的 balanceOf，
- *       必须等于事件累计（转入减转出），对不上或问不到 = HELD_BALANCE_MISMATCH（M3-③）</li>
+ *       必须等于事件累计（转入减转出），对不上 = HELD_BALANCE_MISMATCH；问不到时怎么判见 {@link #unreadable}</li>
  *   <li><b>落库（系统池上一个事务）</b>：先占坑（INSERT … ON CONFLICT DO NOTHING，状态 POSTING），占不到 = 别的实例已处理，什么都不做；
- *       占到了才 ledger.transfer（幂等键 = 链上坐标），再把行改成 CREDITED。崩在中间整个事务回滚</li>
+ *       占到了才记账（幂等键 = 链上坐标），再把行改成 CREDITED。崩在中间整个事务回滚</li>
  * </ol>
  * 失败分三种：瞬时的（节点、数据库）让这一轮提前结束、已提交的不受影响；重试永远没用的（节点撤了我们的凭证）让这一轮 HALTED、叫人；
- * 结构性的那一笔记成 HELD_ERROR 带异常原文，队列继续。余额问不到时先按 {@link RpcFailure} 分类：合约 revert 是节点的最终回答、当场 HELD，
- * 不认识的错误码只把这一笔延后（别的候选照常），连续 {@link #UNKNOWN_BALANCE_ROUNDS} 轮仍是它才 HELD。
+ * 结构性的那一笔记成 HELD_ERROR 带异常原文，队列继续。
  * 人复核 HELD 之后改成 APPROVED 的行，下一轮不再核对、只重新占坑与记账——人永远不用手工碰账本表。
  */
 public final class DepositPoster {
@@ -244,13 +243,13 @@ public final class DepositPoster {
     }
 
     /**
-     * 余额问不到时，它到底意味着什么（M3-③ 补丁，2026-09-16）。{@link RpcFailure} 把「错误从哪一层来」翻成「该做什么」：
+     * 余额问不到时，它到底意味着什么。{@link RpcFailure} 把「错误从哪一层来」翻成「该做什么」：
      * <ul>
      *   <li>没问到、凭证被拒：原样抛出——前者下一轮再来，后者由 {@link #post} 升级成停下叫人</li>
      *   <li>合约 revert：这是节点的最终回答，当场 HELD 等人</li>
      *   <li>带码但不认识（后端落后、非归档、配额）：<b>只把这一笔延后</b>——不占坑、不写库、这一轮接着看别的候选——
      *       连续 {@link #UNKNOWN_BALANCE_ROUNDS} 轮仍是它才 HELD。「不知道」既不能当成对上了，也不该第一时间就占住人工队列的位置；
-     *       而一笔答不上来（非归档节点答不出某个老块最常见）也不该拖住排在它后面的所有入账（2026-09-15 审核改：此前是结束整轮）</li>
+     *       而一笔答不上来（非归档节点答不出某个老块最常见）也不该拖住排在它后面的所有入账</li>
      * </ul>
      */
     private Optional<Verdict> unreadable(DepositCandidate c, String node, JsonRpcException e, BigDecimal amount, Instant occurredAt) {
@@ -329,12 +328,10 @@ public final class DepositPoster {
     }
 
     /**
-     * 落库的结果：写进 deposit 表的<b>实际</b>状态与原因，不是判决阶段的打算（2026-09-15 改）。
+     * 落库的结果：写进 deposit 表的<b>实际</b>状态与原因，不是判决阶段的打算。
      *
-     * <p>两者在异常路径上会分叉：判决说记账，落库崩了，实际写进去的是 HELD_ERROR。
-     * 以前这里是一个四值枚举，状态名与原因在 {@code return} 那一刻就丢了，计数与日志只好回头读 {@link Verdict}——
-     * 于是那行 WARN 播报的是「原打算」（{@code CREDITED —— null}），和前一行 ERROR 自相矛盾。
-     * 现在事实带在返回值里；{@code kind} 由 {@code status} 推出，两者不可能各说一套。
+     * <p>两者在异常路径上会分叉：判决说记账，落库崩了，实际写进去的是 HELD_ERROR。计数与日志只读这里、不回头读 {@link Verdict}；
+     * {@code kind} 由 {@code status} 推出，两者不可能各说一套。
      */
     private record Outcome(Kind kind, DepositStatus status, String reason) {
 
@@ -343,7 +340,7 @@ public final class DepositPoster {
         /** 别的实例已经处理过这条日志：我们一行都没写，也就没有状态可报。 */
         static final Outcome SKIPPED = new Outcome(Kind.SKIPPED, null, null);
 
-        /** 写进库了。kind 不另外传，从 status 推：让「分类」和「状态」永远出自同一个事实。 */
+        /** 写进库了。kind 从 status 推，不另外传。 */
         static Outcome written(DepositStatus status, String reason) {
             Kind kind = status == DepositStatus.CREDITED ? Kind.CREDITED : status.isHeld() ? Kind.HELD : Kind.IGNORED;
             return new Outcome(kind, status, reason);
@@ -408,7 +405,7 @@ public final class DepositPoster {
             log.info("入账延后：块 {} 日志 {} —— {}", c.blockNumber(), c.logIndex(), verdict.reason());
         }
 
-        /** 播报的是库里实际写了什么（{@link Outcome}），不是判决阶段的打算——两者在异常路径上不一样。 */
+        /** 播报的是库里实际写了什么（{@link Outcome}），不是判决阶段的打算。 */
         void count(Outcome outcome, DepositCandidate c) {
             switch (outcome.kind()) {
                 case CREDITED -> credited++;

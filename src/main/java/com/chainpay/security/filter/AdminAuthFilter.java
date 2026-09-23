@@ -18,18 +18,11 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 /**
- * 控制面的门卫：只有<b>本机</b>发起、且<b>带正确管理员令牌</b>的请求才能进 {@code /admin/}。
+ * 控制面的门卫：只有<b>本机</b>发起、不经代理、且带着<b>活着的管理员会话</b>的请求才能进 {@code /admin/}。
  *
- * <p><b>为什么控制面必须和数据面用完全不同的认证：</b>
- *
- * <p>如果商户能用自己的 API 凭证去调「发放凭证」接口，就出现了
- * <b>权限提升</b>：一把泄露的钥匙可以配出第二把。商户发现泄露、吊销了泄露的那把，
- * 攻击者手上新配的那把<b>还活着</b>。
+ * <p><b>控制面必须和数据面用完全不同的认证：</b>如果商户能用自己的 API 凭证去调「发放凭证」接口，
+ * 一把泄露的钥匙就能配出第二把——商户吊销了泄露的那把，攻击者新配的那把<b>还活着</b>。
  * <b>能配钥匙的钥匙，吊销不掉。</b>
- *
- * <p>币安、OKX 的做法是彻底不给这条路：API key 只能在网页控制台里创建，
- * 要登录密码 + 2FA，<b>创建 key 这件事根本没有 API</b>。
- * 我们没有用户体系和 2FA（那是另一个里程碑），所以用两层更简单的限制代替。
  *
  * <p><b>两层限制，缺一不可：</b>
  *
@@ -38,19 +31,15 @@ import org.springframework.web.filter.OncePerRequestFilter;
  *   (2) 本机地址     只有能登上这台服务器的人才能调
  * </pre>
  *
- * <p>为什么两层都要：
- * <ul>
- *   <li>只有会话 —— 令牌短期，但泄露的那半小时里仍是万能的</li>
- *   <li>只有本机 —— 见下面 {@link #cameThroughProxy} 那段，
- *       同机反代会让这层保护<b>完全失效而且看不出来</b></li>
- * </ul>
+ * <p>只有会话：令牌泄露的那段时间里它仍是万能的；只有本机：同机反代会让这层保护<b>完全失效而且看不出来</b>
+ * （见 {@link #cameThroughProxy}）。
  */
 @Component
 public class AdminAuthFilter extends OncePerRequestFilter {
 
     private static final Logger log = LoggerFactory.getLogger(AdminAuthFilter.class);
 
-    /** 会话令牌的请求头（M6-⑤）。旧的 X-CP-ADMIN-TOKEN 一律不认。 */
+    /** 会话令牌的请求头。 */
     public static final String HEADER_ADMIN_SESSION = "X-CP-ADMIN-SESSION";
     /** 过滤器认完人之后把会话放在请求属性里，控制器与再认证拦截器从这里拿。 */
     public static final String SESSION_ATTRIBUTE = AdminSession.class.getName();
@@ -118,7 +107,10 @@ public class AdminAuthFilter extends OncePerRequestFilter {
         }
     }
 
-    /** 请求是否经过了反向代理：转发头在这里不是「客户端是谁」的答案，而是「这个请求不是本机发起的」的证据（详见类注释）。 */
+    /**
+     * 请求是否经过了反向代理。同机的反代从回环地址连进来，公网上任何人的请求经它转发都能通过回环检查；
+     * 所以转发头在这里不是「客户端是谁」的答案，而是「这个请求不是本机发起的」的证据，有就拒绝。
+     */
     private boolean cameThroughProxy(HttpServletRequest request) {
         for (String header : PROXY_HEADERS) {
             String value = request.getHeader(header);

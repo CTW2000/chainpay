@@ -13,9 +13,8 @@ import org.springframework.scheduling.annotation.Scheduled;
  * 定时跑入账任务，独立于索引器：索引器停了，已 FINAL 的钱照记；入账停了，索引照走。
  * 意外异常只记 ERROR、下一轮重试（同一笔反复失败会每轮报一次，人看得见）。
  *
- * <p><b>停下就不再碰节点</b>（2026-09-15 审核改）：一轮 HALTED（节点撤了我们的凭证）之后，之后每轮直接回记住的那个结果，
- * 不再调 {@code postOnce}——「重试永远没用」就不该每 30 秒再撞一次；索引器落状态表、发送任务标钱包 HALTED，入账任务用这个内存闸门，
- * 三个任务的口径一致。闸门只在内存里：换 key 后<b>重启</b>才会再试，和 runbook 写的一致。健康项照常读到 HALTED = DOWN。
+ * <p><b>停下就不再碰节点</b>：一轮 HALTED（节点撤了我们的凭证）之后，每轮直接返回记住的那个结果、不再调 {@code postOnce}——
+ * 重试永远没用，就不该每 30 秒再撞一次。闸门只在内存里：换 key 后<b>重启</b>才会再试；健康项照常读到 HALTED = DOWN。
  */
 public final class DepositPostingScheduler {
 

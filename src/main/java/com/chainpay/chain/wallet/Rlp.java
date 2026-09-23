@@ -16,10 +16,10 @@ import org.web3j.rlp.RlpType;
  *
  * <p>为什么要有它：哈希是对字节算的，同一笔交易在任何实现里都必须得到同一串字节，签名哈希与交易哈希才能对得上。
  *
- * <p>编码与解码委托给 web3j 的 {@code rlp} 模块（2026-09-09 改判：协议层编码用库，不自己写）。本类只做两件事：
+ * <p>编码与解码委托给 web3j 的 {@code rlp} 模块。本类只做两件事：
  * 一是给项目一个不依赖 web3j 类型的小接口（{@link Item}），换库只动这里；二是 {@link #toInteger} 读回整数时拒绝前导零——
  * 库的解码器不检查规范性，而节点会拒绝带前导零的整数（EIP-1559 官方反例 maxFeePerGas00prefix），我们不能比节点宽松。
- * 官方的 28 个 RLP 向量（src/test/resources/vectors）现在是对这个库的验收，不是对我们代码的。
+ * 官方的 28 个 RLP 向量（src/test/resources/vectors）是对这个库的验收。
  */
 public final class Rlp {
 
@@ -27,14 +27,12 @@ public final class Rlp {
 
     public sealed interface Item permits Bytes, Items {}
 
-    /** 字节串。 */
     public record Bytes(byte[] value) implements Item {
         public Bytes {
             Objects.requireNonNull(value, "value");
         }
     }
 
-    /** 列表。 */
     public record Items(List<Item> value) implements Item {
         public Items {
             value = List.copyOf(value);

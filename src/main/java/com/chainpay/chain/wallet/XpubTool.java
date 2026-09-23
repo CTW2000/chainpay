@@ -34,8 +34,8 @@ public final class XpubTool {
     }
 
     /**
-     * 只从真实终端读，不回显。没有 Console（管道、IDE 控制台、CI）就拒绝——此前退回明文 readLine，
-     * 把「不回显」这条硬要求悄悄丢掉了（2026-09-09 扫描补丁）。
+     * 只从真实终端读，不回显。没有 Console（管道、IDE 控制台、CI）就拒绝：退回明文 readLine
+     * 会把「不回显」这条硬要求悄悄丢掉。
      *
      * <p>诚实说明：readPassword 给的 char[] 在这里被转成了 String，NFKD 归一化也只对 String 做，
      * 于是助记词以不可清零的 String 在堆里多活到 GC 为止。这是离线短命进程里可接受的残余，不是被忽略的。

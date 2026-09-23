@@ -9,7 +9,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * {@link LogReconciler} 的两段事务（2026-09-15 由手工模板改为注解，用户选）：差异确认后的「补录、标废、记审计」，
+ * {@link LogReconciler} 的两段事务：差异确认后的「补录、标废、记审计」，
  * 以及回执解不了时的「本块记为 disputed」。两个节点的回执比对全在 LogReconciler；这里只有数据库。类与方法都不能加 final。
  */
 @Component

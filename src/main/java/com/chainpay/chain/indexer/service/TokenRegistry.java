@@ -43,7 +43,7 @@ public final class TokenRegistry {
         String symbol = calls.symbol(token).orElse("?");
         ChainToken registered = new ChainToken(token, symbol, decimals.getAsInt(), "ACTIVE");
         if (!tokens.insertIfAbsent(registered, "登记时从链上读取：decimals=" + decimals.getAsInt() + "，symbol=" + symbol)) {
-            throw alreadyRegistered(token);                    // 查过「没有」之后有人插了队：check-then-act 第 8 次，让主键说话
+            throw alreadyRegistered(token);                    // 查过「没有」之后有人插了队：让主键说话
         }
         return registered;
     }

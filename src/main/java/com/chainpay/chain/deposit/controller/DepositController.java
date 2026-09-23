@@ -24,7 +24,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * 商户的收款接口（M3-④），形状照币安 / OKX 的 deposit-address 与 deposit-history。
+ * 商户的收款接口，形状照币安 / OKX 的 deposit-address 与 deposit-history。
  *
  * <p>身份由 {@link ApiKeyAuthFilter} 认证完毕后经请求属性传入；每个方法整段跑在 {@code asMerchant} 的事务里，
  * 地址表与入账表的 RLS 让别人的行根本查不出来——不需要也没有「按 id 查一条」的接口，

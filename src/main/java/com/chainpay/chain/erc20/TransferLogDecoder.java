@@ -10,9 +10,8 @@ import com.chainpay.chain.rpc.RawLog;
  * 带 {@code indexed} 的参数进 topics（节点会建索引、可按值过滤），不带的进 data。
  * 于是 topics 恰好 3 个（签名 + from + to），data 恰好一个 uint256。
  *
- * <p><b>形状不对就拒绝，绝不猜。</b>M2-before 第 19 问：非标准事件、data 长度不对，
- * 解析代码是拒绝，还是把错的数当成对的？这里的每一个 {@code require} 都是回答。
- * 一条被拒绝的日志会在上游被记录并跳过；一条被猜错的日志会变成一笔错误入账。
+ * <p><b>形状不对就拒绝，绝不猜</b>（非标准事件、data 长度不对）：被拒绝的日志让索引器停下、让对账记为 disputed；
+ * 一条被猜错的日志会变成一笔错误入账。
  */
 public final class TransferLogDecoder {
 
@@ -60,7 +59,7 @@ public final class TransferLogDecoder {
         return "0x" + topic.substring(ADDRESS_PADDING.length()).toLowerCase();
     }
 
-    /** logIndex 是节点给的数：先在 long 上比过范围再收窄，(int) 直接截断会把 0x100000000 静默变成 0（2026-09-09 扫描补丁）。 */
+    /** logIndex 是节点给的数：先在 long 上比过范围再收窄，(int) 直接截断会把 0x100000000 静默变成 0。 */
     private static int logIndex(String hex) {
         long index = Hex.toLong(hex);
         if (index < 0 || index > Integer.MAX_VALUE) {

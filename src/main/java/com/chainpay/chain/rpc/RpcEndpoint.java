@@ -10,7 +10,7 @@ import java.util.Optional;
  *
  * <p>为什么不直接 {@code URI.create}：它解析失败时抛的 IllegalArgumentException 会把<b>整条输入连出错位置</b>
  * 放进 message（JDK 的 URISyntaxException 就这么设计），那一行会出现在启动失败的 ERROR 日志里，
- * 而启动失败的日志最容易被整段贴进工单（2026-09-03 质询扫描 4.6，局部实验证实）。
+ * 而启动失败的日志最容易被整段贴进工单。
  * 这里解析失败只报变量名与主机名，永不回显原文；也不替人修剪空格换行——那是「强行转换成看起来合理的值」，
  * 粘贴错了就该在这里停下并说清楚。
  */
@@ -41,7 +41,7 @@ public record RpcEndpoint(URI uri, String host) {
         return new RpcEndpoint(uri, host);
     }
 
-    /** 回环与 RFC 1918 内网地址允许明文 http（本地节点、局域网节点）。只看字面量，不解析 DNS（2026-09-09 扫描补丁）。 */
+    /** 回环与 RFC 1918 内网地址允许明文 http（本地节点、局域网节点）。只看字面量，不解析 DNS。 */
     static boolean isLoopbackOrPrivate(String host) {
         String h = host.toLowerCase(Locale.ROOT);
         return h.equals("localhost") || h.equals("::1") || h.equals("[::1]") || h.startsWith("127.")

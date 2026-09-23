@@ -18,7 +18,7 @@ import java.util.Set;
  * </pre>
  *
  * <p>BROADCAST 没有直接到 FAILED 的边：广播之后只有链上的回执能宣布结局，代码不能凭「等太久」判失败——
- * 那笔可能正在别的节点的内存池里等着上链。等太久的对策是加速或换节点（M4-③），不是判死。
+ * 那笔可能正在别的节点的内存池里等着上链。等太久的对策是加价或换节点，不是判死。
  */
 public enum PayoutStatus {
     PENDING_APPROVAL, QUEUED, SIGNED, BROADCAST, MINED, CONFIRMED, FAILED, REJECTED;

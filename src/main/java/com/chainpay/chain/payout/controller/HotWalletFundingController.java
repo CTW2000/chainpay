@@ -13,7 +13,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-/** 管理侧（回环 + 令牌）：登记一笔外部注资、列出已登记的。金额从日志来，请求体里没有金额字段——结构上就不给人填。 */
+/** 管理侧：登记一笔外部注资、列出已登记的。金额从日志来，请求体里没有金额字段——结构上就不给人填。 */
 @RestController
 @RequestMapping("/admin/v1/hot-wallet")
 public class HotWalletFundingController {

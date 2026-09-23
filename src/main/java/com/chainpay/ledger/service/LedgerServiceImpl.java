@@ -41,7 +41,7 @@ public class LedgerServiceImpl implements LedgerService {
      * ① 参数校验          纯 Java，零 IO —— 能在不碰数据库时否掉的，就别碰数据库
      * ② 读两个账户        为了给出清晰的错误；放在 ③ 之前，否则坏账户 id 会先撞上外键报错
      * ③ 幂等插入          重复请求在这里短路返回，不会走到 ④ 去抢账户锁
-     * ④ 锁定两个账户      ★ 承重墙：这一步是"账不会被超支"的唯一保证。按 id 升序！
+     * ④ 锁定两个账户      ★ 承重墙：没有它 ⑤ 就是 check-then-act。按 id 升序，否则双向转账会死锁！
      * ⑤ 查余额并判断      必须在 ④ 之后。放在 ④ 之前就是 check-then-act，并发下必错
      * ⑥ 写两条分录        一条 SQL 写两行，同生同死
      * ⑦ 更新两个账户余额  物化余额必须和分录在同一事务内更新，否则两者会漂移
@@ -69,50 +69,32 @@ public class LedgerServiceImpl implements LedgerService {
             // 「同一个键」有两种完全不同的来历，系统手里有区分它们的全部信息：
             //   键相同 + 体相同 → 超时重发，幂等返回，客户端不该被惩罚
             //   键相同 + 体不同 → 复用了键（订单号当幂等键，退款又用同一个），必须拒绝
-            // 2026-08-31 扫描前这里只看了键：第二笔回 200 + 第一笔的 id，777 一分没动，
-            // 响应体里没有金额，商户无从察觉。清单 9.8 原话：
-            // 「返回上次结果 = 用同一个键把另一笔钱吞掉」。
+            // 只看键的话，第二笔会拿到第一笔的 id 当作成功，钱一分没动而调用方无从察觉。
             return existingTransferIdIfSameRequest(command);
         }
         long transferId = created.get();
 
         // ④ ★ 承重墙 ★ 锁住两个账户所在的行。
         //
-        //    删掉这一步会怎样：并发测试里 100 个线程同时读到"余额够"，
-        //    然后同时扣款，alice 余额变成负数，成功笔数远超 500。
-        //    这就是 check-then-act，本项目实测过：余额 100 并发扣 30 和 50，
-        //    无锁时结果是 50（应该是 20），凭空多出 30 块。
+        //    删掉它，⑤ 就是 check-then-act：并发事务同时读到"余额够"再同时扣款，
+        //    超支只能靠 ⑦ 撞上 account_balance_ck 拦下，报出来的是约束违反，而不是可读的余额不足。
         //
-        //    为什么 V2 之后两个账户都要锁 —— 理由是死锁避免，不是丢失更新：
-        //
-        //    ⑦ 的 `UPDATE ... SET balance = balance + :delta` 本身已经是原子的
-        //    （语句自己持有行锁，并基于最新已提交版本求值），不存在丢失更新。
-        //    真正的问题是 ⑦ 要动两行，于是每个事务都会先后持有两把行锁：
+        //    两个账户都要锁，理由是死锁避免，不是丢失更新：⑦ 的 `balance = balance + :delta`
+        //    本身是原子的（语句持有行锁，并基于最新已提交版本求值），但它要动两行，每个事务都会先后持有两把行锁：
         //      事务 A（alice→bob）：持 alice，在 UPDATE bob 处等 bob
         //      事务 B（bob→alice）：持 bob，  在 UPDATE alice 处等 alice
-        //    → 循环等待，死锁。V1 只锁借方一行时不存在这个问题。
+        //    → 循环等待，死锁。
         //
-        //    也就是说：「加一个物化余额列」这个看似只关乎性能的改动，
-        //    把单锁操作变成了双锁操作，凭空引入了死锁风险。
+        //    ★ 必须按 id 升序 ★：所有事务的加锁顺序一致，后到的只会等待，不会形成环。
         //
-        //    ★ 必须按 id 升序 ★：A→B 与 B→A 并发时，如果各自先锁自己的借方，
-        //    就会互相等待对方持有的锁 —— 经典死锁。统一按 id 升序，
-        //    两个事务的加锁顺序就一致了，后到的那个只会等待，不会形成环。
-        //
-        //    用 FOR NO KEY UPDATE 而不是 FOR UPDATE：
-        //    写 entry 时外键检查会对 account 行申请 FOR KEY SHARE 锁。
-        //    FOR UPDATE 与 FOR KEY SHARE 冲突，FOR NO KEY UPDATE 不冲突。
-        //    已实测：同样的双向并发场景，前者报 "deadlock detected"，后者正常通过。
+        //    用 FOR NO KEY UPDATE 而不是 FOR UPDATE：写 entry 时外键检查会对 account 行申请 FOR KEY SHARE 锁，
+        //    FOR UPDATE 与它冲突、FOR NO KEY UPDATE 不冲突——同样的双向并发下，前者报 "deadlock detected"。
         AccountRow lockedDebit =
                 lockBothInIdOrder(command.debitAccountId(), command.creditAccountId());
 
-        // ⑤ 余额检查。必须用锁之后重新读到的那一行——
-        //    ② 里读的 allowNegative 是没有锁保护的旧值。
-        //
-        //    注意：这个检查现在**不是**最后一道防线。数据库上的
-        //    account_balance_ck 约束才是（见 V2 迁移）。这里的检查只负责
-        //    在到达约束之前给出可读的错误 —— 约束报出来的是
-        //    "violates check constraint"，对调用方没有信息量。
+        // ⑤ 余额检查。必须用锁之后重新读到的那一行——② 里读的 allowNegative 是没有锁保护的旧值。
+        //    最后一道防线是数据库的 account_balance_ck 约束（V2）；这里只负责在撞上约束之前给出可读的错误，
+        //    约束报出来的 "violates check constraint" 对调用方没有信息量。
         if (!lockedDebit.allowNegative()) {
             BigDecimal balance = balanceOf(command.debitAccountId());
             if (balance.compareTo(command.amount()) < 0) {
@@ -142,14 +124,9 @@ public class LedgerServiceImpl implements LedgerService {
     // ==================================================================
 
     /**
-     * 取余额：直接读物化的 {@code account.balance} 列（V2）。它永远等于分录求和，由判官的 {@code balance_consistency} 守。
+     * 直接读物化的 {@code account.balance} 列，契约见接口。
      *
-     * <p>2026-09-21 以前这里经过一个 {@code account_balance} 视图，它只是把这一列原样转发——多一层跳转，
-     * 还多一个要记得开 {@code security_invoker} 的对象（视图默认用主人的身份读表，会绕过行级安全），删了。
-     *
-     * <p>账户不存在时抛异常而不是返回 0：<b>"不存在"和"余额为零"是两件事</b>，
-     * 把它们混成同一个返回值，等于把一个 bug 变成一个看起来正常的数字。
-     * 在行级安全之下，别人的账户读出来也是 0 行、同样报「不存在」——不透露那个 id 到底有没有。
+     * <p>在行级安全之下，别人的账户读出来也是 0 行、同样报「不存在」——不透露那个 id 到底有没有。
      */
     @Override
     public BigDecimal balanceOf(long accountId) {
@@ -176,11 +153,8 @@ public class LedgerServiceImpl implements LedgerService {
         if (command.amount() == null || command.amount().signum() <= 0) {
             throw new LedgerException(Reason.INVALID_AMOUNT, "转账金额必须为正数");
         }
-        // 装不下的在写库之前拒绝：小数位超过 18 位，数据库会静默四舍五入成 18 位 —— 用户以为转了
-        // 0.1234567890123456789，实际记的是别的数，不能默默改人家的钱；整数位超过 20 位，数据库报
-        // numeric field overflow，在 HTTP 上落成 500 + 9001「可以重试」。
-        // 判断与报错都在 LedgerAmounts.requireFits（2026-09-22 收口）：报错只说几位、不写金额——金额可以写成
-        // 1E-999999999，逐位写全是 10 亿个字符，此前写进报错时同镜像的实例实测一个请求就内存耗尽退出（2026-09-21）。
+        // 装不下 NUMERIC(38,18) 的在写库之前拒绝：多出的小数会被数据库静默四舍五入（不能默默改人家的钱），
+        // 多出的整数位在 HTTP 上落成 500 + 9001「可以重试」。判断与报错都在 LedgerAmounts.requireFits。
         LedgerAmounts.requireFits(command.amount(), reason -> new LedgerException(Reason.INVALID_AMOUNT, reason));
         if (command.debitAccountId() == command.creditAccountId()) {
             throw new LedgerException(Reason.SAME_ACCOUNT, "借贷方不能是同一个账户");
@@ -236,10 +210,8 @@ public class LedgerServiceImpl implements LedgerService {
      * 尝试写入 transfer。
      *
      * <p><b>submitter_merchant_id 取自会话变量 {@code current_merchant_id()}，不从命令里传。</b>
-     * 它和 RLS 用的是同一个来源（TenantScope 在事务内 set_config），
-     * 所以调用方<b>伪造不了</b>——一个从请求参数里传进来的 merchantId 可以被写错，
-     * 一个从已认证会话里读出来的不会。租户作用域之外（测试注资、系统任务）它是 NULL，
-     * 由 V7 的 {@code NULLS NOT DISTINCT} 保证系统级操作照样幂等。
+     * 它和 RLS 用的是同一个来源（TenantScope 在事务内 set_config），所以调用方<b>伪造不了</b>。
+     * 租户作用域之外（系统任务、测试注资）它是 NULL，由 V7 的 {@code NULLS NOT DISTINCT} 保证系统级操作照样幂等。
      *
      * <p>返回空 = 这个幂等键在本提交方名下已经存在。{@code ON CONFLICT DO NOTHING} 在并发下的行为：
      * 后到的事务会等先到的那个提交或回滚——先到的提交则本次什么都不做，
@@ -261,12 +233,7 @@ public class LedgerServiceImpl implements LedgerService {
                 .param("debit", command.debitAccountId())
                 .param("credit", command.creditAccountId())
                 .param("code", command.code().name())
-                // 显式转成 OffsetDateTime。
-                //
-                // 诚实说明：pgjdbc 大概率能直接接受 Instant，这三行未必是必需的。
-                // 保留它不是因为验证过驱动会失败，而是因为**我没有验证过它会成功**——
-                // 账本层的取舍是「宁可多写三行显式代码，也不依赖一个未经本项目验证的隐式行为」。
-                // 这是偏好，不是必要；换个层次（比如 M1 的 API 层）我不会这么写。
+                // 显式转成 OffsetDateTime：账本层不依赖驱动对 Instant 的隐式处理（本项目没验证过它；是偏好，不是必要）。
                 .param("occurredAt", command.occurredAt() == null
                         ? null
                         : OffsetDateTime.ofInstant(command.occurredAt(), ZoneOffset.UTC))
@@ -280,15 +247,9 @@ public class LedgerServiceImpl implements LedgerService {
      * <p>「同一笔请求」的定义就写在这里的五个字段比对上，不藏在哈希里：
      * 改定义只改这几行，不需要迁移数据。
      *
-     * <p>查询条件带 {@code submitter_merchant_id IS NOT DISTINCT FROM current_merchant_id()}：
-     * 和 INSERT 用同一个来源，于是回读到的一定是<b>自己</b>那一笔——
-     * V7 之前这里能撞到别人的行（UNIQUE 是全表的），而 RLS 又把它藏起来，
-     * 回读 0 行 → {@code .single()} 抛出一个没人设计过的异常 → 500。
-     * 现在约束按提交方分域，跨租户根本不会冲突，这条路结构上消失了。
-     *
-     * <p>仍用 {@code .optional()} 而不是 {@code .single()}：
-     * 万一哪天前提再变（比如有人绕过 TenantScope 写入），
-     * 要炸也要炸成一句能读懂的话，而不是「expected 1, actual 0」。
+     * <p>查询条件与 INSERT 用同一个来源（{@code current_merchant_id()}），唯一约束又按提交方分域（V7），
+     * 所以回读到的一定是<b>自己</b>那一笔。仍用 {@code .optional()} 而不是 {@code .single()}：
+     * 万一前提被破坏（有人绕过 TenantScope 写入），要炸也要炸成一句能读懂的话，而不是「expected 1, actual 0」。
      */
     private long existingTransferIdIfSameRequest(TransferCommand command) {
         var existing = jdbcClient.sql("""

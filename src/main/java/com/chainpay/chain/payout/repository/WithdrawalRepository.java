@@ -9,7 +9,7 @@ import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
 /**
- * 商户连接上的提现数据访问（M4-④）：每条语句都在 asMerchant 的事务里跑，RLS 把 payout / payout_address / account 限在本商户。
+ * 商户连接上的提现数据访问：每条语句都在 asMerchant 的事务里跑，RLS 把 payout / payout_address / account 限在本商户。
  * 状态只由系统身份改（应用角色对 payout 没有 UPDATE），这里只有插与读。
  */
 public class WithdrawalRepository {

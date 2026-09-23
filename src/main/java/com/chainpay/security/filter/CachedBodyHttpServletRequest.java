@@ -13,20 +13,11 @@ import java.nio.charset.StandardCharsets;
 /**
  * 把请求体读进内存，使它可以被读<b>两次</b>。
  *
- * <p><b>为什么需要这个类 —— 一个 Servlet 的经典陷阱：</b>
+ * <p>{@code HttpServletRequest.getInputStream()} 是一个<b>只能读一次的流</b>：签名验证必须读 body
+ * （它是被签名的内容之一），读完之后控制器里的 {@code @RequestBody} 就拿到一个空流——
+ * 「签名验过了，但业务收到的请求体是空的」。所以过滤器把 body 一次性读进 byte 数组，之后谁来读都从这个数组给。
  *
- * <p>{@code HttpServletRequest.getInputStream()} 是一个<b>只能读一次的流</b>。
- * 签名验证必须读 body（因为 body 是被签名的内容之一），
- * 而读完之后，控制器里的 {@code @RequestBody} 就拿到一个空流 ——
- * 表现是「签名验过了，但业务收到的请求体是空的」。
- *
- * <p>这类 bug 特别难查，因为<b>两边的代码单独看都是对的</b>。
- *
- * <p>解法是在过滤器最外层把 body 一次性读进 byte 数组，
- * 之后无论谁来读，都从这个数组里给。
- *
- * <p><b>代价：整个请求体会驻留内存。</b>所以必须有大小上限 ——
- * 否则一个几 GB 的请求体就能把服务打死。上限由调用方（过滤器）负责检查。
+ * <p><b>代价：整个请求体会驻留内存。</b>所以必须有大小上限，由调用方（过滤器）负责检查。
  */
 public class CachedBodyHttpServletRequest extends HttpServletRequestWrapper {
 
@@ -37,7 +28,7 @@ public class CachedBodyHttpServletRequest extends HttpServletRequestWrapper {
         this.body = body;
     }
 
-    /** 原始请求体字节。签名计算用它，保证和控制器读到的是同一份数据。 */
+    /** 原始请求体字节。 */
     public byte[] body() {
         return body;
     }

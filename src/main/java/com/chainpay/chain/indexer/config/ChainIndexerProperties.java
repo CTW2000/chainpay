@@ -14,21 +14,20 @@ import org.springframework.validation.annotation.Validated;
  *
  * @param rpcUrl           主节点。<b>故意不在 application.yml 里给</b>：只从环境变量
  *                         {@code CHAINPAY_CHAIN_RPC_URL} 来，没设就不装配索引器，应用照常启动
- * @param auditRpcUrl      审计节点（M2-⑤），环境变量 {@code CHAINPAY_CHAIN_AUDIT_RPC_URL}，可不设。
- *                         对账和 finalized 核对走它。要独立于主节点才有价值：同一家的两台机器，
- *                         同一个 bug 会同时骗过两条路径。不设时用主节点自己的回执路径，能抓住索引漏日志，
- *                         抓不住节点整体撒谎
+ * @param auditRpcUrl      审计节点，环境变量 {@code CHAINPAY_CHAIN_AUDIT_RPC_URL}，可不设。
+ *                         对账和 finalized 核对走它，要独立于主节点才有价值（同一台主机拒绝启动，见 ChainIndexerConfig）。
+ *                         不设时用主节点自己的回执路径，能抓住索引漏日志，抓不住节点整体撒谎
  * @param chainName        链名，只是记在 chain_head 里给人看
  * @param tokenAddress     只索引这一个合约的 Transfer
  * @param cursorName       书签名：一条链、一个币、一枚书签
- * @param catchUpBudget    一次轮询最多花多久追赶（M6-②）：落后时连续推批到追平或预算用完；正常时一轮一批用不到它
- * @param batchBlocks      eth_getLogs 窗口的上限。撞上提供商的限制会减半，成功后翻倍回到这个值
+ * @param catchUpBudget    一次轮询最多花多久追赶：落后时连续推批到追平或预算用完；正常时一轮一批用不到它
+ * @param batchBlocks      eth_getLogs 窗口的上限。撞上提供商的限制会缩窗口，成功后再长回来，但不超过这个值（规则在 BlockIndexer）
  * @param startBlock       没有书签时从哪开始（该块视为已处理）。不配 = 没书签就停下，不猜
  * @param reconcileSamples 每次轮询抽几个已 finalized、已索引的块用回执对账
  * @param degradedAfterFailures 连续几次瞬时失败（或审计节点连续几次答不出）后把状态标成 DEGRADED
  */
 @ConfigurationProperties(prefix = "chainpay.chain")
-@Validated   // 合法范围由校验器在绑定时守，不靠各个构造器手写 if-throw；漏配的 int 是 0，0 对下面三个数都不是合法值
+@Validated   // 合法范围由校验器在绑定时守，不靠各个构造器手写 if-throw；漏配的 int 是 0，对 batchBlocks、degradedAfterFailures 都不合法
 public record ChainIndexerProperties(
         String rpcUrl,
         String auditRpcUrl,

@@ -18,7 +18,7 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.security.crypto.argon2.Argon2PasswordEncoder;
 
 /**
- * 第一个管理员怎么来（M6-⑤）：{@code java -jar chainpay.jar --create-admin <用户名>}，口令只从环境变量 CHAINPAY_ADMIN_PASSWORD 来——
+ * 第一个管理员怎么来：{@code java -jar chainpay.jar --create-admin <用户名>}，口令只从环境变量 CHAINPAY_ADMIN_PASSWORD 来——
  * 不进参数（ps 能看到）、不进文件。和 {@link Migrate} 一样只起一个最小上下文（数据源），不装配应用。
  */
 public final class AdminBootstrap {

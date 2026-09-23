@@ -1,6 +1,6 @@
 package com.chainpay.audit.domain;
 
-/** 三种差异（LEARNING-PATH M5）加两种「对账自己给不出结论」的情形。 */
+/** 差异的种类：LEARNING-PATH.md「三种差异」的三种，加上两个节点意见不同（DISPUTED）与判官报出的行（JUDGE）。 */
 public enum AuditKind {
     /** 链上有、库内无：漏账（漏了日志、入账任务没处理、没有事件的铸币、外部注资没登记）。 */
     MISSING_IN_LEDGER,

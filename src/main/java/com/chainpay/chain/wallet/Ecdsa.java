@@ -9,9 +9,9 @@ import org.web3j.crypto.Sign;
 /**
  * secp256k1 上的 ECDSA：签 32 字节的哈希，签名是 (r, s, yParity)；从签名与哈希恢复地址。
  *
- * <p>实现委托给 web3j（2026-09-09 改判）：{@code Sign.signMessage} 用 RFC 6979 的确定性 k 并把 s 归一到 ≤ n/2，
+ * <p>实现委托给 web3j：{@code Sign.signMessage} 用 RFC 6979 的确定性 k 并把 s 归一到 ≤ n/2，
  * {@code Sign.recoverFromSignature} 做节点做的那件事——交易没有 from 字段，from 是从签名恢复出来的。
- * 两条会丢钱的规矩（k 不能重复、s 取小的那个）现在由官方向量与自洽测试对库验收：EIP-155 算例的 (r, s) 逐位相同，
+ * 两条会丢钱的规矩（k 不能重复、s 取小的那个）由官方向量与自洽测试对库验收：EIP-155 算例的 (r, s) 逐位相同，
  * 24 条消息里 s 永远 ≤ n/2。本类只保留输入校验与不依赖 web3j 类型的小接口。
  */
 public final class Ecdsa {
@@ -38,9 +38,8 @@ public final class Ecdsa {
     }
 
     /**
-     * 恢复出的地址，EIP-55 写法。公钥 → 地址这一步走 web3j 的 {@code Keys.getAddress}，而 {@link EthAddress#fromPublicKey}
-     * 是我们自己的实现：两套并存是有意的——测试（Eip155VectorTest、HotWalletSignerTest）把两条路的结果互相比对，
-     * 一份实现错了另一份会揭发它。合成一份就失去这层对拍。
+     * 恢复出的地址，EIP-55 写法。公钥 → 地址这一步有意走 web3j 的 {@code Keys.getAddress}、不走 {@link EthAddress#fromPublicKey}：
+     * 两套实现由测试互相对拍，别合成一份（见 {@link EthAddress}）。
      */
     public static String recoverAddress(byte[] hash32, Signature signature) {
         requireHash(hash32);

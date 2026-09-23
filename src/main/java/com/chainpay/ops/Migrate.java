@@ -14,7 +14,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.annotation.ScheduledAnnotationBeanPostProcessor;
 
 /**
- * 只迁移，不起应用（M6-④，取舍 6）。部署脚本在切换之前跑它：迁移失败时旧版本还在跑、没有切换。
+ * 只迁移，不起应用。部署脚本在切换之前跑它：迁移失败时旧版本还在跑、没有切换。
  * 起的是一个<b>最小</b>上下文：只有数据源与 Flyway 两个自动配置，读同一份 application.yml 里的 spring.flyway.*（属主身份、校验、未来版本容忍）。
  * 应用的任何 bean 都不装配，所以没有索引器、没有发送任务、没有健康端口——它只做一件事然后退出。
  * 用法：{@code java -jar chainpay.jar --migrate-only}（{@link com.chainpay.ChainpayApplication#main} 转到这里）。

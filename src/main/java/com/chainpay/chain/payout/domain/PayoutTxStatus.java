@@ -4,14 +4,15 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * 一笔链上尝试的状态。一笔提现可能签好几笔（加速、重发），同一个 nonce 只有一笔能上链（V21 的部分唯一索引）。
+ * 一笔链上尝试的状态。一笔提现可能签好几笔（加价的替身；重发用的是同一份原文、不另签），同一个 nonce 只有一笔能上链（V21 的部分唯一索引）。
  *
  * <pre>
- *   SIGNED ─→ BROADCAST ─→ MINED
- *                │  ↑        │  ↑
- *                │  └────────┘  │（块被重组掉）
- *                ├─→ DROPPED ───┘（同一份原文重发）
- *                └─→ REPLACED ←─┘（同 nonce 的另一笔上链了，本笔永远不会再上链）
+ *   SIGNED    → BROADCAST   广播出去
+ *   BROADCAST → MINED       有了回执
+ *   BROADCAST → DROPPED     节点忘了它
+ *   DROPPED   → BROADCAST   同一份原文重发
+ *   MINED     → BROADCAST   块被重组掉，回去继续等
+ *   非终态    → REPLACED    同 nonce 的另一笔上链了，本笔永远不会再上链（终态）
  * </pre>
  *
  * <p>SIGNED 到 MINED 没有边：没广播过的东西不会上链——如果链上出现了一笔我们只签没发的交易，那是有人拿到了原文。

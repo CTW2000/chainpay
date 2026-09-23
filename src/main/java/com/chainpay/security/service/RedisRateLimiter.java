@@ -9,30 +9,11 @@ import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.stereotype.Component;
 
 /**
- * 跨实例共享的限流计数，存在 Redis 里。
+ * 跨实例共享的限流计数，存在 Redis 里：进程内计数下两个实例各自允许 120 次/分钟，商户实际能打 240 次。
  *
- * <p><b>为什么需要它：</b>进程内的 {@code AtomicLong} 在单实例下完全正确，
- * 但两个实例各自允许 120 次/分钟，商户实际能打 240 次。
- * 计数必须放在所有实例都能看到的地方。
- *
- * <p><b>为什么必须用 Lua 脚本，而不是两条命令：</b>
- *
- * <pre>
- *   INCR   key          ← 计数加一
- *   EXPIRE key 60       ← 设置过期
- * </pre>
- *
- * 这两条之间如果进程崩溃、网络断开、或者 Redis 恰好在此刻主从切换，
- * 这个 key 就<b>永远不会过期</b> —— 那个商户会被永久限流，
- * 而且没有任何日志会提示原因。
- *
- * <p>Redis 保证<b>单个 Lua 脚本原子执行</b>，中途不会插入其他命令。
- * 把两条命令合成一个脚本，那个窗口就不存在了。
- *
- * <p><b>这是 check-then-act 在分布式环境的又一次现身。</b>
- * 本项目已经在四个地方遇到同一个形状：
- * 账本余额、幂等键、进程内限流计数、以及这里的「计数与过期之间的窗口」。
- * 每次的解法都是同一句话：<b>把「两步」变成「一步」。</b>
+ * <p><b>为什么必须用 Lua 脚本，而不是 INCR + EXPIRE 两条命令：</b>两条之间如果进程崩溃、网络断开、
+ * 或者 Redis 恰好主从切换，这个 key 就<b>永远不会过期</b>——那个商户会被永久限流，而且没有任何日志提示原因。
+ * Redis 保证<b>单个 Lua 脚本原子执行</b>，中途不会插入其他命令：把「两步」变成「一步」，那个窗口就不存在了。
  */
 @Component
 public class RedisRateLimiter {
@@ -89,7 +70,7 @@ public class RedisRateLimiter {
         }
     }
 
-    /** Redis 当前是否可用。用于测试与健康检查。 */
+    /** Redis 当前是否可用（ping 一次）。 */
     public boolean isAvailable() {
         try {
             var factory = redis.getConnectionFactory();

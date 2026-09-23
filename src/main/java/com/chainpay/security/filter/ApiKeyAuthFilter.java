@@ -19,22 +19,21 @@ import org.springframework.util.StreamUtils;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 /**
- * 每个请求进业务代码之前，先在这里限频 + 验签名。
- *
- * <p><b>两道闸门的顺序是关键：</b>
+ * 每个 {@code /api/} 请求进业务代码之前，先在这里验签、查重放、限频。
  *
  * <pre>
- *   ① 认证失败次数限流（按 IP）  —— 挡住暴力破解，在验签之前就拒
- *   ② 验签名                    —— 计算 HMAC、查库、解密，有真实成本
- *   ③ 请求配额限流（按 API key） —— 认证通过后才知道是谁，才能按 key 计
+ *   ① 请求体上限、nonce 格式      —— 只看长度与请求头，不碰任何外部系统
+ *   ② 验签名                      —— 计算 HMAC、查库、解密，有真实成本；
+ *                                    失败按来源 IP 计数，超过阈值回 429 而不是 401
+ *   ③ 重放登记（Redis）            —— 只登记验证过的请求
+ *   ④ 请求配额限流（按 API key）   —— 认证通过后才知道是谁，才能按 key 计
  * </pre>
  *
- * <p>为什么 ① 必须在 ② 之前：验签要算 HMAC、要查数据库、要解密，
- * <b>这些成本攻击者不用付，我们要付</b>。先按 IP 拦住反复失败的来源，
- * 攻击流量就打不到昂贵的那一步上。
+ * <p>配额必须在验签之后：认证成功之前<b>我们不知道调用方是谁</b>——它给的 api key 可能根本不存在，
+ * 按一个攻击者能随意伪造的字段限流，等于没限。
  *
- * <p>为什么 ③ 必须在 ② 之后：认证成功之前<b>我们不知道调用方是谁</b> ——
- * 它给的 api key 可能根本不存在。按一个攻击者能随意伪造的字段限流，等于没限。
+ * <p>注意按 IP 的失败计数是在验签<b>失败之后</b>才记、才查：它把失败的回答从 401 换成 429，
+ * 但不省下验签的成本，也不拦验签通过的请求。
  */
 @Component
 public class ApiKeyAuthFilter extends OncePerRequestFilter {
@@ -46,22 +45,13 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
     public static final String HEADER_NONCE = "X-CP-API-NONCE";
 
     /**
-     * nonce 的长度，必须<b>正好</b>这么多个十六进制字符（16 字节随机数）。
+     * nonce 的长度，必须<b>正好</b>这么多个十六进制字符（16 字节 = 128 位随机，同一商户 10 秒内撞车的概率可忽略）。
      *
-     * <p><b>两个理由，两个都是承重的：</b>
+     * <p><b>① 上限：防止拿 nonce 打我们。</b>不限长的话，攻击者每个请求塞一个 1MB 的 nonce，
+     * Redis 内存几分钟就被吃光——这个「保护措施」本身变成了一条攻击通道（和 {@link #MAX_BODY_BYTES} 同一个道理）。
      *
-     * <p><b>① 上限：防止拿 nonce 打我们。</b>不限长的话，攻击者每个请求塞一个
-     * 1MB 的 nonce，Redis 内存几分钟就被吃光 —— 这个「保护措施」本身
-     * 变成了一条攻击通道。和 {@link #MAX_BODY_BYTES} 是同一个道理：
-     * <b>加一层防护时要问一句，这层防护本身能不能被用来打我。</b>
-     *
-     * <p><b>② 定长曾经承担「签名拼接不能有歧义」。</b>2026-09-09 之前 prehash 是各段直接拼起来的，
-     * 不加分隔符，nonce 若可变长，{@code "ab"+"c"} 和 {@code "a"+"bc"} 会拼出同一个串、算出同一个签名。
-     * 现在签名串是 CP2 规范串（换行分隔、请求体换成哈希，见 {@code ApiCredentialService.prehash}），
-     * 边界的唯一性不再依赖任何一段定长；nonce 仍然定长，理由只剩 ①，以及让 Redis 里的重放键大小可预期。
-     *
-     * <p>16 字节 = 128 位随机。同一个商户在 10 秒窗口内偶然撞出两个相同 nonce 的
-     * 概率约为 2 的负 128 次方级别 —— 比硬件出错的概率低得多。
+     * <p><b>② 只含十六进制：</b>nonce 里不可能出现换行，CP2 规范串的分段才无歧义（见 {@code ApiCredentialService.prehash}）；
+     * 定长还让 Redis 里的重放键大小可预期。
      */
     private static final int NONCE_HEX_LENGTH = 32;
     /** 恰好 32 个十六进制字符。格式在**验签之前**检查，见 doFilterInternal 里的说明。 */
@@ -74,16 +64,9 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
     /**
      * 请求体大小上限。
      *
-     * <p>为了算签名，整个请求体必须先读进内存。<b>没有上限的话，
-     * 一个几 GB 的请求体就能把服务的内存吃光</b> —— 而且这发生在认证<b>之前</b>，
-     * 不需要任何凭证。
-     *
-     * <p>这是「为了做安全检查而引入新攻击面」的典型例子：
-     * 加一层防护时要问一句，这层防护本身能不能被用来打我。
-     *
-     * <p><b>而这段注释曾经守着一个结构上不存在的防护</b>（质询扫描 7.9 / 1.5）：
-     * 上限被实现成「读完之后量一下」，而不是「读的过程中的边界」。
-     * 威胁分析是对的，实现顺序让它失效。见下面 doFilterInternal 第 ② 步。
+     * <p>为了算签名，整个请求体必须先读进内存，而且发生在认证<b>之前</b>、不需要任何凭证：
+     * <b>没有上限的话，一个几 GB 的请求体就能把服务的内存吃光</b>。上限必须是<b>读的过程中的边界</b>，
+     * 不能是读完之后量一下（见 doFilterInternal 第 ② 步）。
      */
     private static final int MAX_BODY_BYTES = 1024 * 1024;
 
@@ -101,14 +84,9 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
     }
 
     /**
-     * 只保护 {@code /api/} 开头的路径。
-     *
-     * <p>写法是<b>默认拦截</b>，而不是「列出需要保护的接口」。
-     * 后者每加一个新接口都要记得登记，忘一次就是一个裸奔的接口 —— 而人一定会忘。
-     * 默认拦截忘了配的后果是「接口打不开」，会立刻被发现；
-     * 反过来的后果是「接口没人管」，可能几个月都没人发现。
-     *
-     * <p><b>让失误的方向指向「立刻暴露」，而不是「悄悄地错」。</b>
+     * 只保护 {@code /api/} 开头的路径，写法是<b>默认拦截</b>，而不是「列出需要保护的接口」：
+     * 后者每加一个新接口都要记得登记，忘一次就是一个没人管的接口，可能几个月都没人发现；
+     * 默认拦截忘了配的后果是「接口打不开」，立刻就会被发现。
      */
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
@@ -130,15 +108,10 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
 
         // ② 有界读取：最多读 MAX + 1 字节就停手。
         //
-        // ★ 2026-08-31 之前这里是 StreamUtils.copyToByteArray —— 读到流结束为止 ★
-        // 上面的检查跑在它之后，于是几 GB 的请求体早已进堆，检查永远轮不到。
-        // 实测：对一条永不结束的流，旧代码一路涨到 2 GB 数组上限，
-        // OutOfMemoryError 把整个 JVM 带走——不是「最终会 413」，是进程没了。
+        // 不能先读完再量：那样几 GB 的请求体早已进堆，一条永不结束的流会让 OutOfMemoryError 带走整个 JVM——
         // 而这发生在验签之前（读 body 是验签的前提），不需要任何凭证。
-        //
-        // readNBytes(n) 最多读 n 字节就返回，攻击者第 n+1 个字节之后的内容永远不进堆。
-        // +1 是承重的：readNBytes(MAX) 读满后无从知道后面还有没有，
-        // 只能全部放行——「超过上限的被截断后当合法请求处理」，静默失效。
+        // readNBytes(n) 最多读 n 字节就返回，第 n+1 个字节之后的内容永远不进堆。
+        // +1 是承重的：readNBytes(MAX) 读满后无从知道后面还有没有，只能把截断了的超长请求当合法请求处理——静默失效。
         // 多读一个字节，才分得清「恰好 1 MB」和「超过 1 MB」。
         //
         // 读完必须用 CachedBodyHttpServletRequest 包一层，否则控制器读到的是空流：
@@ -154,15 +127,10 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
 
         String nonce = request.getHeader(HEADER_NONCE);
 
-        // ★ nonce 的格式在验签之前检查（2026-09-09 扫描补丁）★
-        //
-        // 上面 NONCE_HEX_LENGTH 的 javadoc 用「nonce 定长」论证 prehash 无分隔符拼接不会有歧义。
-        // 这个前提必须在**算签名之前**就成立：2026-09-09 之前长度检查排在 authenticate 之后，
-        // 论证的承重墙不在它指的位置——ApiContractTest.nonceLengthIsEnforced 里 4 位 nonce 的签名能验过，
-        // 被拒只是因为后面那条为防 Redis 膨胀写的检查碰巧也管到了它。
-        //
-        // 旧注释担心「认证之前的逻辑都是免费攻击面」。那条理由对碰 Redis 的重放登记成立（所以它仍在验签之后），
-        // 对一个只看请求头的正则不成立：不分配、不落库、不碰任何外部系统，和上面的 Content-Length 检查同一性质。
+        // ★ nonce 的格式在验签之前检查 ★
+        // CP2 规范串靠「每段不含换行」保证无歧义，「nonce 只含十六进制」这个前提必须在**算签名之前**就成立。
+        // 它只看请求头：不分配、不落库、不碰任何外部系统，和上面的 Content-Length 检查同一性质；
+        // 碰 Redis 的重放登记则仍在验签之后（见下）。
         if (nonce == null || !NONCE_PATTERN.matcher(nonce).matches()) {
             unauthorized(response);
             return;
@@ -185,27 +153,21 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
                 return;
             }
             // ★ 所有认证失败给同一个回答 ★
-            // 不能分别回「缺少请求头」「key 不存在」「签名不对」「时间戳过期」——
-            // 那等于告诉攻击者「你猜的 key 是真的，只是签名错了」，可用于枚举；
-            // 「时间戳过期」还会泄露服务器的时钟。
+            // 分别回「缺少请求头」「key 不存在」「签名不对」「时间戳过期」，等于告诉攻击者
+            // 「你猜的 key 是真的，只是签名错了」，可用于枚举；「时间戳过期」还会泄露服务器的时钟。
             unauthorized(response);
             return;
         }
 
         // ★ 认证通过**不**清失败计数 ★
-        // 第一版这里 clearAuthFailures(clientIp)，理由是「正常用户不该被历史失败拖累」。
-        // 那句话只对着诚实客户端说：持有一把合法凭证的攻击者用自己的 key 成功一次，
-        // 就能把同一 IP 上探测别人 key 的失败记录整桶清掉——
-        // 实测 9 坏 + 1 好循环，54 次失败 429×0，设计上限 10，放大约 108 倍。
-        // 固定窗口计数器只该有一条重置路径：TTL 到期。攻击者控制不了时间。
-        // 诚实客户端连续失败 10 次说明签名实现坏了，429 + Retry-After 一分钟是对它最有用的信号。
+        // 否则持有一把合法凭证的攻击者用自己的 key 成功一次，就能把同一 IP 上探测别人 key 的失败记录整桶清掉。
+        // 固定窗口计数器只该有一条重置路径：TTL 到期——攻击者控制不了时间。
+        // 诚实客户端连续失败 10 次说明签名实现坏了，429 + Retry-After 正是对它有用的信号。
 
         // ★ 重放检查放在验签之后 ★
         // 放在之前的话，任何人拿一个瞎编的 nonce 就能往 Redis 里塞垃圾，
         // 这个「保护措施」本身会变成一条不需要凭证的内存耗尽通道。
-        // 放在之后，登记表里只会有**验证过的**请求。
-        // nonce 的长度与字符集已在验签之前由 NONCE_PATTERN 钉死：验签拦不住持有 secret 的人塞 1MB nonce，
-        // 但格式检查拦得住，而且它在算签名之前就把「定长」这个前提立住了。
+        // 放在之后，登记表里只会有**验证过的**请求（长度与字符集已由 NONCE_PATTERN 限定）。
         if (!replayGuard.isFirstUse(apiKey, nonce)) {
             replayed(response);
             return;
@@ -226,30 +188,21 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
     /**
      * 取客户端 IP —— <b>只信 TCP 对端，不解析任何转发头</b>。
      *
-     * <p><b>★ 2026-09-02 之前这里读 X-Forwarded-For 的第一段（质询扫描 8.5）★</b>
-     * 那一段是客户端自己填的：每个请求换一个假 IP，每个都是新桶，
-     * 认证失败限流对攻击者不存在，而且不需要凭证。
-     * 当时注释里的前提有两层错：① 全仓 nginx 只出现在注释里，反代根本不存在；
-     * ② 即使有 nginx，最常见的 {@code $proxy_add_x_forwarded_for} 是<b>追加</b>不是覆写，
-     * 第一段仍是客户端填的——最右边由我方代理写的那一段才是真的。
+     * <p>转发头是客户端自己能填的：读 X-Forwarded-For 的第一段的话，每个请求换一个假 IP 就是一个新桶，
+     * 认证失败限流对攻击者不存在（常见的 {@code $proxy_add_x_forwarded_for} 是<b>追加</b>不是覆写，第一段仍是客户端填的）。
      *
      * <p>「前面有没有代理、信任哪几跳」是基础设施层的知识，不该出现在应用代码里。
-     * 没有代理时 {@code getRemoteAddr()} 就是 TCP 对端，不可伪造。
-     * M6 加 nginx 时配 {@code server.forward-headers-strategy=native} +
-     * {@code server.tomcat.remoteip.internal-proxies}：Tomcat 的 RemoteIpValve 从 XFF
-     * 右侧跳过可信代理、把第一个不可信 IP 写进 getRemoteAddr()——<b>代码一行不动</b>。
-     * 漏配的后果是所有客户端落进 nginx 那一个桶、成批 429，几分钟内就会被发现——
-     * 失误方向朝着立刻暴露，不是静默放行。
+     * 将来前面加反代时配 {@code server.forward-headers-strategy=native} + {@code server.tomcat.remoteip.internal-proxies}：
+     * Tomcat 的 RemoteIpValve 从 XFF 右侧跳过可信代理、把第一个不可信 IP 写进 getRemoteAddr()——<b>代码一行不动</b>。
+     * 漏配的后果是所有客户端落进反代那一个桶、成批 429，很快就会被发现，不是静默放行。
      */
     private String clientIp(HttpServletRequest request) {
         return request.getRemoteAddr();
     }
 
     /**
-     * 路径要连查询串一起签。
-     *
-     * <p>只签路径不签查询串的话，{@code /accounts/2/balance} 的签名
-     * 可以被拿去请求 {@code /accounts/2/balance?debug=true} —— 参数没被保护。
+     * 路径要连查询串一起签：只签路径的话，{@code /api/v1/withdrawals?status=QUEUED} 的签名
+     * 可以被拿去请求 {@code /api/v1/withdrawals?status=FAILED} —— 查询参数没被保护。
      */
     private String fullPath(HttpServletRequest request) {
         String query = request.getQueryString();
@@ -266,8 +219,7 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
     }
 
     /**
-     * 413 也走信封。之前是裸 {@code setStatus} + 空体（质询扫描 6.5）：
-     * 客户端按信封解析会拿到解析异常，多半当传输失败重试一个永远失败的请求。
+     * 413 也走信封：裸状态码 + 空体的话，客户端按信封解析会失败，多半当传输失败去重试一个永远失败的请求。
      */
     private void payloadTooLarge(HttpServletResponse response) throws IOException {
         errors.write(response, HttpStatus.CONTENT_TOO_LARGE,
@@ -282,14 +234,11 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
     /**
      * 重放同样回 401：它和「签名无效」在客户端看来都是「这个请求不能再用了」。
      *
-     * <p>码不同（1002 vs 1001）是为了让客户端知道<b>该怎么办</b> ——
-     * 1002 明确告诉它「换一个新 nonce 重发即可；上一次可能已经成功了，
-     * 保持同一个 clientTransferId 就不会重复扣款」。
+     * <p>码不同（1002 vs 1001）是为了让客户端知道<b>该怎么办</b>：换一个新 nonce 重签后重发即可；
+     * 上一次可能已经成功了，保持同一个幂等键就不会重复执行。
      *
-     * <p><b>已知的一处不理想</b>：很多通用 HTTP 客户端遇到 401 的默认反应是
-     * 「去刷新凭证再重试」，而这里凭证是好的，需要的只是换 nonce 重发。
-     * 保留 401 是因为它确实是「这次认证不被接受」；
-     * 正确的引导靠错误码和文档，不靠状态码。
+     * <p><b>已知的一处不理想</b>：很多通用 HTTP 客户端遇到 401 会去刷新凭证再重试，而这里凭证是好的。
+     * 保留 401 是因为它确实是「这次认证不被接受」；正确的引导靠错误码和文档，不靠状态码。
      */
     private void replayed(HttpServletResponse response) throws IOException {
         errors.write(response, HttpStatus.UNAUTHORIZED,
@@ -297,11 +246,7 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
     }
 
     /**
-     * 429 必须带 {@code Retry-After}。
-     *
-     * <p>不带的话，客户端只知道「被拒了」，不知道该等多久，
-     * 于是它会立刻重试 —— <b>限流反而制造了更多请求</b>。
-     * OWASP REST Security 把 429 单列出来，正是因为它是给机器读的指令。
+     * 429 必须带 {@code Retry-After}：不带的话客户端不知道该等多久，会立刻重试——<b>限流反而制造了更多请求</b>。
      */
     private void tooManyRequests(HttpServletResponse response, long retryAfterSeconds)
             throws IOException {

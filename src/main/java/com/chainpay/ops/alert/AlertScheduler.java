@@ -13,7 +13,7 @@ import org.springframework.boot.health.actuate.endpoint.IndicatedHealthDescripto
 import org.springframework.scheduling.annotation.Scheduled;
 
 /**
- * 定时看一眼 {@code work} 组（索引器 / 热钱包 / 判官 / Redis），变化就叫人（M6-③）。
+ * 定时看一眼 {@code work} 组（索引器 / 入账 / 热钱包 / 判官 / Redis），变化就叫人。
  * 读的是健康端点算出来的同一份结果：探针看到什么，告警就看到什么，没有第二套判定。
  * 首轮延迟给启动留时间（刚起来时 Redis、索引器还没就位，那不是事故）。
  */

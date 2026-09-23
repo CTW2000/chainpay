@@ -20,8 +20,8 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 /**
- * M6-⓪ · 把三个指示器装进健康端点。两个连接池的健康与指标交给 Boot：2026-09-15 起系统池是容器里的 bean，db 组合项与 hikaricp.* 指标自动覆盖它。
- * bean 名去掉 HealthIndicator 后缀就是部件名（indexer / hotWallet / audit），application.yml 的分组按这些名字引用。
+ * 把四个指示器装进健康端点。两个连接池的健康与指标不在这里：系统池也是容器里的 bean，Boot 的 db 组合项与 hikaricp.* 指标自动覆盖它。
+ * bean 名去掉 HealthIndicator 后缀就是部件名（indexer / deposit / hotWallet / audit），application.yml 的分组按这些名字引用。
  * 读状态的每一步都在这里用 lambda 给出，指示器本身只做判定（HealthIndicatorsTest 不起容器就能测）。
  */
 @Configuration

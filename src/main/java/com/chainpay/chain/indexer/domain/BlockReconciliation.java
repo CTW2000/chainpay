@@ -7,7 +7,7 @@ package com.chainpay.chain.indexer.domain;
  * @param found    库里该块 CANONICAL 的行数
  * @param repaired 补录了几条（两个节点都确认有）
  * @param orphaned 标废了几条幻影（两个节点都确认没有）
- * @param disputed 两个节点意见不一、没动的几条
+ * @param disputed 没动、等人看的几条（只有一方点头或内容不同；回执解不了时记 1）
  */
 public record BlockReconciliation(long blockNumber, String blockHash,
                                   int expected, int found, int repaired, int orphaned, int disputed) {

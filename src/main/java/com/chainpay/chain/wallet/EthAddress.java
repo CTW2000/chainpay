@@ -12,17 +12,17 @@ import org.bouncycastle.math.ec.ECPoint;
  * 把小写十六进制地址当 ASCII 再做一次 Keccak-256，第 i 个字符对应哈希的第 i 个半字节，半字节 ≥ 8 就大写。
  * 抄错一位，校验和大概率对不上，钱包会拒绝——所以对外一律给带校验和的写法，存库一律小写。
  *
- * <p>web3j 的 {@code Keys.getAddress / toChecksumAddress} 是同一算法的另一份实现（2026-09-10 扫描核实逐步相同）。
- * 保留自写版而不委托库：{@link Ecdsa#recoverAddress} 走库、这里走自写，测试让两条路互相对拍；
- * 证据是 EIP-55 正文 8 例、ethereum/tests 的 keyaddrtest 与两条路的一致性断言。
+ * <p>web3j 的 {@code Keys.getAddress / toChecksumAddress} 是同一算法的另一份实现。有意保留自写版、不委托库：
+ * {@link Ecdsa#recoverAddress} 走库、这里走自写，测试（Eip155VectorTest、HotWalletSignerTest）让两条路互相对拍，
+ * 合成一份就失去这层对拍。证据是 EIP-55 正文 8 例、ethereum/tests 的 keyaddrtest 与两条路的一致性断言。
  */
 public final class EthAddress {
 
     /**
      * 地址的形状：0x 加 40 位十六进制，十六进制部分大小写不限（大小写就是 EIP-55 的校验和）。
-     * 全项目只在这里写这一份（2026-09-22 收口，此前抄了六份；{@code SingleHomeGuardTest} 守着）：
+     * 全项目只在这里写这一份（{@code SingleHomeGuardTest} 守着）：
      * 请求记录与配置的 {@code @Pattern} 用这个字符串，代码里用 {@link #isWellFormed}。
-     * 存库的写法是另一件事——一律小写，由各表的 CHECK 约束守（{@code ^0x[0-9a-f]{40}$}）。
+     * 存库的写法是另一件事——一律小写，由库里的函数 is_eth_address（V28）经各表的 CHECK 守。
      */
     public static final String SHAPE = "0x[0-9a-fA-F]{40}";
 

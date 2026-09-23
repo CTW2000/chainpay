@@ -7,7 +7,7 @@ import javax.crypto.SecretKeyFactory;
 import javax.crypto.spec.PBEKeySpec;
 
 /**
- * BIP-39：助记词 → 512 位种子。只给 {@link XpubTool} 与测试用，服务端不碰助记词。
+ * BIP-39：助记词 → 512 位种子。只给离线工具（{@link XpubTool} 等）与测试用，服务端不碰助记词。
  *
  * <p>种子 = PBKDF2-HMAC-SHA512(密码 = NFKD(助记词), 盐 = "mnemonic" + NFKD(口令), 2048 轮, 64 字节)。
  * 词是给人抄的，种子才是密钥树的根。这里不做词表校验：算法由规范向量钉住，

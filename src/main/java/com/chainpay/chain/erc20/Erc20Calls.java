@@ -54,9 +54,8 @@ public final class Erc20Calls {
     }
 
     /**
-     * 某个地址在某个块上的余额。这是合约「做」的，不是它「说」的。
-     * 与上面两个不同，这里不降级：revert、形状不对、传输失败都原样抛出——
-     * 回一个「空」或「零」会和真实的零余额混在一起。M3 的调用方要自己接。
+     * 某个地址在某个块上的余额（合约「做」的，不是它「说」的）。
+     * 不降级：revert、形状不对、传输失败都原样抛出，由调用方自己分类。
      */
     public BigInteger balanceOf(String token, String holder, String blockTag) {
         return Abi.decodeUint(chain.call(token, Abi.encodeCall(Abi.BALANCE_OF, holder), blockTag));

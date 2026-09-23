@@ -30,7 +30,7 @@ public class ReconcileRepository {
                 .update();
     }
 
-    /** 有争议（只有一方说有）的块数：等人看的那些。 */
+    /** 有争议的块数（只有一方点头、内容不同或回执解不了）：等人看的那些。 */
     public long disputedBlocks() {
         return jdbc.sql("SELECT COUNT(*) FROM chain_reconcile WHERE disputed > 0").query(Long.class).single();
     }

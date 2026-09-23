@@ -15,7 +15,7 @@ import org.slf4j.LoggerFactory;
 import tools.jackson.databind.ObjectMapper;
 
 /**
- * 告警的出口（M6-③）：一个 HTTP webhook。地址只从环境变量来、按密码对待（很多入站 webhook 的令牌就在 URL 里），日志与描述里只有主机名。
+ * 告警的出口：一个 HTTP webhook。地址只从环境变量来、按密码对待（很多入站 webhook 的令牌就在 URL 里），日志与描述里只有主机名。
  * 没配地址 = 只打 ERROR 日志，且算「送到」，否则策略会每轮重试一个不存在的出口。
  * 四种载荷：GENERIC 结构化 JSON（自己的接收端）、SLACK、DINGTALK、FEISHU 各家入站 webhook 的最小形状——都是协议编码，不带业务。
  */

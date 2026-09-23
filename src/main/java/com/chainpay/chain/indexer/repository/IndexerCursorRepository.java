@@ -9,7 +9,7 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 
 /**
- * 书签的几个操作。SQL 在这里，事务边界在 {@link BlockIndexer} 和 {@link ReorgRecovery}。
+ * 书签的几个操作。SQL 在这里，事务边界在 {@link BlockIndexer} 和 {@link ReorgRecovery} 各自的写入类里。
  *
  * <p>「书签只从期望值出发改」由两道保险共同守着，都在这个类里能看见：
  * {@link #lock} 之后的重读（第一道），和 {@link #advance} / {@link #rewind} 的 WHERE 里带着期望值（第二道）。
@@ -67,9 +67,8 @@ public class IndexerCursorRepository {
     /**
      * 锁住书签这一行并重读。<b>必须在事务里调</b>，锁持有到事务结束。
      *
-     * <p>两个实例同时到这里：后到的等先到的提交，然后读到的已是被推走的书签——
-     * 这就是账本第 ④ 步「锁账户行」的同一堵承重墙：互斥在数据库里发生，
-     * 因为它是所有实例唯一共享的东西。
+     * <p>两个实例同时到这里：后到的等先到的提交，然后读到的已是被推走的书签。
+     * 互斥在数据库里发生，因为它是所有实例唯一共享的东西。
      */
     public IndexerCursor lock(String name) {
         return jdbc.sql("SELECT name, last_block_number, last_block_hash FROM indexer_cursor "
@@ -95,7 +94,7 @@ public class IndexerCursorRepository {
      * 就算调用方算错了范围，也不可能把书签改成别的起点。
      */
     private boolean move(String name, long expectedLast, String expectedHash, long newLast, String newHash) {
-        // 守卫的是「号 + 哈希」：同一个号在重组后可以对应另一条分支，只比号等于把书签的身份定义成了块号（2026-09-09 扫描补丁）
+        // 守卫的是「号 + 哈希」：同一个号在重组后可以对应另一条分支，只比号等于把书签的身份定义成了块号
         return jdbc.sql("""
                         UPDATE indexer_cursor
                         SET last_block_number = :newLast, last_block_hash = :newHash, updated_at = now()

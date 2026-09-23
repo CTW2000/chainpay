@@ -10,7 +10,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * {@link ReorgRecovery} 的事务那一段（2026-09-15 由手工模板改为注解，用户选）：锁书签、核对号和哈希、标废、退书签、记审计。
+ * {@link ReorgRecovery} 的事务那一段：锁书签、核对号和哈希、标废、退书签、记审计。
  * 这几件事必须同生同死——崩在「标废」和「退书签」之间，重放永远不会发生，那几笔转账就静默丢了（ReorgRecoveryTest 钉住）。
  * 找祖先要问节点，全在 ReorgRecovery；这里只有数据库。类与方法都不能加 final。
  */

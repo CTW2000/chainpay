@@ -13,7 +13,7 @@ import java.util.List;
 /**
  * 重组恢复：找共同祖先、标废、退书签、记审计。之后索引器从祖先之后正常重放。
  *
- * <p><b>我们手里知道哈希的块只有三类</b>：书签那一块、有日志的块、③ 存下的 finalized 头。
+ * <p><b>我们手里知道哈希的块只有三类</b>：书签那一块、有日志的块、chain_head 里存下的 finalized 头。
  * 中间没有日志的块，我们不知道它们的哈希——所以祖先是「能证明和链上一致的最高一块」，
  * 可能比真正的分叉点低。多退不伤（重放是幂等的），少退要命（会留下一行属于被丢弃区块的记录）。
  *
@@ -24,9 +24,7 @@ import java.util.List;
  * <p><b>地板是 finalized。</b>连它都对不上，不是重组，是 {@link FinalityViolationException}：停下叫人。
  * 不用 Envio 那种 200 块的魔法数字，以太坊 PoS 把这个数字交给了协议。
  *
- * <p>形状和 {@link BlockIndexer} 一样：网络在事务外，事务里锁、核对、写。事务那一段在 {@link ReorgWriter}。
- * 标废、退书签、记审计必须同生同死——崩在「标废」和「退书签」之间，重放永远不会发生，
- * 那几笔转账就静默丢了。
+ * <p>形状和 {@link BlockIndexer} 一样：网络在事务外；事务那一段（锁、核对、标废、退书签、记审计，同生同死）在 {@link ReorgWriter}。
  */
 public final class ReorgRecovery {
 
@@ -60,7 +58,7 @@ public final class ReorgRecovery {
                     + " 的哈希仍与链上一致，只是下一块接不上：节点前后不一致，稍后再试");
         }
 
-        // ② 地板：③ 存下的 finalized 头
+        // ② 地板：chain_head 里存下的 finalized 头
         HeadRef finalized = heads.find()
                 .orElseThrow(() -> new IllegalStateException("没有链头记录，无法确定回滚的地板：先刷新链头"))
                 .finalized();

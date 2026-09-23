@@ -21,15 +21,14 @@ import org.springframework.transaction.annotation.Transactional;
  * <p>整个过程在调用方的事务里（REQUIRED）：HTTP 调用方在 asMerchant 的事务中，RLS 变量已经设好；
  * 地址派生是纯计算，没有网络 IO，所以放在事务里不违反「网络在事务外」。
  *
- * <p><b>事务靠 Spring 代理生效</b>（2026-09-14 由手工传入 TransactionTemplate 改为 {@code @Transactional}，见 CLAUDE.md「事务的两种写法」）。
- * 代价是三条纪律，违反时响的程度各不相同：
+ * <p><b>事务靠 Spring 代理生效</b>（见 CLAUDE.md「事务的两种写法」），代价是三条纪律，违反时响的程度各不相同：
  * <ul>
  *   <li>本类与 {@link #allocate} 都不能加 final：final 类生成不了代理，启动就失败；final 方法代理拦不住，启动只打一行 WARN，
  *       调用时方法体跑在代理对象上、字段全是 null，第一行就空指针，而且不在事务里；</li>
  *   <li>本类里的其它方法不能通过 this 调 {@link #allocate}：自己调自己不经过代理，<b>不报错、悄悄没有事务</b>；</li>
  *   <li>在容器外 new 出来的实例没有代理：同样<b>不报错、悄悄没有事务</b>，测试里这样用时，事务必须由外层（如 asMerchant）提供。</li>
  * </ul>
- * 删掉注解本身也是静默的：今天唯一的调用方外面包着 asMerchant 的事务，其余测试全绿（2026-09-14 拆墙实测）。
+ * 删掉注解本身也是静默的（唯一的调用方外面包着 asMerchant 的事务），
  * 所以「容器给的是代理、方法带 REQUIRED、类与方法都不是 final」由 DepositAddressServiceTest 的守卫测试钉住。
  */
 public class DepositAddressService {

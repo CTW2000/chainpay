@@ -5,7 +5,7 @@ package com.chainpay.chain.wallet;
  *
  * <p>深度不是 3 就拒绝：配了根 xpub 或找零层 xpub，派出来的地址没有任何钱包会持有它的私钥，打进去的钱永远丢失。
  * 深度只能证明「是第三层」，证明不了「是 44'/60'/0' 这一支」（硬化路径从 xpub 推不回来），
- * 那一环靠工具打印的前三个地址与 MetaMask 对照（M3-before 第 30 问）。
+ * 那一环靠工具打印的前三个地址与 MetaMask 对照。
  */
 public final class DepositAddressDeriver {
 

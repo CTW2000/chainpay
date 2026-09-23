@@ -8,7 +8,7 @@ import java.util.HexFormat;
 /**
  * 我们用到的那一点 ABI：函数选择器、地址参数编码、uint 与 string 的返回值解码。
  *
- * <p>选择器 = keccak256(函数签名) 的前 4 个字节。四个值是 ERC-20 世界里人人可查的常量
+ * <p>选择器 = keccak256(函数签名) 的前 4 个字节。这几个值是 ERC-20 世界里人人可查的常量
  * （4byte.directory / EIP-20），测试里当已知答案钉住。
  *
  * <p>编码规则（ABI 规范）：每个静态参数占 32 字节，地址左补零；动态类型 string 先给一个字的偏移量（32），
@@ -48,7 +48,7 @@ public final class Abi {
         return new BigInteger(body, 16);
     }
 
-    /** transfer(address,uint256) 的 calldata：选择子 + 左补零的地址 + 左补零的金额。M4-② 出金唯一的写合约调用。 */
+    /** transfer(address,uint256) 的 calldata：选择器 + 左补零的地址 + 左补零的金额。出金唯一的写合约调用。 */
     public static String transfer(String to, BigInteger rawValue) {
         return encodeCall(TRANSFER, to) + encodeUint(rawValue).substring(2);
     }
@@ -58,7 +58,7 @@ public final class Abi {
      *
      * <p>这两个字是<b>对方给的</b>。一个 32 字节的字能表示的数远大于 int / long，先收窄再检查等于没检查：
      * 2^31 让 intValueExact 抛 ArithmeticException，2^30 让 length * 2 溢出成负数、绕过边界检查后在 substring 里炸。
-     * 两者都不是 IllegalArgumentException，调用方接不住（2026-09-03 两位评审各自抓到）。
+     * 两者都不是 IllegalArgumentException，调用方接不住。
      * 所以先在 BigInteger 上和实际给的字节数比，比得过再收窄——收窄之后的数必然装得下。
      */
     public static String decodeString(String hex) {

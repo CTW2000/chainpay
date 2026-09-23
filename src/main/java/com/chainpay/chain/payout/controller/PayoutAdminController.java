@@ -19,7 +19,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-/** 管理侧（回环 + 管理员令牌，同其它 /admin 接口）：核准、拒绝、限额。改的是 payout 的状态，只有系统身份能改。 */
+/** 管理侧：待核准列表、核准、拒绝、限额。改的是 payout 的状态，只有系统身份能改：由服务层去做，控制器不碰系统身份。 */
 @RestController
 @RequestMapping("/admin/v1")
 public class PayoutAdminController {

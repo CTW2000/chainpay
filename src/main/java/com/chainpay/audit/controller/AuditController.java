@@ -17,7 +17,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * 管理侧（回环 + 令牌）：上次对账的结论与差异；「没跑」= stale。POST run 立刻跑一轮（演练与人工核对用）。
+ * 管理侧：上次对账的结论与差异；「没跑」= stale。POST run 立刻跑一轮（演练与人工核对用）。
  * 对账只在设了主节点时装配（{@code Optional}）：没装配的部署回 404，而不是假装跑过。
  */
 @RestController

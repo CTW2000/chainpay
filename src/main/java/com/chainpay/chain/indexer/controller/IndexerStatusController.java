@@ -23,7 +23,7 @@ import org.springframework.web.bind.annotation.RestController;
  * 只读的索引器状态：给运维一个能问的地方。
  *
  * <p>「停下叫人」需要的是<b>状态</b>而不是<b>事件</b>：一行 ERROR 响一次就过去了，这个接口任何时候问都能答。
- * 挂在 {@code /admin/} 前缀下，和其它管理接口同一道门（回环地址 + 管理员令牌）；它不改任何东西。
+ * 挂在 {@code /admin/} 前缀下，和其它管理接口同一道门（回环地址、不经代理、管理员会话）；它不改任何东西。
  *
  * <p>两个视角并列：{@code status} 是<b>这个进程</b>的视角（没配节点就是 NOT_CONFIGURED），
  * {@code persistedStatus} 是<b>状态表</b>的视角（上一个进程停下的原因，重启也还在）。

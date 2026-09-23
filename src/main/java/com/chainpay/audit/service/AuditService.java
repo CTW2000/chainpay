@@ -34,7 +34,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * 对账（M5）：站在两个节点都认的 finalized 块 F 上，把链上事实和库内记录逐项比对。只读、只报，不改任何业务表。
+ * 对账：站在两个节点都认的 finalized 块 F 上，把链上事实和库内记录逐项比对。只读、只报，不改任何业务表。
  * <ol>
  *   <li>脚下的块 F：库里的 finalized 与索引书签中较小的那个（索引器追赶时证据只到书签），再向两个节点各取一次 F 的块头，哈希不等于库里的就不给结论（FAILED）。</li>
  *   <li>ADDRESS_BALANCE：每个收款地址与热钱包，链上 balanceOf(F)（两节点都问，不一致 = DISPUTED）vs 库里主分支日志的转入减转出。</li>
@@ -123,7 +123,7 @@ public final class AuditService {
             holders.addAll(hotWallets);
             for (String holder : holders) {
                 String role = hotWallets.contains(holder) ? "热钱包" : "收款地址";
-                BigInteger expected = system.inTransaction(s -> new DepositRepository(s.jdbc()).netTransfersUpTo(holder, t.address(), f));   // 与 M3-③ 入账核余额同一条 SQL
+                BigInteger expected = system.inTransaction(s -> new DepositRepository(s.jdbc()).netTransfersUpTo(holder, t.address(), f));   // 与入账核余额同一条 SQL
                 BigInteger onPrimary = primaryCalls.balanceOf(t.address(), holder, tag);
                 BigInteger onAudit = auditCalls.balanceOf(t.address(), holder, tag);
                 String subject = role + " " + holder + " · " + t.symbol();
@@ -219,7 +219,7 @@ public final class AuditService {
             BigInteger mirror = read(r -> r.mirrorAsOf(t.address(), f));                 // 截至 F：入账 − 结算，和链上余额同一时刻
             BigInteger uncredited = read(r -> r.uncreditedInflows(t.address(), f));
             BigInteger unsettled = read(r -> r.unsettledOutflows(t.address(), f));
-            BigInteger fundings = read(r -> r.registeredFundings(t.address(), f));     // M6-②：运营签字认过的外部注资
+            BigInteger fundings = read(r -> r.registeredFundings(t.address(), f));     // 运营登记过的外部注资
             BigInteger expected = mirror.add(uncredited).subtract(unsettled).add(fundings);
             BigInteger e = chainCustody.subtract(expected);
             if (e.signum() != 0) {
