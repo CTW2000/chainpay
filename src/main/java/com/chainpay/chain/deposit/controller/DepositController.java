@@ -14,7 +14,6 @@ import com.chainpay.security.filter.ApiKeyAuthFilter;
 import com.chainpay.security.service.TenantScope;
 import java.time.Instant;
 import java.util.List;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestAttribute;
@@ -32,11 +31,9 @@ import org.springframework.web.bind.annotation.RestController;
  *
  * <p>对外的规矩：金额一律字符串；地址给 EIP-55 写法（存库是小写）；HELD 只露状态不露原因（原因里有节点与哈希细节）；
  * 请求体只有 token 一个字段，地址、序号都由服务端派生（Mass Assignment）。
- * 设了 CHAINPAY_DEPOSIT_XPUB 才装配，没设时这些路径是 404。
  */
 @RestController
 @RequestMapping("/api/v1")
-@ConditionalOnProperty("chainpay.deposit.xpub")
 public class DepositController {
 
     public record CreateAddressRequest(@NotBlank String token) {}

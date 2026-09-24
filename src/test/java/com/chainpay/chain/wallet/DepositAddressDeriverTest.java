@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 
 /**
  * 端到端的已知答案：Hardhat 的公开默认助记词，路径 m/44'/60'/0'/0/i（v2.hardhat.org 参考文档）。
@@ -55,5 +56,34 @@ class DepositAddressDeriverTest {
 
         assertThatThrownBy(() -> new DepositAddressDeriver(accountXpub).addressAt(ExtendedPublicKey.HARDENED))
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    @DisplayName("★ 没配 xpub（null、空、全空白）：拒绝，报错点名 CHAINPAY_DEPOSIT_XPUB 与得到它的工具——收款地址必需，不能半装配")
+    void refusesAMissingXpubAndSaysWhereToGetIt() {
+        for (String missing : new String[] {null, "", "   "}) {
+            assertThatThrownBy(() -> new DepositAddressDeriver(missing))
+                    .as("xpub = [%s]", missing)
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("CHAINPAY_DEPOSIT_XPUB")
+                    .hasMessageContaining("tools/xpub.sh");
+        }
+    }
+
+    @Test
+    @DisplayName("★ 容器按 chainpay.deposit.xpub 造它：没配、留空都起不来（报错点名变量）；配了就是一个 bean——xpub 必填，没有「不配就不装配」")
+    void theContainerBuildsItFromTheConfiguredXpubOrRefusesToStart() {
+        String accountXpub = ExtendedPrivateKey.fromSeed(Bip39.seed(HARDHAT_MNEMONIC, ""))
+                .derivePath("m/44'/60'/0'").neuter().serialize();
+        ApplicationContextRunner runner = new ApplicationContextRunner().withBean(DepositAddressDeriver.class);
+
+        runner.run(context -> assertThat(context).hasFailed()
+                .getFailure().rootCause().hasMessageContaining("CHAINPAY_DEPOSIT_XPUB"));
+        runner.withPropertyValues("chainpay.deposit.xpub=").run(context -> assertThat(context).hasFailed()
+                .getFailure().rootCause().hasMessageContaining("CHAINPAY_DEPOSIT_XPUB"));
+        runner.withPropertyValues("chainpay.deposit.xpub=" + accountXpub).run(context -> {
+            assertThat(context).hasSingleBean(DepositAddressDeriver.class);
+            assertThat(context.getBean(DepositAddressDeriver.class).addressAt(0)).isEqualTo(ACCOUNT_0);
+        });
     }
 }

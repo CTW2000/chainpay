@@ -8,7 +8,10 @@ import com.chainpay.chain.indexer.repository.ChainTokenRepository;
 import com.chainpay.chain.wallet.DepositAddressDeriver;
 import com.chainpay.chain.wallet.EthAddress;
 import java.util.Optional;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.dao.DuplicateKeyException;
+import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
@@ -30,8 +33,13 @@ import org.springframework.transaction.annotation.Transactional;
  * </ul>
  * 删掉注解本身也是静默的（唯一的调用方外面包着 asMerchant 的事务），
  * 所以「容器给的是代理、方法带 REQUIRED、类与方法都不是 final」由 DepositAddressServiceTest 的守卫测试钉住。
+ *
+ * <p>启动时打一行 xpub 指纹与 0/0 地址：派生器只能核对「是第三层」，核对不了「是你的钱包」，那一环靠运营对照钱包的第一个账户。
  */
+@Service
 public class DepositAddressService {
+
+    private static final Logger log = LoggerFactory.getLogger(DepositAddressService.class);
 
     /** 代币不在白名单里或已停用：对外是 2008，换个代币再来。 */
     public static class UnsupportedTokenException extends RuntimeException {
@@ -48,6 +56,8 @@ public class DepositAddressService {
         this.deriver = deriver;
         this.addresses = addresses;
         this.tokens = tokens;
+        log.info("收款地址派生：账户层 xpub 指纹 {}，m/44'/60'/0'/0/0 = {}（应等于钱包的第一个账户）",
+                deriver.accountFingerprint(), deriver.addressAt(0));
     }
 
     @Transactional

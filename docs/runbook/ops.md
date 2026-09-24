@@ -28,7 +28,7 @@ HTTP：UP / DEGRADED / UNKNOWN = 200；DOWN = 503。`DEGRADED` 是本项目多�
 | `indexer` | UNKNOWN | 没配主节点 | 没事，除非它本该索引 |
 | `indexer` | DEGRADED | 连续瞬时失败（节点在抖） | `tools/admin.sh GET /admin/v1/indexer`；恢复后自己回 RUNNING |
 | `indexer` | DOWN | HALTED，`reason` 里是原因 | 按 `chain-indexer.md` 处理，处理完才能复位 |
-| `deposit` | UNKNOWN | 没配 xpub 或主节点 | 没事，除非它本该入账 |
+| `deposit` | UNKNOWN | 没配主节点 | 没事，除非它本该入账 |
 | `deposit` | DEGRADED | 连续 5 轮没跑完（节点答不上来、库在抖） | 看 `reason`；恢复后自己回 UP |
 | `deposit` | DOWN | 上一轮 HALTED：节点拒绝了凭证 | 换 RPC key 后重启，见 `deposit.md` |
 | `hotWallet` | DOWN | 钱包 HALTED（编号被别处用掉之类） | 按 `payout.md`「钱包 HALTED」 |

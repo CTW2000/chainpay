@@ -13,16 +13,15 @@ import org.springframework.boot.context.properties.bind.Binder;
 import org.springframework.boot.context.properties.source.MapConfigurationPropertySource;
 
 /** 配置键的名字与默认值：键名写错不会报错，只会静默用默认值，所以钉住它。 */
-@DisplayName("收款模块的配置")
+@DisplayName("入账任务的配置")
 class DepositPropertiesTest {
 
     @Test
     @DisplayName("★ finalized 容忍块数绑在 chainpay.deposit.finality-tolerance-blocks 上，不设时是 64")
     void bindsFinalityToleranceBlocks() {
-        assertThat(bind(Map.of("chainpay.deposit.xpub", "xpub-占位")).finalityToleranceBlocks())
+        assertThat(bind(Map.of()).finalityToleranceBlocks())
                 .as("默认两个 epoch").isEqualTo(64);
-        assertThat(bind(Map.of("chainpay.deposit.xpub", "xpub-占位",
-                "chainpay.deposit.finality-tolerance-blocks", "7")).finalityToleranceBlocks())
+        assertThat(bind(Map.of("chainpay.deposit.finality-tolerance-blocks", "7")).finalityToleranceBlocks())
                 .as("配了就用配的").isEqualTo(7);
     }
 
@@ -38,6 +37,6 @@ class DepositPropertiesTest {
 
     private static DepositProperties bind(Map<String, Object> properties) {
         return new Binder(new MapConfigurationPropertySource(properties))
-                .bind("chainpay.deposit", DepositProperties.class).get();
+                .bindOrCreate("chainpay.deposit", DepositProperties.class);
     }
 }

@@ -211,7 +211,7 @@ SELECT * FROM ledger_judge();   -- 以 chainpay_system 身份跑；必须 0 行
 
 - **收款地址是租户边界**：`deposit_address` 有 RLS；一户一币一址由 `UNIQUE (merchant_id, token)` 裁决，并发申请输的一方读回赢家的地址；
   序号来自序列、`UNIQUE (derivation_index)` 保证不重用；`address` 主键冲突不是并发，是配置错（序号重用或 xpub 配错），报出来不猜。
-  设了 `CHAINPAY_DEPOSIT_XPUB` 才装配；启动日志打出 xpub 指纹与 0/0 地址供对照，xpub 本身不进日志。
+  xpub 必填（`CHAINPAY_DEPOSIT_XPUB`，没配或留空就拒绝启动，报错点名变量）；派生器与两个收款服务靠组件扫描注册，没有「不配就不装配」。启动日志打出 xpub 指纹与 0/0 地址供对照，xpub 本身不进日志。
 - **入账**（`DepositPoster`）只取 FINAL、收款方是 ACTIVE 收款地址、代币 ACTIVE、还没有 `deposit` 行的日志；记给谁由收款地址那一行推导，不接受调用方递进来的商户 id。三步：
   1. **核对在事务外**：两个节点各取该块头，哈希等于库里的、块号 ≤ 各自的 finalized。finalized 还没到、差距在 `finality-tolerance-blocks`（64）以内 = 这一轮延后、不占坑；超出 = HELD_NODE_DISAGREE。
   2. **判决是纯计算**：零值 IGNORED_ZERO；装不下 HELD_OVERFLOW；低于 `min_deposit` 的 REJECTED_DUST。
@@ -220,7 +220,7 @@ SELECT * FROM ledger_judge();   -- 以 chainpay_system 身份跑；必须 0 行
 - 失败分三种：拿不到回答 → 这一轮提前结束；`RpcAuthException` → 这一轮 HALTED，调度器关闸门、之后不再碰节点，换 key 后重启才再试；
   余额问不到时按 `RpcFailure` 分类——合约 revert 当场 HELD，不认识的错误码只把这一笔延后、连续 5 轮才 HELD。
 - HELD 永不自动变 CREDITED、不卡队列；人复核后把行改成 APPROVED 并写明谁、为什么，任务下一轮重新占坑记账。**人永远不手工碰账本表。** 每种状态见 `docs/runbook/deposit.md`。
-- 商户接口：分配一户一币一址且幂等，地址给 EIP-55 写法；查询整段在 `asMerchant` 里；没有「按 id 查一条」，「不存在」与「不是你的」无从区分；HELD 只露状态不露原因；没配 xpub 时这些路径是 404。
+- 商户接口：分配一户一币一址且幂等，地址给 EIP-55 写法；查询整段在 `asMerchant` 里；没有「按 id 查一条」，「不存在」与「不是你的」无从区分；HELD 只露状态不露原因。
 
 ### 付款
 

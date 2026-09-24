@@ -33,7 +33,7 @@ public final class DepositHealthIndicator implements HealthIndicator {
     public Health health() {
         if (!assembled) {
             return Health.unknown()
-                    .withDetail("reason", "没有配置 CHAINPAY_DEPOSIT_XPUB 或 CHAINPAY_CHAIN_RPC_URL：这个进程不入账")
+                    .withDetail("reason", "没有配置 CHAINPAY_CHAIN_RPC_URL：这个进程不入账")
                     .build();
         }
         Optional<PostingResult> last = lastTick.get();

@@ -145,6 +145,7 @@ class DeployScriptTest {
                 CHAINPAY_FLYWAY_PASSWORD=fake-flyway-password-0001
                 CHAINPAY_SYSTEM_DB_PASSWORD=fake-system-password-0001
                 CHAINPAY_SECRET_KEY=%s
+                CHAINPAY_DEPOSIT_XPUB=xpub-fake-0001
                 """.formatted(Base64.getEncoder().encodeToString(new byte[32])));
         Run r = bash("""
                 check_config
@@ -165,6 +166,7 @@ class DeployScriptTest {
         Run missing = bash("check_config", "CHAINPAY_ENV_FILE", env.toString());
         assertThat(missing.exit()).isNotZero();
         assertThat(missing.out()).contains("✗ CHAINPAY_FLYWAY_PASSWORD 没设").doesNotContain("fake-db-password-0001");
+        assertThat(missing.out()).as("收款 xpub 必填：应用没它起不来，部署前就该拦下").contains("✗ CHAINPAY_DEPOSIT_XPUB 没设");
 
         Run absent = bash("check_config", "CHAINPAY_ENV_FILE", dir.resolve("nope.env").toString());
         assertThat(absent.exit()).isNotZero();

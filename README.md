@@ -56,8 +56,8 @@ SPRING_PROFILES_ACTIVE=worker mvn spring-boot:run
 ```
 
 - **必须给角色**：没有 `SPRING_PROFILES_ACTIVE`，或给了 web 却带着 worker 的凭证，应用拒绝启动并点名变量。
-- 四个变量故意没有默认值：`CHAINPAY_DB_PASSWORD`、`CHAINPAY_FLYWAY_PASSWORD`、`CHAINPAY_SYSTEM_DB_PASSWORD`、`CHAINPAY_SECRET_KEY`。配错了就起不来，好过带着默认密钥上生产。
-- 节点地址、xpub、热钱包私钥不设时，对应的模块整个不装配，应用照常启动。
+- 五个变量故意没有默认值：`CHAINPAY_DB_PASSWORD`、`CHAINPAY_FLYWAY_PASSWORD`、`CHAINPAY_SYSTEM_DB_PASSWORD`、`CHAINPAY_SECRET_KEY`、`CHAINPAY_DEPOSIT_XPUB`（收款地址从它派生）。配错了就起不来，好过带着默认密钥上生产。
+- 节点地址、热钱包私钥不设时，对应的模块整个不装配，应用照常启动。
 - 两个数据库角色（`chainpay_app` 受行级安全约束、`chainpay_system` 给系统任务）由 `db/init/01-roles.sql` 在数据卷**首次建库**时创建。
 
 ## 密钥与工具

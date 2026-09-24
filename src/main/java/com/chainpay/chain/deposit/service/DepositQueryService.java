@@ -12,11 +12,13 @@ import com.chainpay.ledger.service.LedgerAmounts;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.util.List;
+import org.springframework.stereotype.Service;
 
 /**
  * 商户视角的入账查询。必须在 asMerchant 作用域里调（控制器负责）。
  * 在路上的钱的金额在这里换算：链上只有原始单位，账本单位只经 {@link TokenAmounts#toLedger}，装不下就给 null（原始单位照给）。
  */
+@Service
 public final class DepositQueryService {
 
     /** available = 账本余额；pending = 在路上的合计（换算不了时为 null）。 */
