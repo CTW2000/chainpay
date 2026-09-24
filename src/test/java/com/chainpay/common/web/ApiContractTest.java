@@ -29,7 +29,7 @@ import org.springframework.boot.test.web.server.LocalServerPort;
  * 所以它们的形状必须被测试钉死，而不是靠"大家记得照着写"。
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
-@DisplayName("M1.5 · 对外契约")
+@DisplayName("对外契约")
 class ApiContractTest extends AbstractPostgresTest {
 
     @LocalServerPort
@@ -151,8 +151,8 @@ class ApiContractTest extends AbstractPostgresTest {
     // ==================================================================
 
     @Test
-    @DisplayName("★ 段位与可重试性必须一致 —— 只有 5xxx 可以原样重试")
-    void onlyTheRateLimitSegmentIsRetryable() {
+    @DisplayName("★ 段位与可重试性必须一致 —— 只有 5xxx（限流）与 9xxx（服务端内部错误）可以原样重试")
+    void onlyRateLimitAndServerErrorsAreRetryable() {
         // 客户端靠「第一位数字就是重试策略」处理它没见过的新错误码；约定一旦被破坏，
         // 客户端会以错误的方式重试，而我们收不到任何信号。这条让加错码的那一刻就变红。
         for (ErrorCode code : EnumSet.allOf(ErrorCode.class)) {
@@ -301,12 +301,12 @@ class ApiContractTest extends AbstractPostgresTest {
                 SignedRequests.sign(secret, ts, notHex, "GET", path, ""));
 
         assertThat(response.statusCode())
-                .as("过滤器 javadoc 用「nonce 定长」论证拼接无歧义，这个前提必须在验签之前被强制，而不是验签之后")
+                .as("CP2 靠「每段不含换行」让拼接无歧义：「nonce 只含十六进制」这个前提必须在验签之前强制，而不是之后")
                 .isEqualTo(401);
     }
 
     @Test
-    @DisplayName("★ 请求体字段为 null（amount / code）—— 400 / 2001，不是 500：500 会被客户端当成「稍后重试」")
+    @DisplayName("★ 请求体字段为 null 或整个缺席（address）—— 400 / 2001，不是 500：500 会被客户端当成「稍后重试」")
     void nullFieldsAreBadRequestsNotServerErrors() {
         var nullAddress = signedPost(TARGET, "{\"address\":null,\"label\":\"x\"}");
         assertThat(nullAddress.statusCode()).as(nullAddress.body()).isEqualTo(400);
@@ -328,7 +328,7 @@ class ApiContractTest extends AbstractPostgresTest {
     }
 
     @Test
-    @DisplayName("★ nonce 长度必须固定 —— 变长会让签名拼接产生歧义，超长会被用来打 Redis")
+    @DisplayName("★ nonce 长度必须固定 —— 超长会被用来打 Redis；定长让重放键的大小可预期")
     void nonceLengthIsEnforced() {
         // 上限是承重的：不限长的话，每个请求塞 1MB nonce，Redis 内存几分钟被吃光。
         // 定长让重放键的大小可预期；拼接的唯一性由 CP2 的换行分隔保证，不靠 nonce 定长
@@ -395,7 +395,7 @@ class ApiContractTest extends AbstractPostgresTest {
     }
 
     @Test
-    @DisplayName("★ 一百万位的普通写法 —— 在解析之前就 400 / 2001（此前光 new BigDecimal 就要 11 秒）")
+    @DisplayName("★ 一百万位的普通写法 —— 在解析之前就 400 / 2001（光 new BigDecimal 就要 11 秒）")
     void aMillionDigitAmountIsRejectedBeforeParsing() {
         // 请求体上限是 1 MB，这个金额刚好塞得进去。它是合法的普通写法，只加「写法」规则挡不住它，
         // 挡住它的是正则里的长度上限——正则在解析之前跑，匹配到上限之后就失败，不看剩下的。
@@ -483,14 +483,6 @@ class ApiContractTest extends AbstractPostgresTest {
             builder.POST(HttpRequest.BodyPublishers.ofString(body));
         }
         return send(builder);
-    }
-
-    /**
-     * 把每一<b>段</b>连续数字换成一个 #，比较两个响应「除了调用方自己传的 id 之外是否完全一样」。
-     * 按段不按位：按位的话 id 5 与 999999 长度不同，会误判成两种响应。
-     */
-    private static String digitsMasked(String text) {
-        return text.replaceAll("\\d+", "#");
     }
 
     private HttpResponse<String> send(HttpRequest.Builder builder) {

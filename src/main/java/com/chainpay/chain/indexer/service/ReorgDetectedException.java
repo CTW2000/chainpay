@@ -14,7 +14,7 @@ public class ReorgDetectedException extends RuntimeException {
 
     public ReorgDetectedException(long blockNumber, String expectedParentHash, String actualParentHash) {
         super("区块 " + blockNumber + " 的 parentHash 与书签不符：书签 " + expectedParentHash
-                + "，链上 " + actualParentHash + "。链已重组，索引器停下等待 M2-④ 的回滚");
+                + "，链上 " + actualParentHash + "。链在书签处或更深被重组，先回滚（ReorgRecovery）再往前索引");
         this.blockNumber = blockNumber;
         this.expectedParentHash = expectedParentHash;
         this.actualParentHash = actualParentHash;

@@ -2,7 +2,6 @@ package com.chainpay.ledger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.chainpay.ledger.service.LedgerService;
 import com.chainpay.ledger.service.LedgerService.TransferCode;
 import com.chainpay.ledger.service.LedgerService.TransferCommand;
 import com.chainpay.support.AbstractPostgresTest;
@@ -12,12 +11,11 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
 
 /**
  * 账本核心契约的三个判官：不变量（账本平、余额对、失败不留痕）、幂等（同一个键只记一笔）、并发（不能透支）。
  */
-@DisplayName("M0 · 账本核心契约")
+@DisplayName("账本核心契约")
 class LedgerInvariantTest extends AbstractPostgresTest {
 
     private static final String USDT = "USDT";

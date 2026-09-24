@@ -32,7 +32,7 @@ import org.junit.jupiter.api.Test;
  * </ul>
  * 三份各写各的，拼法迟早对不上：写在名单上却从不触发的规矩和没有一样，而且不会有任何报错。
  */
-@DisplayName("进程拆分 ① · 变量清单：每个变量都有归属，密钥都在扫描名单上，禁用名单与清单一致")
+@DisplayName("变量清单：每个变量都有归属，密钥都在扫描名单上，禁用名单与清单一致")
 class EnvInventoryTest {
 
     /** 一个变量归谁。secret：镜像扫描要按值查它；web / worker：这个常驻进程能不能拿到它。 */

@@ -16,7 +16,6 @@ import com.chainpay.chain.indexer.service.ReconcileWriter;
 import com.chainpay.chain.indexer.service.ReorgRecovery;
 import com.chainpay.chain.indexer.service.ReorgWriter;
 import com.chainpay.chain.indexer.service.TokenRegistry;
-import com.chainpay.chain.rpc.ChainReader;
 import com.chainpay.chain.rpc.EthRpc;
 import com.chainpay.chain.rpc.JsonRpcClient;
 import com.chainpay.chain.rpc.RpcEndpoint;

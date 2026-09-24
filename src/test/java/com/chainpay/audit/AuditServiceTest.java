@@ -25,7 +25,7 @@ import org.springframework.boot.test.context.SpringBootTest;
  * 钱从真实的入账路径进来（索引 → FINAL → 入账），然后往库里或链上动手脚，看哪条检查响。
  */
 @SpringBootTest
-@DisplayName("M5 · 对账：三种差异都要浮出来，没跑完也要能看出来")
+@DisplayName("对账：三种差异都要浮出来，没跑完也要能看出来")
 class AuditServiceTest extends AbstractDepositPostingTest {
 
     static final String HOT = "0x3c44cdddb6a900fa2b585dd299e03d12fa4293bc";          // Hardhat #2：本测试里的热钱包
@@ -54,7 +54,7 @@ class AuditServiceTest extends AbstractDepositPostingTest {
     }
 
     @Test
-    @DisplayName("★ 外部注资：登记前是 CUSTODY_TOTAL 的「链上多」；登记后等式平了 → OK（M6-②）")
+    @DisplayName("★ 外部注资：登记前是 CUSTODY_TOTAL 的「链上多」；登记后等式平了 → OK")
     void externalFundingIsAFindingUntilRegistered() {
         chain.addTransfer(LINK, 30, ALICE, HOT, ONE_LINK, FUNDING_TX);            // 运营往热钱包充了 1
         fundedAndPosted();

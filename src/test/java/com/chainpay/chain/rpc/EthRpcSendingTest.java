@@ -22,7 +22,7 @@ import tools.jackson.databind.node.ObjectNode;
  * 发送与追踪用到的节点方法的翻译层。这里的响应不是真实录制，是按 JSON-RPC 规范的形状手写的。
  * 测的是：参数怎么发出去、十六进制怎么读回来、错误怎么翻译。
  */
-@DisplayName("M4-② · EthRpc 翻译层：计数、估 gas、费率、广播、按哈希查")
+@DisplayName("EthRpc 翻译层：计数、估 gas、费率、广播、按哈希查")
 class EthRpcSendingTest {
 
     static final String HOT = "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266";

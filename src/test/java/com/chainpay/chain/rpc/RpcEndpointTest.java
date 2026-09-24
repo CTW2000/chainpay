@@ -12,7 +12,7 @@ import org.junit.jupiter.api.Test;
  * 解析失败时 JDK 的 URISyntaxException 会把整条输入连出错位置一起放进 message，
  * 那正是最容易被整段贴进工单的一行日志——这一层的职责是把它挡在异常信息之外。
  */
-@DisplayName("M2-⑥ 补丁 3 · 节点地址按密码对待")
+@DisplayName("节点地址按密码对待")
 class RpcEndpointTest {
 
     static final String KEY = "THIS-IS-THE-SECRET-KEY";

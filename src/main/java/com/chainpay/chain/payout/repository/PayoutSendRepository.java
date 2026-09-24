@@ -8,7 +8,7 @@ import java.util.List;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
-/** 发送任务用到的提现与尝试（系统连接）。状态变更一律带「期望的当前状态」做守卫，改不动就是别的实例先动了。 */
+/** 发送、追踪与核准用到的提现与尝试（系统连接）。状态变更一律带「期望的当前状态」做守卫，改不动就是别的实例先动了。 */
 public class PayoutSendRepository {
 
     private static final String ATTEMPT_COLUMNS = "id, payout_id, hot_wallet, nonce, tx_hash, raw_tx, status, gas_limit, max_fee_per_gas, "

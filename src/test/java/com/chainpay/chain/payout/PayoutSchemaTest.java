@@ -24,7 +24,7 @@ import org.springframework.transaction.support.TransactionTemplate;
  * 同时守着：会话变量 {@code chainpay.system} 那道门已拆，没有会话变量能打开整库，系统权限只剩连接身份一条路。
  */
 @SpringBootTest
-@DisplayName("M4-⓪ · 提现四张表：约束、租户边界、角色权限；会话变量那道门已拆")
+@DisplayName("提现四张表：约束、租户边界、角色权限；会话变量那道门已拆")
 class PayoutSchemaTest extends AbstractPostgresTest {
 
     static final String LINK = "0x779877a7b0d9e8603169ddbd7836e478b4624789";

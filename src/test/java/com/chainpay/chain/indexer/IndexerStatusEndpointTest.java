@@ -28,7 +28,7 @@ import tools.jackson.databind.ObjectMapper;
  * 测试里没配节点，所以进程视角是 NOT_CONFIGURED；表里的状态、书签、链头照样要给全。
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
-@DisplayName("M2-⑥ 补丁 3 · 索引器状态接口")
+@DisplayName("索引器状态接口")
 class IndexerStatusEndpointTest extends AbstractPostgresTest {
     /** application.yml 里的 cursor-name 与 token-address。 */
     static final String CURSOR = "sepolia:link:transfer";
@@ -49,8 +49,8 @@ class IndexerStatusEndpointTest extends AbstractPostgresTest {
     }
 
     @Test
-    @DisplayName("★ 没有管理员令牌：401，和其它管理接口同一道门")
-    void requiresTheAdminToken() {
+    @DisplayName("★ 没有管理员会话：401，和其它管理接口同一道门")
+    void requiresAnAdminSession() {
         assertThat(get(null).statusCode()).isEqualTo(401);
     }
 

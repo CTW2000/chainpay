@@ -11,7 +11,7 @@ import org.junit.jupiter.api.Test;
  * 配置的合法范围由校验器守，不靠每个构造器各写一段 if-throw。
  * 特别是 degraded-after-failures：漏配时 int 默认 0，「连续 0 次失败就降级」= 第一次瞬时失败就 DEGRADED。
  */
-@DisplayName("M2 · 索引器配置的约束")
+@DisplayName("索引器配置的约束")
 class ChainIndexerPropertiesTest {
 
     static final Validator VALIDATOR = Validation.buildDefaultValidatorFactory().getValidator();

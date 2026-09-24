@@ -4,7 +4,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.chainpay.ledger.service.LedgerException;
-import com.chainpay.ledger.service.LedgerService;
 import com.chainpay.ledger.service.LedgerService.TransferCode;
 import com.chainpay.ledger.service.LedgerService.TransferCommand;
 import com.chainpay.support.AbstractPostgresTest;
@@ -19,7 +18,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DataIntegrityViolationException;
 
 /**
@@ -27,7 +25,7 @@ import org.springframework.dao.DataIntegrityViolationException;
  *
  * <p>{@code LedgerInvariantTest} 验证的是<b>行为</b>（幂等、原子、不超支）；这里守的东西，行为测试一个都抓不到。
  */
-@DisplayName("M0 · 建模契约（V2）")
+@DisplayName("建模契约（V2）")
 class LedgerModelingTest extends AbstractPostgresTest {
 
     private static final String USDT = "USDT";

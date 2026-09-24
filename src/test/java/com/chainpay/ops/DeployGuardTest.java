@@ -11,7 +11,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /** 部署脚本的守卫：八个环节按顺序都在、失败即停、密钥不回显、compose 只跑 chainpay:current、Flyway 容忍未来版本（回滚时旧代码要能起）。 */
-@DisplayName("M6-④ · 部署脚本守卫")
+@DisplayName("部署脚本守卫")
 class DeployGuardTest {
 
     @Test
@@ -56,7 +56,7 @@ class DeployGuardTest {
     }
 
     @Test
-    @DisplayName("★ Flyway 容忍「库里有、代码里没有」的未来版本：回滚到上一版后它才起得来（取舍 9：迁移只前进，代码兼容前一版 schema）")
+    @DisplayName("★ Flyway 容忍「库里有、代码里没有」的未来版本：回滚到上一版后它才起得来（迁移只前进，代码兼容前一版 schema）")
     void flywayIgnoresFutureMigrations() throws IOException {
         assertThat(Files.readString(Path.of("src/main/resources/application.yml"))).contains("ignore-migration-patterns:").contains("*:future");
     }

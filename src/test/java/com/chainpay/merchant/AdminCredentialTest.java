@@ -33,7 +33,7 @@ import org.springframework.boot.test.web.server.LocalServerPort;
  * 攻击者手上新配的那把还活着。<b>能配钥匙的钥匙，吊销不掉。</b>
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
-@DisplayName("M1 · 发放凭证契约")
+@DisplayName("发放凭证契约")
 class AdminCredentialTest extends AbstractPostgresTest {
 
     @LocalServerPort
@@ -54,8 +54,8 @@ class AdminCredentialTest extends AbstractPostgresTest {
     // ==================================================================
 
     @Test
-    @DisplayName("★ 没有管理员令牌 —— 401，且什么都没创建")
-    void withoutAdminTokenNothingIsCreated() {
+    @DisplayName("★ 没有管理员会话 —— 401，且什么都没创建")
+    void withoutAnAdminSessionNothingIsCreated() {
         var response = post("/admin/v1/merchants", """
                 {"code":"acme","name":"Acme"}""", null);
 

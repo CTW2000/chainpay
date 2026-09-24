@@ -18,7 +18,7 @@ import org.springframework.boot.test.context.SpringBootTest;
  * 中间的一切（重组、节点忘了、卡住）都只是回到某个中间状态再等，钱始终冻着。
  */
 @SpringBootTest
-@DisplayName("M4-③ · 追踪：回执、FINAL 结算、重组、丢弃、卡单加价")
+@DisplayName("追踪：回执、FINAL 结算、重组、丢弃、卡单加价")
 class PayoutTrackerTest extends AbstractPayoutSendingTest {
 
     @BeforeEach
@@ -74,7 +74,7 @@ class PayoutTrackerTest extends AbstractPayoutSendingTest {
         assertThat(balance("user:acme:LINK")).isEqualByComparingTo("24");
         assertThat(transfersWithKey("withdrawal:" + payoutId() + ":settle")).isEqualTo(1);
         assertThat(jdbc.sql("SELECT settle_transfer_id FROM payout").query(Long.class).single()).isPositive();
-        assertThat(jdbc.sql("SELECT confirmed_at FROM payout").query(java.time.OffsetDateTime.class).single()).as("结算时刻要写上（⑤ 演练发现漏了）").isNotNull();
+        assertThat(jdbc.sql("SELECT confirmed_at FROM payout").query(java.time.OffsetDateTime.class).single()).as("结算时刻要写上").isNotNull();
         assertThat(tracker(audit).trackOnce().confirmed()).as("再跑一轮什么都不做").isZero();
     }
 
@@ -113,7 +113,7 @@ class PayoutTrackerTest extends AbstractPayoutSendingTest {
     }
 
     @Test
-    @DisplayName("★ 审计节点对块 5 的哈希意见不同：不结算，等（同 M3-② 的门，动钱要两个节点都点头）")
+    @DisplayName("★ 审计节点对块 5 的哈希意见不同：不结算，等（和入账同一道门：动钱要两个节点都点头）")
     void auditDisagreementWaits() {
         String hash = broadcastOne();
         FakeChain audit = new FakeChain().withBlocks(20);

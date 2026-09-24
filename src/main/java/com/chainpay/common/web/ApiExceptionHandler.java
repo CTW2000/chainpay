@@ -1,6 +1,5 @@
 package com.chainpay.common.web;
 
-import com.chainpay.merchant.service.AdminService;
 
 import com.chainpay.chain.deposit.service.DepositAddressService.UnsupportedTokenException;
 import com.chainpay.merchant.service.AdminService.AlreadyExistsException;

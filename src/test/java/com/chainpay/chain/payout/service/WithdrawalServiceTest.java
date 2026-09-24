@@ -15,7 +15,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 
 /** 热钱包自己的地址也是平台的口袋：提到它是 to == from 的一笔交易，账本会记「付出去了」而链上什么都没变。 */
 @SpringBootTest
-@DisplayName("M4-④ 补丁 · 热钱包地址不能当提现目标")
+@DisplayName("热钱包地址不能当提现目标")
 class WithdrawalServiceTest extends AbstractDepositPostingTest {
 
     static final String HOT_KEY = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";   // Hardhat #0，公开测试私钥

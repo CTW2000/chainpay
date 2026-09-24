@@ -10,7 +10,7 @@ import org.junit.jupiter.api.Test;
  * BIP-39 官方向量（trezor/python-mnemonic 的 vectors.json）。
  * 这组向量的 passphrase 是 "TREZOR"（tests/test_mnemonic.py 第 37 行）。
  */
-@DisplayName("M3-① · BIP-39 规范向量")
+@DisplayName("BIP-39 规范向量")
 class Bip39Test {
 
     @Test

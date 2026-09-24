@@ -48,7 +48,7 @@ import org.springframework.transaction.PlatformTransactionManager;
  * 对账是审计，它自己的瞬时失败不改变轮询的结局。
  */
 @SpringBootTest
-@DisplayName("M2-③ · 轮询")
+@DisplayName("轮询")
 class ChainIndexerSchedulerTest extends AbstractPostgresTest {
 
     static final String LINK  = "0x779877a7b0d9e8603169ddbd7836e478b4624789";
@@ -406,7 +406,7 @@ class ChainIndexerSchedulerTest extends AbstractPostgresTest {
     }
 
     @Test
-    @DisplayName("★ 落后很远：一次轮询连续推批直到追平，不再按批数封顶（M6-②；M3-⑤ 推到这里的题）")
+    @DisplayName("★ 落后很远：一次轮询连续推批直到追平，不按批数封顶")
     void catchesUpInOneTickWhenFarBehind() {
         chain.withBlocks(1200);
         chain.reportSafe(1100);
@@ -471,6 +471,39 @@ class ChainIndexerSchedulerTest extends AbstractPostgresTest {
                 .containsExactly(7L);
     }
 
+    @Test
+    @DisplayName("★ 数据库连不上（连接池拿不到连接）：这一轮 RETRY_LATER，不是 HALTED——库抖一下不该要人来恢复")
+    void databaseOutageIsTransientNotAHalt() {
+        chain.withBlocks(10);
+        chain.reportSafe(5);
+        chain.reportFinalized(2);
+        DataSource refusing = new AbstractDataSource() {
+            @Override
+            public Connection getConnection() throws SQLException {
+                throw new SQLException("模拟：connection refused", "08001");
+            }
+
+            @Override
+            public Connection getConnection(String username, String password) throws SQLException {
+                return getConnection();
+            }
+        };
+        DataSourceTransactionManager brokenTx = new DataSourceTransactionManager(refusing);
+        BlockIndexer indexer = new BlockIndexer(chain, cursors, transferLogs, IndexerWriters.batch(cursors, transferLogs, brokenTx), CURSOR, LINK, 100);
+        ChainHeadTracker tracker = new ChainHeadTracker(chain, null, IndexerWriters.head(heads, brokenTx), "test");
+        ReorgRecovery recovery = new ReorgRecovery(chain, transferLogs, heads, IndexerWriters.reorg(cursors, transferLogs, reorgs, brokenTx), CURSOR);
+        LogReconciler reconciler = new LogReconciler(chain, chain, cursors, transferLogs, heads, IndexerWriters.reconcile(transferLogs, reconciles, brokenTx),
+                CURSOR, LINK, 2, new Random(1));
+        TokenRegistry registry = new TokenRegistry(new Erc20Calls(chain), tokens);
+        ChainIndexerScheduler scheduler = new ChainIndexerScheduler(tracker, indexer, recovery, reconciler, registry, states,
+                CURSOR, LINK, 0L, 30, Duration.ofMinutes(5));
+
+        TickResult result = scheduler.tick();
+
+        assertThat(result.outcome()).as(result.detail()).isEqualTo(RETRY_LATER);
+        assertThat(stateOf(CURSOR)).isNotEqualTo("HALTED");
+    }
+
     // ------------------------------------------------------------------ 脚手架
 
     private ChainIndexerScheduler scheduler(FakeChain audit, String token, Long startBlock, int batchBlocks) {
@@ -484,12 +517,6 @@ class ChainIndexerSchedulerTest extends AbstractPostgresTest {
      */
     private ChainIndexerScheduler scheduler(FakeChain reconcileAudit, FakeChain headAudit, String token,
                                             Long startBlock, int batchBlocks, int degradedAfter) {
-        BlockIndexer indexer = new BlockIndexer(chain, cursors, transferLogs, IndexerWriters.batch(cursors, transferLogs, txManager), CURSOR, token, batchBlocks);
-        ChainHeadTracker tracker = new ChainHeadTracker(chain, headAudit, IndexerWriters.head(heads, txManager), "test");
-        ReorgRecovery recovery = new ReorgRecovery(chain, transferLogs, heads, IndexerWriters.reorg(cursors, transferLogs, reorgs, txManager), CURSOR);
-        LogReconciler reconciler = new LogReconciler(chain, reconcileAudit, cursors, transferLogs, heads, IndexerWriters.reconcile(transferLogs, reconciles, txManager),
-                CURSOR, token, 2, new Random(1));
-        TokenRegistry registry = new TokenRegistry(new Erc20Calls(chain), tokens);
         return scheduler(reconcileAudit, headAudit, token, startBlock, batchBlocks, degradedAfter, Duration.ofMinutes(5), System::nanoTime);
     }
 
@@ -545,38 +572,5 @@ class ChainIndexerSchedulerTest extends AbstractPostgresTest {
     private String levelOf(long block) {
         return jdbc.sql("SELECT level FROM chain_transfer_confirmation WHERE block_number = :b")
                 .param("b", block).query(String.class).single();
-    }
-
-    @Test
-    @DisplayName("★ 数据库连不上（连接池拿不到连接）：这一轮 RETRY_LATER，不是 HALTED——库抖一下不该要人来恢复")
-    void databaseOutageIsTransientNotAHalt() {
-        chain.withBlocks(10);
-        chain.reportSafe(5);
-        chain.reportFinalized(2);
-        DataSource refusing = new AbstractDataSource() {
-            @Override
-            public Connection getConnection() throws SQLException {
-                throw new SQLException("模拟：connection refused", "08001");
-            }
-
-            @Override
-            public Connection getConnection(String username, String password) throws SQLException {
-                return getConnection();
-            }
-        };
-        DataSourceTransactionManager brokenTx = new DataSourceTransactionManager(refusing);
-        BlockIndexer indexer = new BlockIndexer(chain, cursors, transferLogs, IndexerWriters.batch(cursors, transferLogs, brokenTx), CURSOR, LINK, 100);
-        ChainHeadTracker tracker = new ChainHeadTracker(chain, null, IndexerWriters.head(heads, brokenTx), "test");
-        ReorgRecovery recovery = new ReorgRecovery(chain, transferLogs, heads, IndexerWriters.reorg(cursors, transferLogs, reorgs, brokenTx), CURSOR);
-        LogReconciler reconciler = new LogReconciler(chain, chain, cursors, transferLogs, heads, IndexerWriters.reconcile(transferLogs, reconciles, brokenTx),
-                CURSOR, LINK, 2, new Random(1));
-        TokenRegistry registry = new TokenRegistry(new Erc20Calls(chain), tokens);
-        ChainIndexerScheduler scheduler = new ChainIndexerScheduler(tracker, indexer, recovery, reconciler, registry, states,
-                CURSOR, LINK, 0L, 30, Duration.ofMinutes(5));
-
-        TickResult result = scheduler.tick();
-
-        assertThat(result.outcome()).as(result.detail()).isEqualTo(RETRY_LATER);
-        assertThat(stateOf(CURSOR)).isNotEqualTo("HALTED");
     }
 }

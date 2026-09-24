@@ -17,8 +17,8 @@ import java.util.function.Function;
  * 所以「什么样的字符串才准解析」只能由我们定。BigDecimal 认的写法太多了：{@code 1E-999999999}（12 个字符，
  * 逐位写全是 10 亿个字符，一个请求就能打挂进程）、一百万位的普通写法（光解析就要 11 秒）、{@code +1}、{@code 1.}、
  * 别的文字的数字（阿拉伯-印度数字它也认；Java 正则的 {@code \d} 只认 ASCII 的 0–9）。
- * 正则给请求记录的 {@code @Pattern} 用，{@code ControllerBoundaryTest} 守着：控制器里每个
- * {@code new BigDecimal(…)} 解析的字段都带其中一个。
+ * 正则（{@link #FITTING_DECIMAL}）给请求记录的 {@code @Pattern} 用，{@code ControllerBoundaryTest} 守着：控制器里每个
+ * {@code new BigDecimal(…)} 解析的字段都带它。
  */
 public final class LedgerAmounts {
 
@@ -28,18 +28,9 @@ public final class LedgerAmounts {
     /** 整数位（38 − 18）。多出来的，数据库报 numeric field overflow。 */
     public static final int INTEGER_DIGITS = 20;
 
-    /** 写法里整数、小数两段各自的位数上限：远大于容量的 20 / 18，只为给解析代价封顶。 */
-    private static final int TEXT_MAX_DIGITS = 64;
-
     /**
-     * 普通小数写法：数字，可选一个小数点后跟数字；不收正负号、指数、空格、千分位；两段各不超过 64 位。
-     * 只管写法、不管容量：超出容量但没超过 64 位的交给账本拒（错误码 2004、消息说清几位）。目前没有控制器用它。
-     */
-    public static final String PLAIN_DECIMAL =
-            "\\d{1," + TEXT_MAX_DIGITS + "}(\\.\\d{1," + TEXT_MAX_DIGITS + "})?";
-
-    /**
-     * 普通小数写法，且装得下：整数不超过 {@link #INTEGER_DIGITS} 位、小数不超过 {@link #SCALE} 位。
+     * 普通小数写法，且装得下：数字，可选一个小数点后跟数字；不收正负号、指数、空格、千分位；
+     * 整数不超过 {@link #INTEGER_DIGITS} 位、小数不超过 {@link #SCALE} 位。
      * 提现与限额接口用它：超出容量在边界就回 2001，到不了账本。
      */
     public static final String FITTING_DECIMAL =

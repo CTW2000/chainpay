@@ -35,7 +35,7 @@ import org.springframework.transaction.PlatformTransactionManager;
  *   CHAINPAY_SEPOLIA_RPC=https://ethereum-sepolia-rpc.publicnode.com mvn test -Dtest=SepoliaIndexProbeTest
  * </pre>
  */
-@DisplayName("M2-② · Sepolia 落库探针（需网络）")
+@DisplayName("Sepolia 落库探针（需网络）")
 @EnabledIfEnvironmentVariable(named = "CHAINPAY_SEPOLIA_RPC", matches = ".+")
 class SepoliaIndexProbeTest extends AbstractPostgresTest {
 

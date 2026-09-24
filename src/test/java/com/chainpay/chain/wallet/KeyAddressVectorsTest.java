@@ -15,7 +15,7 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 /** 私钥 → 公钥 → 地址：向量逐字来自 ethereum/tests 的 BasicTests/keyaddrtest.json。 */
-@DisplayName("M4-① · 私钥到地址的规范向量")
+@DisplayName("私钥到地址的规范向量")
 class KeyAddressVectorsTest {
 
     static Stream<Arguments> cases() throws Exception {

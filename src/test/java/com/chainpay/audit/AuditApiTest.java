@@ -8,7 +8,6 @@ import com.chainpay.chain.deposit.service.AbstractDepositPostingTest;
 import com.chainpay.chain.support.FakeChain;
 import com.chainpay.ledger.system.SystemLedger;
 import com.chainpay.security.filter.AdminAuthFilter;
-import java.math.BigInteger;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -27,7 +26,7 @@ import org.springframework.context.annotation.Import;
 /** 管理接口：没跑过 = stale；POST run 立刻跑一轮并把结论回给人；没令牌 401。对账服务由测试装配（主节点在测试里是 FakeChain）。 */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @Import(AuditApiTest.FakeAudit.class)
-@DisplayName("M5 · 对账管理接口")
+@DisplayName("对账管理接口")
 class AuditApiTest extends AbstractDepositPostingTest {
 
     /** 静态的假节点：bean 在上下文启动时建，测试方法里再往它上面造链。 */

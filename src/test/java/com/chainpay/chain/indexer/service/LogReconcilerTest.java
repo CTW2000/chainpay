@@ -34,7 +34,7 @@ import org.springframework.transaction.PlatformTransactionManager;
  * 抽样对账：回执是事实源，getLogs 是索引。差异要两个节点都点头才动。
  */
 @SpringBootTest
-@DisplayName("M2-⑤ · 抽样对账")
+@DisplayName("抽样对账")
 class LogReconcilerTest extends AbstractPostgresTest {
 
     static final String LINK  = "0x779877a7b0d9e8603169ddbd7836e478b4624789";

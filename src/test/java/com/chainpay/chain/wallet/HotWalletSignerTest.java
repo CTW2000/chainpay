@@ -11,7 +11,7 @@ import org.junit.jupiter.api.Test;
  * 热钱包签名器：进程里唯一持有私钥的对象。只暴露两个动作——地址是什么、签这笔——文字表示不含密钥。
  * 已知答案：Hardhat 公开的测试私钥 #0，其地址 0xf39F…2266（与同一助记词经 xpub 派生出的第一个收款地址相同）。
  */
-@DisplayName("M4-① · 热钱包签名器")
+@DisplayName("热钱包签名器")
 class HotWalletSignerTest {
 
     static final String HARDHAT_KEY_0 = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";

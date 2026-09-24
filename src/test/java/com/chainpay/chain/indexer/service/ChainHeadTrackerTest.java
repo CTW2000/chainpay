@@ -23,7 +23,7 @@ import org.springframework.transaction.PlatformTransactionManager;
  * safe / latest 倒退只是节点落后，保留旧值。
  */
 @SpringBootTest
-@DisplayName("M2-③ · 链头追踪")
+@DisplayName("链头追踪")
 class ChainHeadTrackerTest extends AbstractPostgresTest {
 
     static final String CHAIN = "test";

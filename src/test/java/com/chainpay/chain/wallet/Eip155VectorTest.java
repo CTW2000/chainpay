@@ -15,7 +15,7 @@ import org.junit.jupiter.api.Test;
  * 它是旧式（类型 0）交易，但一次证明三件事：RLP 编码逐字节对、Keccak 对、用私钥签出的 (r, s) 与规范逐位相同——
  * 后者只有在 k 由 RFC 6979 确定地算出、且 s 取 low-s 时才可能成立。
  */
-@DisplayName("M4-① · EIP-155 算例：RLP、Keccak、确定性签名一次证明")
+@DisplayName("EIP-155 算例：RLP、Keccak、确定性签名一次证明")
 class Eip155VectorTest {
 
     static final String SIGNING_DATA = "0xec098504a817c800825208943535353535353535353535353535353535353535880de0b6b3a764000080018080";

@@ -13,7 +13,7 @@ import org.junit.jupiter.api.Test;
  * 与 maxFeePerGas00prefix.json（提交 c67e485f，逐字抄录）。前者给出原文、交易哈希、发送方，
  * 我们把原文拆回字段、再用自己的编码器编回去，字节必须一样；再从签名恢复发送方，必须一样。后者的 maxFeePerGas 带前导零，必须拒绝。
  */
-@DisplayName("M4-① · EIP-1559 官方向量：拆开、编回、恢复发送方")
+@DisplayName("EIP-1559 官方向量：拆开、编回、恢复发送方")
 class Eip1559VectorTest {
 
     static final String TXBYTES = "0x02f885018084773594009f02ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff82520894"

@@ -12,7 +12,6 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
-import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -25,7 +24,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 /**
  * 管理员认证的规则（时钟可注入）：口令 Argon2id 存散列；登录失败计数与锁定；会话有闲置与绝对两种过期；敏感操作要最近再认证过；改口令踢掉别的会话。
  */
-@DisplayName("M6-⑤ · 管理员认证规则")
+@DisplayName("管理员认证规则")
 class AdminAuthServiceTest extends AbstractPostgresTest {
 
     static final String PASSWORD = "correct-horse-battery-staple";
@@ -143,9 +142,5 @@ class AdminAuthServiceTest extends AbstractPostgresTest {
         assertThat(rows.get(0)).containsEntry("status", 200).containsEntry("username", "alice").containsEntry("remote_addr", "127.0.0.1");
         assertThat(rows.get(1)).containsEntry("status", 401).containsEntry("remote_addr", "10.0.0.9");
         assertThat(rows.toString()).doesNotContain(PASSWORD).doesNotContain("wrong-password");
-    }
-
-    private Optional<AdminSession> none() {
-        return Optional.empty();
     }
 }

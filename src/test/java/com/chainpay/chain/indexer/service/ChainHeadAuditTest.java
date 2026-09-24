@@ -19,7 +19,7 @@ import org.springframework.transaction.PlatformTransactionManager;
  * 头部的分歧是常态，不查；finalized 的分歧不允许，停下叫人。审计节点落后就跳过这次比对。
  */
 @SpringBootTest
-@DisplayName("M2-⑤ · 审计节点核对 finalized")
+@DisplayName("审计节点核对 finalized")
 class ChainHeadAuditTest extends AbstractPostgresTest {
 
     @Autowired

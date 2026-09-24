@@ -36,7 +36,7 @@ import org.springframework.boot.test.web.server.LocalServerPort;
  * 失败十次说明要么在攻击、要么客户端签名实现坏了，两种都该被拦。
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
-@DisplayName("M1 · 限流契约")
+@DisplayName("限流契约")
 class RateLimitTest extends AbstractPostgresTest {
 
     private static final int REQUESTS_PER_MINUTE = 120;
@@ -177,7 +177,7 @@ class RateLimitTest extends AbstractPostgresTest {
                 .isFalse();
 
         assertThat(degradedLimiter.isDegraded())
-                .as("降级状态必须能被观测到，否则运维不知道保护已经弱了")
+                .as("降级要记下来：Retry-After 改按本地窗口算，切换那一刻打一行 ERROR（运维靠这行日志与 work 组的 Redis 项知道保护变弱了）")
                 .isTrue();
     }
 
@@ -229,7 +229,7 @@ class RateLimitTest extends AbstractPostgresTest {
         }
 
         assertThat(badSignatureGet().statusCode())
-                .as("超过阈值后不再回 401，直接 429 —— 连验签的成本都不再付")
+                .as("超过阈值后不再回 401，改回 429（验签照做：失败计数在验签失败之后才记、才查）")
                 .isEqualTo(429);
     }
 

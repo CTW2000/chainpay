@@ -31,7 +31,7 @@ import org.springframework.core.env.SystemEnvironmentPropertySource;
  * </ol>
  * 不需要 Testcontainers：每次启动都停在守卫那一步。
  */
-@DisplayName("进程拆分 ① · 真的应用：凭证放错，在碰任何连接之前就拒绝启动")
+@DisplayName("真的应用：凭证放错，在碰任何连接之前就拒绝启动")
 class ProcessRoleBootTest {
 
     private static final String SECRET = "value-that-must-never-appear-4b7d";

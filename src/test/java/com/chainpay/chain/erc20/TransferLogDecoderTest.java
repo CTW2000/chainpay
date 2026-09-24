@@ -19,7 +19,7 @@ import org.junit.jupiter.api.Test;
  *
  * <p>形状不对的日志一律拒绝，不把错的数当成对的。
  */
-@DisplayName("M2 · Transfer 日志解码")
+@DisplayName("Transfer 日志解码")
 class TransferLogDecoderTest {
 
     static final String TRANSFER_TOPIC0 =

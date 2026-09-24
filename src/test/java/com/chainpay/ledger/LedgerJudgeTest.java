@@ -26,7 +26,7 @@ import org.springframework.jdbc.datasource.DriverManagerDataSource;
  * 视图开了 {@code security_invoker}，主人是谁才不影响结论。
  */
 @SpringBootTest
-@DisplayName("扫描补丁 · 账本判官必须以能看到全部行的身份运行")
+@DisplayName("账本判官必须以能看到全部行的身份运行")
 class LedgerJudgeTest extends AbstractPostgresTest {
 
     private final JdbcClient appJdbc = JdbcClient.create(new DriverManagerDataSource(jdbcUrl(), "chainpay_app", "chainpay_app_dev"));

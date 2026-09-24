@@ -20,7 +20,7 @@ import tools.jackson.databind.ObjectMapper;
 
 /** 控制面的门是管理员会话：登录拿令牌 → 带令牌调管理接口 → 敏感操作要再认证 → 每次调用留审计行；已删除的静态令牌头一律不认。 */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
-@DisplayName("M6-⑤ · 管理员会话接口")
+@DisplayName("管理员会话接口")
 class AdminAuthApiTest extends AbstractPostgresTest {
 
     static final String PASSWORD = "ops-test-password-123!";

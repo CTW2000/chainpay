@@ -17,7 +17,7 @@ import org.springframework.http.HttpStatus;
  * 注资登记：运营往热钱包充的币要有一行记录，托管等式才能解释它。
  * 金额、块、代币全部从索引器已经记下的日志里读，运营只指认「是哪一笔」——数字不由人填。
  */
-@DisplayName("M6-② · 注资登记")
+@DisplayName("注资登记")
 class HotWalletFundingServiceTest extends AbstractDepositPostingTest {
 
     static final String HOT = "0x3c44cdddb6a900fa2b585dd299e03d12fa4293bc";

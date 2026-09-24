@@ -30,7 +30,7 @@ import org.springframework.mock.web.MockHttpServletResponse;
  * 「读到底」的实现永远读不完——测试超时。
  */
 @SpringBootTest
-@DisplayName("M1 · 请求体上限契约")
+@DisplayName("请求体上限契约")
 class BodyLimitTest extends AbstractPostgresTest {
 
     @Autowired

@@ -23,7 +23,7 @@ import tools.jackson.databind.ObjectMapper;
  * 向量逐字来自 ethereum/tests 的 RLPTests/rlptest.json（见 src/test/resources/vectors/README.md）。
  * 向量里以 # 开头的字符串表示大整数，其余字符串按 UTF-8 字节；数字按整数；数组按列表。
  */
-@DisplayName("M4-① · RLP 规范向量（28 例）")
+@DisplayName("RLP 规范向量（28 例）")
 class RlpVectorsTest {
 
     static Stream<Arguments> cases() throws Exception {

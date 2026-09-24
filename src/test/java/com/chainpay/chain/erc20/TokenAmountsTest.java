@@ -13,7 +13,7 @@ import org.junit.jupiter.api.Test;
  *
  * <p>uint256 有 78 位，账本整数部分只有 20 位：大额转账在写账本之前自己检查、明确拒绝，不能静默截断。
  */
-@DisplayName("M2-⑥ · 金额换算")
+@DisplayName("金额换算")
 class TokenAmountsTest {
 
     static final BigInteger TEN_POW_18 = BigInteger.TEN.pow(18);

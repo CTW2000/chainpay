@@ -21,7 +21,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  *   CHAINPAY_SEPOLIA_RPC=https://ethereum-sepolia-rpc.publicnode.com mvn test -Dtest=SepoliaProbeTest
  * </pre>
  */
-@DisplayName("M2-① · Sepolia 探针（需网络）")
+@DisplayName("Sepolia 探针（需网络）")
 @EnabledIfEnvironmentVariable(named = "CHAINPAY_SEPOLIA_RPC", matches = ".+")
 class SepoliaProbeTest {
 

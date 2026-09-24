@@ -16,7 +16,7 @@ import org.junit.jupiter.api.Test;
  * 容器文件的守卫：Dockerfile、.dockerignore、docker-compose.yml 里那几条「忘了就出事」的规矩，形状都是「某个文件里必须 / 不许出现某个字符串」，
  * 和 ControllerBoundaryTest 一样扫文本，不引依赖。镜像真的有没有密钥由 tools/image-check.sh 在打完镜像后扫（那需要 Docker，不进默认测试集）。
  */
-@DisplayName("M6-① · 容器文件守卫")
+@DisplayName("容器文件守卫")
 class ContainerGuardTest {
 
     /** 密钥形态的变量名：只在 tools/image-check.sh 写一份，这里不另抄。 */
@@ -75,7 +75,7 @@ class ContainerGuardTest {
     }
 
     @Test
-    @DisplayName("application.yml：监听地址与日志级别由环境变量定，默认回环 + INFO（安全扫描第 15 条，M6-②）")
+    @DisplayName("application.yml：监听地址与日志级别由环境变量定，默认回环 + INFO")
     void bindAddressAndLogLevelComeFromTheEnvironment() throws IOException {
         String yml = Files.readString(Path.of("src/main/resources/application.yml"));
         assertThat(yml).contains("address: ${CHAINPAY_BIND_ADDRESS:127.0.0.1}");

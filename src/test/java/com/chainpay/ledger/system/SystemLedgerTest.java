@@ -7,6 +7,7 @@ import com.chainpay.ledger.service.LedgerService;
 import com.chainpay.ledger.service.LedgerService.TransferCode;
 import com.chainpay.ledger.service.LedgerService.TransferCommand;
 import com.chainpay.support.AbstractPostgresTest;
+import com.zaxxer.hikari.HikariDataSource;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.Duration;
@@ -18,6 +19,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.dao.DataAccessException;
 import org.springframework.dao.TransientDataAccessException;
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.jdbc.support.JdbcTransactionManager;
 
 /**
  * 系统权限是连接身份，不是一个开关。
@@ -27,7 +29,7 @@ import org.springframework.jdbc.core.simple.JdbcClient;
  * 独立的连接池，拿不到这个池就拿不到这份权限。
  */
 @SpringBootTest
-@DisplayName("M3-⓪ · 系统账本：权限来自连接身份")
+@DisplayName("系统账本：权限来自连接身份")
 class SystemLedgerTest extends AbstractPostgresTest {
 
     @Autowired
@@ -151,14 +153,18 @@ class SystemLedgerTest extends AbstractPostgresTest {
     }
 
     @Test
-    @DisplayName("★ 配错身份就起不来：应用角色没有 BYPASSRLS 被拒；属主是超级用户也被拒")
+    @DisplayName("★ 配错身份就起不来：应用角色没有 BYPASSRLS 被拒；属主是超级用户也被拒（走容器装配用的同一个 start）")
     void refusesTheWrongIdentityAtStartup() {
-        assertThatThrownBy(() -> SystemLedger.connect(jdbcUrl(), "chainpay_app", "chainpay_app_dev", 1, Duration.ofSeconds(1)))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("BYPASSRLS");
-        assertThatThrownBy(() -> SystemLedger.connect(jdbcUrl(), ownerUsername(), ownerPassword(), 1, Duration.ofSeconds(1)))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("超级用户");
+        try (HikariDataSource pool = SystemLedger.pool(jdbcUrl(), "chainpay_app", "chainpay_app_dev", 1, Duration.ofSeconds(1))) {
+            assertThatThrownBy(() -> SystemLedger.start(pool, new JdbcTransactionManager(pool)))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("BYPASSRLS");
+        }
+        try (HikariDataSource pool = SystemLedger.pool(jdbcUrl(), ownerUsername(), ownerPassword(), 1, Duration.ofSeconds(1))) {
+            assertThatThrownBy(() -> SystemLedger.start(pool, new JdbcTransactionManager(pool)))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("超级用户");
+        }
     }
 
     // ------------------------------------------------------------------ 脚手架

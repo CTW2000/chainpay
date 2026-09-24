@@ -25,7 +25,7 @@ import org.junit.jupiter.api.io.TempDir;
  * <p>做法：{@code source deploy/deploy.sh} 只定义函数、不跑 main（脚本末尾的守卫），PATH 最前面放一个假 docker，
  * 逐环调函数，看它对 docker 说了什么、留下了什么。git 用的是临时目录里现造的仓库，真仓库一点不碰。
  */
-@DisplayName("M6-④ · 部署脚本的行为（假 docker）")
+@DisplayName("部署脚本的行为（假 docker）")
 class DeployScriptTest {
 
     private static final Path DEPLOY_SH = Path.of("deploy/deploy.sh").toAbsolutePath();

@@ -10,7 +10,7 @@ import org.junit.jupiter.api.Test;
  * 装配期的两道门：审计节点必须真的独立；节点地址解析失败不回显 key。
  * 不起 Spring：@Bean 方法是普通方法，同包直接调。
  */
-@DisplayName("M2-⑥ 补丁 3 · 装配期的守门")
+@DisplayName("装配期的守门")
 class ChainIndexerConfigTest {
 
     static final String LINK = "0x779877a7b0d9e8603169ddbd7836e478b4624789";

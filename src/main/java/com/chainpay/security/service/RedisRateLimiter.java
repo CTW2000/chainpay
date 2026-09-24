@@ -69,19 +69,4 @@ public class RedisRateLimiter {
             return WINDOW.toSeconds();
         }
     }
-
-    /** Redis 当前是否可用（ping 一次）。 */
-    public boolean isAvailable() {
-        try {
-            var factory = redis.getConnectionFactory();
-            if (factory == null) {
-                return false;
-            }
-            try (var connection = factory.getConnection()) {
-                return "PONG".equalsIgnoreCase(connection.ping());
-            }
-        } catch (RuntimeException e) {
-            return false;
-        }
-    }
 }

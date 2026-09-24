@@ -29,7 +29,7 @@ import org.springframework.transaction.PlatformTransactionManager;
  * 12 败、6 成、翻倍到 12 再败，一半的调用注定失败。TCP 的拥塞控制也是丢包减半，但通畅后是慢慢加，不是立刻翻倍。
  */
 @SpringBootTest
-@DisplayName("M2-⑤ · 自适应窗口")
+@DisplayName("自适应窗口")
 class AdaptiveWindowTest extends AbstractPostgresTest {
 
     static final String LINK = "0x779877a7b0d9e8603169ddbd7836e478b4624789";
@@ -109,7 +109,7 @@ class AdaptiveWindowTest extends AbstractPostgresTest {
             assertThat(batchesUntilFullWindow).as("试探不该迟到太久").isLessThan(BlockIndexer.REPROBE_AFTER + 20);
         }
         assertThat(batchesUntilFullWindow)
-                .as("连续成功满一个周期之前，窗口不越过记住的上限——立刻翻倍就是演练里的震荡")
+                .as("连续成功满一个周期之前，窗口不越过记住的上限——立刻翻倍会在上限上下来回震荡")
                 .isGreaterThanOrEqualTo(BlockIndexer.REPROBE_AFTER - 2);
     }
 

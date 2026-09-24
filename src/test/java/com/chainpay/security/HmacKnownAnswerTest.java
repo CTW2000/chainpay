@@ -28,7 +28,7 @@ import org.junit.jupiter.api.Test;
  * <p>将来要合法地换算法（比如升到 SHA-512），必须同时更新这里的向量——
  * 这正是目的：<b>算法变更不可能悄悄发生</b>。
  */
-@DisplayName("M1 · 签名算法已知答案")
+@DisplayName("签名算法已知答案")
 class HmacKnownAnswerTest {
 
     // ---- RFC 4231 §4：HMAC-SHA-256 官方测试向量 ----

@@ -47,7 +47,7 @@ import tools.jackson.databind.ObjectMapper;
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @DirtiesContext
-@DisplayName("M2-⑥ 补丁 3 · 启动冒烟：索引器真的被容器装配并调度")
+@DisplayName("启动冒烟：索引器真的被容器装配并调度")
 class ChainIndexerBootSmokeTest extends AbstractPostgresTest {
     private static final HttpServer STUB;
 

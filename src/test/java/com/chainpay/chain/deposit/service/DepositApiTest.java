@@ -26,7 +26,7 @@ import org.springframework.boot.test.web.server.LocalServerPort;
  * 金额一律字符串；HELD 的原因不外露；别人的地址与入账结构上查不到。
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
-@DisplayName("M3-④ · 收款接口")
+@DisplayName("收款接口")
 class DepositApiTest extends AbstractDepositPostingTest {
 
     static final String ACME_CHECKSUMMED = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266";

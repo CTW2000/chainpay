@@ -14,12 +14,10 @@ import org.web3j.rlp.RlpType;
 /**
  * RLP（Recursive Length Prefix）：以太坊的序列化，只认字节串和列表，规则全是「先写说明长度的前缀，再写内容」。
  *
- * <p>为什么要有它：哈希是对字节算的，同一笔交易在任何实现里都必须得到同一串字节，签名哈希与交易哈希才能对得上。
- *
- * <p>编码与解码委托给 web3j 的 {@code rlp} 模块。本类只做两件事：
- * 一是给项目一个不依赖 web3j 类型的小接口（{@link Item}），换库只动这里；二是 {@link #toInteger} 读回整数时拒绝前导零——
- * 库的解码器不检查规范性，而节点会拒绝带前导零的整数（EIP-1559 官方反例 maxFeePerGas00prefix），我们不能比节点宽松。
- * 官方的 28 个 RLP 向量（src/test/resources/vectors）是对这个库的验收。
+ * <p>测试用的小接口，生产代码不直接碰 RLP：{@code Eip1559Transaction} 经 web3j 的 {@code TransactionEncoder} /
+ * {@code TransactionDecoder} 编解码，非规范编码（整数前导零之类）靠「解码后编回必须与原文逐字节相同」拒绝。
+ * 这里把 web3j 的 {@code rlp} 模块包成不依赖 web3j 类型的 {@link Item}，给两类测试用：官方的 28 个 RLP 向量
+ * （src/test/resources/vectors）验收这个库——TransactionEncoder 底下用的就是它；EIP-155 向量测试用它拼交易、核对签名。
  */
 public final class Rlp {
 
@@ -74,15 +72,6 @@ public final class Rlp {
             throw new IllegalArgumentException("RLP 顶层应恰好有一个元素，得到 " + outer.getValues().size());
         }
         return fromWeb3j(outer.getValues().get(0));
-    }
-
-    /** 把字节串当规范整数读：前导零 = 不是规范编码，拒绝。 */
-    public static BigInteger toInteger(Item item) {
-        byte[] value = toBytes(item);
-        if (value.length > 0 && value[0] == 0) {
-            throw new IllegalArgumentException("整数带前导零，不是规范编码");
-        }
-        return new BigInteger(1, value);
     }
 
     public static byte[] toBytes(Item item) {

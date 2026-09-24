@@ -1,7 +1,6 @@
 package com.chainpay.chain.deposit.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
@@ -10,34 +9,21 @@ import ch.qos.logback.core.read.ListAppender;
 import com.chainpay.chain.deposit.domain.DepositCandidate;
 import com.chainpay.chain.deposit.domain.PostingResult;
 import com.chainpay.chain.deposit.repository.DepositRepository;
-import com.chainpay.chain.indexer.domain.BatchOutcome;
-import com.chainpay.chain.indexer.repository.ChainHeadRepository;
-import com.chainpay.chain.indexer.repository.IndexerCursorRepository;
-import com.chainpay.chain.indexer.repository.TransferLogRepository;
 import com.chainpay.chain.indexer.service.BlockIndexer;
 import com.chainpay.chain.indexer.service.ChainHeadTracker;
 import com.chainpay.chain.rpc.JsonRpcException;
 import com.chainpay.chain.rpc.RpcAuthException;
 import com.chainpay.chain.support.FakeChain;
-import com.chainpay.ledger.service.LedgerService;
-import com.chainpay.ledger.system.SystemLedger;
-import com.chainpay.support.AbstractPostgresTest;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.util.List;
-import java.util.Locale;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.springframework.jdbc.CannotGetJdbcConnectionException;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.jdbc.core.simple.JdbcClient;
-import org.springframework.transaction.PlatformTransactionManager;
-import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * 入账：已 FINAL 的链上转账 → 账本。先占坑再动钱，网络在事务外，两个节点都点头才记，金额只经 TokenAmounts。
@@ -47,7 +33,7 @@ import org.springframework.transaction.support.TransactionTemplate;
  * 入账任务处理的是和生产一模一样的表。
  */
 @SpringBootTest
-@DisplayName("M3-② · 入账")
+@DisplayName("入账")
 class DepositPosterTest extends AbstractDepositPostingTest {
 
     @Test
@@ -303,7 +289,7 @@ class DepositPosterTest extends AbstractDepositPostingTest {
     }
 
     @Test
-    @DisplayName("地址已 DISABLED 后来的钱：不是候选（怎么处理是 M3-before 第 5 问，这里先钉住「不记」）")
+    @DisplayName("地址已 DISABLED 后来的钱：不是候选（怎么处理还没定，这里先钉住「不记」）")
     void disabledAddressIsNotACandidate() {
         pay(5, TEN_LINK);
         indexUpTo(100, 90, 50);

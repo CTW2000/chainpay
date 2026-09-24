@@ -33,11 +33,12 @@ import org.springframework.boot.test.web.server.LocalServerPort;
  * 钱从入账的真实路径进来（索引 → FINAL → 入账），再从这里申请出去。
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
-@DisplayName("M4-④ · 提现接口：白名单、限额、申请、核准")
+@DisplayName("提现接口：白名单、限额、申请、核准")
 class WithdrawalApiTest extends AbstractDepositPostingTest {
 
     static final String DEST = "0x90f79bf6eb2c4f870365e785982e1f101e93b906";       // Hardhat #3：白名单里的收款人
     static final String HOT_KEY = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+    static final String SIX_DECIMALS = "0x6666666666666666666666666666666666666666";   // 只在本类登记的测试代币：6 位小数（像 USDC）
 
     @LocalServerPort
     private int port;
@@ -63,6 +64,7 @@ class WithdrawalApiTest extends AbstractDepositPostingTest {
     @AfterEach
     void cleanPayoutTables() {
         jdbc.sql("TRUNCATE payout_tx, payout, payout_address, payout_limit, hot_wallet CASCADE").update();
+        jdbc.sql("DELETE FROM chain_token WHERE address = :a").param("a", SIX_DECIMALS).update();   // 对账按 ACTIVE 代币遍历，不能留给别的测试类
     }
 
     // ---------------------------------------------------------------- 白名单
@@ -148,7 +150,7 @@ class WithdrawalApiTest extends AbstractDepositPostingTest {
     }
 
     @Test
-    @DisplayName("★ 余额不够 → 4001；小数位超过代币的 decimals → 2004；都不插行")
+    @DisplayName("★ 余额不够 → 4001；小数超过 18 位 → 在边界就拒（2001，格式校验）；都不插行")
     void rejectsUnaffordableAndTooPreciseAmounts() {
         whitelist(DEST);
         setLimit("100", "200");
@@ -157,9 +159,25 @@ class WithdrawalApiTest extends AbstractDepositPostingTest {
 
         assertThat(poor.body()).contains("\"code\":\"4001\"");
         assertThat(precise.statusCode()).isEqualTo(400);
-        assertThat(precise.body()).contains("\"code\":\"200");                      // 2001（形状）或 2004（金额）都是拒绝，不是 500
+        assertThat(precise.body()).contains("\"code\":\"2001\"");                     // FITTING_DECIMAL 在进 service 之前就拒
         assertThat(jdbc.sql("SELECT count(*) FROM payout").query(Long.class).single()).isZero();
         assertThat(balanceOf("user:acme:LINK")).isEqualByComparingTo("10");
+    }
+
+    @Test
+    @DisplayName("★ 小数位超过这种代币的 decimals（6 位小数的代币申请 1.0000001）→ 2004，不插行")
+    void rejectsMorePrecisionThanTheTokenHas() {
+        // LINK 是 18 位，边界的格式校验也是 18 位：用 LINK 永远走不到按代币 decimals 的那道门，得换一种小数位更少的代币
+        jdbc.sql("INSERT INTO chain_token (address, symbol, decimals, note) VALUES (:a, 'SIX', 6, '测试：6 位小数的代币')")
+                .param("a", SIX_DECIMALS).update();
+        whitelist(DEST);
+
+        HttpResponse<String> r = signedPost(acmeSecret, "ak_acme", "/api/v1/withdrawals",
+                "{\"token\":\"" + SIX_DECIMALS + "\",\"toAddress\":\"" + DEST + "\",\"amount\":\"1.0000001\",\"idempotencyKey\":\"w-6\"}");
+
+        assertThat(r.statusCode()).as(r.body()).isEqualTo(400);
+        assertThat(r.body()).contains("\"code\":\"2004\"").contains("6 位");
+        assertThat(jdbc.sql("SELECT count(*) FROM payout").query(Long.class).single()).isZero();
     }
 
     // ---------------------------------------------------------------- 限额与核准

@@ -16,7 +16,7 @@ import org.junit.jupiter.api.Test;
  * <p>decimals / symbol：合约没有这个函数（revert）、返回空、返回值形状不对、值超出合理范围 → 空，调用方另想办法；
  * 传输失败 → 原样抛出，轮询器当瞬时失败重试。balanceOf 不降级：「不知道」和「余额为零」在数字上分不开。
  */
-@DisplayName("M2-⑥ · 问合约：问不到 vs 没问到")
+@DisplayName("问合约：问不到 vs 没问到")
 class Erc20CallsTest {
 
     static final String TOKEN = "0x779877a7b0d9e8603169ddbd7836e478b4624789";

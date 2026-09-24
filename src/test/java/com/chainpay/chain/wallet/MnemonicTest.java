@@ -13,7 +13,7 @@ import org.junit.jupiter.api.Test;
  * 词表与已知答案都逐字取自原文：词表 bitcoin/bips 620871a 的 bip-0039/english.txt（sha256 2f5eed53…24dbda）；
  * 熵 → 助记词的向量取自 trezor/python-mnemonic b57a5ad 的 vectors.json。
  */
-@DisplayName("M4-⑤ 前置 · BIP-39 助记词：词表、熵到词、校验位")
+@DisplayName("BIP-39 助记词：词表、熵到词、校验位")
 class MnemonicTest {
 
     static final String WORDLIST_SHA256 = "2f5eed53a4727b4bf8880d8f3f199efc90e58503646d9ff8eff3a2ed3b24dbda";

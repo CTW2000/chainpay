@@ -18,7 +18,7 @@ import org.junit.jupiter.api.Test;
  * 提现的状态机写成显式的转换表：一笔钱在「账本先扣、链上后发生」的不确定期里只能沿着表里有的边走。
  * 没有表的话，「谁都能把任何状态改成任何状态」——一次并发或一次手误就把已结算的钱再解冻一遍。
  */
-@DisplayName("M4-⓪ · 提现状态机：只允许表里有的边")
+@DisplayName("提现状态机：只允许表里有的边")
 class PayoutStatusTest {
 
     @Test

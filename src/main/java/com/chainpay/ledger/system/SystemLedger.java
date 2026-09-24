@@ -34,7 +34,7 @@ import org.springframework.transaction.support.TransactionTemplate;
  * 入账任务将静默地无事可做）或者是超级用户（权限没有边界），直接拒绝启动。
  * 配错了就起不来，远好过看起来正常。
  */
-public final class SystemLedger implements AutoCloseable {
+public final class SystemLedger {
 
     private static final Logger log = LoggerFactory.getLogger(SystemLedger.class);
 
@@ -44,19 +44,13 @@ public final class SystemLedger implements AutoCloseable {
     /** 一次系统事务里能用的两样东西：系统连接上的 SQL 客户端，和绑在同一连接上的账本。 */
     public record Session(JdbcClient jdbc, LedgerService ledger) {}
 
-    private final HikariDataSource pool;
     private final TransactionTemplate tx;
     private final Session session;
 
-    /** 池是不是本实例自己建的（只有 {@link #connect} 建的才是）；不是自己的池，{@link #close} 不能碰。 */
-    private final boolean ownsPool;
-
-    private SystemLedger(HikariDataSource pool, JdbcTransactionManager transactionManager, boolean ownsPool) {
-        this.ownsPool = ownsPool;
+    private SystemLedger(HikariDataSource pool, JdbcTransactionManager transactionManager) {
         if (transactionManager.getDataSource() != pool) {
             throw new IllegalArgumentException("系统事务管理器必须管着系统池：否则 inTransaction 开的事务管不住账本的 SQL，每条各自提交");
         }
-        this.pool = pool;
         this.tx = new TransactionTemplate(transactionManager);
         JdbcTemplate template = new JdbcTemplate(pool);
         template.setExceptionTranslator(lockTimeoutAsTransient(template.getExceptionTranslator()));
@@ -92,25 +86,10 @@ public final class SystemLedger implements AutoCloseable {
 
     /** 用容器里的系统池与系统事务管理器建账本，并做启动自检（身份、判官）。任何一步不满足都抛出；池是容器的 bean，由容器关。 */
     public static SystemLedger start(HikariDataSource pool, JdbcTransactionManager transactionManager) {
-        SystemLedger ledger = new SystemLedger(pool, transactionManager, false);
+        SystemLedger ledger = new SystemLedger(pool, transactionManager);
         ledger.requireSystemIdentity();
         ledger.judgeAtBoot();
         return ledger;
-    }
-
-    /** 不经容器、自己建池（测试用：拿错误的身份验证自检会拒绝）。自检失败时池随之关闭；成功时用完要 {@link #close}。 */
-    public static SystemLedger connect(String jdbcUrl, String username, String password, int maximumPoolSize,
-                                       Duration lockTimeout) {
-        HikariDataSource pool = pool(jdbcUrl, username, password, maximumPoolSize, lockTimeout);
-        try {
-            SystemLedger ledger = new SystemLedger(pool, new JdbcTransactionManager(pool), true);
-            ledger.requireSystemIdentity();
-            ledger.judgeAtBoot();
-            return ledger;
-        } catch (RuntimeException e) {
-            pool.close();
-            throw e;
-        }
     }
 
     /** 在系统身份的一个事务里做一件事。回调抛出 = 整体回滚。外层已有 system 事务时加入它。 */
@@ -162,14 +141,6 @@ public final class SystemLedger implements AutoCloseable {
         } else {
             violations.forEach(v -> log.error("账本判官：{}", v));
             log.error("账本判官（系统身份）：{} 处违规，可见分录 {} 条——不变量被破坏，先查再动", violations.size(), entries);
-        }
-    }
-
-    /** 关掉自己建的池（{@link #connect} 建的）。容器装配的实例池归容器：这里关掉它，之后每次借连接都失败。 */
-    @Override
-    public void close() {
-        if (ownsPool) {
-            pool.close();
         }
     }
 }

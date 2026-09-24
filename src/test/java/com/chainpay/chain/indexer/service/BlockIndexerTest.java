@@ -44,7 +44,7 @@ import org.springframework.transaction.PlatformTransactionManager;
  * 库里的断言一律用属主连接 {@code jdbc} 读，不经过被测代码。
  */
 @SpringBootTest
-@DisplayName("M2-② · 落库与书签")
+@DisplayName("落库与书签")
 class BlockIndexerTest extends AbstractPostgresTest {
 
     static final String LINK  = "0x779877a7b0d9e8603169ddbd7836e478b4624789";

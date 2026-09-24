@@ -13,7 +13,7 @@ import org.junit.jupiter.api.Test;
  * <p>链路：助记词 → BIP-39 种子（无 passphrase）→ 主密钥 → 硬化派生到账户层 m/44'/60'/0' → neuter 成 xpub →
  * <b>服务端只拿 xpub</b> → 普通派生 0/i → Keccak 地址 → EIP-55。
  */
-@DisplayName("M3-① · 收款地址派生（零私钥）")
+@DisplayName("收款地址派生（零私钥）")
 class DepositAddressDeriverTest {
 
     static final String HARDHAT_MNEMONIC = "test test test test test test test test test test test junk";

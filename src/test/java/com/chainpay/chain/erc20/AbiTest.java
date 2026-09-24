@@ -27,7 +27,7 @@ import org.junit.jupiter.api.Test;
  * <p>偏移量和长度这两个字是<b>对方给的</b>：一个 32 字节的字能表示的数远大于机器整数，
  * 先收窄再检查等于没检查。所有形状不对的返回值都必须是 {@link IllegalArgumentException}，调用方只接这一种。
  */
-@DisplayName("M2-⑥ · ABI 编解码")
+@DisplayName("ABI 编解码")
 class AbiTest {
 
     static final String ALICE = "0x4281ecf07378ee595c564a59048801330f3084ee";

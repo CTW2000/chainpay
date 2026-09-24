@@ -18,7 +18,7 @@ import org.springframework.boot.test.web.server.LocalServerPort;
 
 /** 管理接口：登记一笔注资、列出来；没令牌 401；不存在的哈希 404 带信封。 */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
-@DisplayName("M6-② · 注资登记管理接口")
+@DisplayName("注资登记管理接口")
 class HotWalletFundingApiTest extends AbstractDepositPostingTest {
     static final String HOT = "0x3c44cdddb6a900fa2b585dd299e03d12fa4293bc";
     static final String TX = "0x" + "a".repeat(64);

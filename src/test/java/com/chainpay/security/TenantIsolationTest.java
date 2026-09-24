@@ -30,7 +30,7 @@ import org.springframework.boot.test.context.SpringBootTest;
  * 直连数据库的报表服务、和忘了调授权检查的将来的自己。
  */
 @SpringBootTest
-@DisplayName("M1 · 租户隔离契约（数据库层）")
+@DisplayName("租户隔离契约（数据库层）")
 class TenantIsolationTest extends AbstractPostgresTest {
 
     @Autowired

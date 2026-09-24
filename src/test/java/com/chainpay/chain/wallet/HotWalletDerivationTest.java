@@ -11,7 +11,7 @@ import org.junit.jupiter.api.Test;
  * 热钱包私钥从助记词的<b>硬化</b>账户 1' 派生：拿着收款树（账户 0'）的 xpub 算不出它，它也算不出收款树的任何私钥。
  * 用公开的 Hardhat 助记词做自洽检查；账户 1' 的地址没有公开的已知答案，所以只证明结构：路径硬化、与签名器一致、不在收款树里。
  */
-@DisplayName("M4-① · 热钱包离线派生")
+@DisplayName("热钱包离线派生")
 class HotWalletDerivationTest {
 
     static final String HARDHAT_MNEMONIC = "test test test test test test test test test test test junk";

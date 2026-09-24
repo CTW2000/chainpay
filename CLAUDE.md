@@ -82,7 +82,7 @@ com.chainpay
 同一个事实在两处以上用到，就给它一个以**概念**命名的家，放在定义这个事实的包里；不按层各放一份，也不建全局 `Constants` 大杂烩。
 **收口要配守卫**：一个文件挡不住下一个人再抄一份，要有测试把收口点和它的每个使用处绑住。现有的家：
 
-- **金额** `ledger/service/LedgerAmounts`：容量（18 / 20 位）、对外写法的两个正则、`requireFits`（装不装得下只在这里判）、`text`（金额写成字符串只经这里）。链上原始单位按 decimals 换算是另一个概念，家在 `chain/erc20/TokenAmounts`。
+- **金额** `ledger/service/LedgerAmounts`：容量（18 / 20 位）、对外写法的正则 `FITTING_DECIMAL`（写法与容量一起查，超了在边界就回 2001）、`requireFits`（装不装得下只在这里判）、`text`（金额写成字符串只经这里）。链上原始单位按 decimals 换算是另一个概念，家在 `chain/erc20/TokenAmounts`。
 - **地址** `chain/wallet/EthAddress`：`SHAPE`（给注解）、`isWellFormed`（给代码）、`lowercase`（存库）、`checksummed`（对外）。**库里的地址形状**只在函数 `is_eth_address`，地址类的列要么自带调它的 CHECK、要么外键指向这样的列。
 - **密钥形态的变量名**：只在 `tools/image-check.sh` 那一行正则（它在生产里按这个名单按值扫描镜像）；Java 测试经 `support/SecretNames` 读。
 

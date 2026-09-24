@@ -23,7 +23,7 @@ import org.springframework.dao.DataIntegrityViolationException;
  * 其他测试类（轮询）依赖那一行存在。
  */
 @SpringBootTest
-@DisplayName("M2-⑥ · 代币白名单")
+@DisplayName("代币白名单")
 class TokenRegistryTest extends AbstractPostgresTest {
 
     static final String LINK = "0x779877a7b0d9e8603169ddbd7836e478b4624789";

@@ -9,7 +9,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /** EIP-55 的测试用例（eips.ethereum.org/EIPS/eip-55「Test Cases」），期望值逐字。 */
-@DisplayName("M3-① · EIP-55 校验和")
+@DisplayName("EIP-55 校验和")
 class EthAddressTest {
 
     static final List<String> VECTORS = List.of(

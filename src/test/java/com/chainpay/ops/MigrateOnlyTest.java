@@ -14,7 +14,7 @@ import org.junit.jupiter.api.Test;
  * 迁移单独一步：只起数据源与 Flyway，不装配应用、不起任何定时任务；成功 0、失败非 0。
  * 部署脚本在切换之前跑它：迁移失败时旧版本还在跑、没有切换（取舍 6）。
  */
-@DisplayName("M6-④ · 只迁移不起应用")
+@DisplayName("只迁移不起应用")
 class MigrateOnlyTest extends AbstractPostgresTest {
 
     private String[] args(String... extra) {

@@ -11,7 +11,7 @@ import org.junit.jupiter.api.Test;
  * 翻译层是外部 JSON 的唯一入口：以太坊的 Quantity 永远是非负的十六进制，带符号或非法字符的都不是节点该给的东西。
  * {@code Long.parseLong} 与 {@code new BigInteger} 都接受前导减号，所以「只查 0x 前缀」会把 {@code 0x-1} 放成 -1。
  */
-@DisplayName("扫描补丁 · 十六进制解析只接受 [0-9a-fA-F]")
+@DisplayName("十六进制解析只接受 [0-9a-fA-F]")
 class HexTest {
 
     @Test

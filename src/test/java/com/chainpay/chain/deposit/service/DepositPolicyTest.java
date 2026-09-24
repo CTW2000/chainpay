@@ -20,7 +20,7 @@ import org.springframework.dao.QueryTimeoutException;
  * 策略与例外：最小入账额、balanceOf 第二意见、意外异常的分类、HELD 的人工路径。
  * 信合约做的（balanceOf），不信合约说的（Transfer 事件）。
  */
-@DisplayName("M3-③ · 入账策略与例外")
+@DisplayName("入账策略与例外")
 class DepositPolicyTest extends AbstractDepositPostingTest {
 
     @Test
@@ -63,7 +63,7 @@ class DepositPolicyTest extends AbstractDepositPostingTest {
     }
 
     @Test
-    @DisplayName("★ 余额问不到（合约 revert / 节点没有那一块的状态）：不猜，HELD，原因写明问不到")
+    @DisplayName("★ 余额问不到（合约 revert）：不猜，当场 HELD，原因写明问不到")
     void holdsWhenTheBalanceCannotBeRead() {
         chain.addTransfer(LINK, 5, ALICE, ACME_ADDRESS, TEN_LINK);   // 不用 pay：两条链上都没定义余额，FakeChain 会 revert
         indexUpTo(100, 90, 50);

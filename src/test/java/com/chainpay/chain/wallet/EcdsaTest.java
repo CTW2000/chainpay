@@ -11,7 +11,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /** 签名与恢复的边界：私钥范围、哈希长度、两种奇偶都能恢复、篡改后恢复出的是别人。 */
-@DisplayName("M4-① · ECDSA 的边界")
+@DisplayName("ECDSA 的边界")
 class EcdsaTest {
 
     static final BigInteger KEY = new BigInteger("ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80", 16);

@@ -12,7 +12,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /** 同一件事只叫一次，恢复再叫一次；没送到的下一轮再叫；UNKNOWN（没配的模块）不算事。 */
-@DisplayName("M6-③ · 告警策略")
+@DisplayName("告警策略")
 class AlertPolicyTest {
 
     private final AlertPolicy policy = new AlertPolicy();

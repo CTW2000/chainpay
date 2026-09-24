@@ -39,7 +39,7 @@ import org.springframework.transaction.interceptor.TransactionAttribute;
  * 从「商户申请地址」到「库里那一行」整条链路都有已知答案。
  */
 @SpringBootTest
-@DisplayName("M3-①b · 收款地址分配")
+@DisplayName("收款地址分配")
 class DepositAddressServiceTest extends AbstractPostgresTest {
 
     static final String LINK = "0x779877a7b0d9e8603169ddbd7836e478b4624789";

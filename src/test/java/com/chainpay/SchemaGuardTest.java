@@ -17,7 +17,7 @@ import org.springframework.boot.test.context.SpringBootTest;
  * 模式规矩由系统表守着，不只写在注释里。匹配集合都要求非空——守卫扫到 0 个对象等于没守。
  */
 @SpringBootTest
-@DisplayName("扫描补丁 · 模式守卫")
+@DisplayName("模式守卫")
 class SchemaGuardTest extends AbstractPostgresTest {
 
     @Test
@@ -86,7 +86,7 @@ class SchemaGuardTest extends AbstractPostgresTest {
     }
 
     @Test
-    @DisplayName("★ 每个视图都按调用者身份执行（security_invoker）：视图默认用主人的身份读表——主人是超级用户时静默绕过行级安全，不是超级用户时又静默看不见（判官就栽在后一种上，2026-09-21）")
+    @DisplayName("★ 每个视图都按调用者身份执行（security_invoker）：视图默认用主人的身份读表——主人是超级用户时静默绕过行级安全，不是超级用户时又静默看不见")
     void everyViewRunsAsItsCaller() {
         List<String> views = jdbc.sql("""
                         SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -104,7 +104,7 @@ class SchemaGuardTest extends AbstractPostgresTest {
     }
 
     @Test
-    @DisplayName("★ 每个带小数位的列都正好是账本自己的上限（2026-09-21）：常量改了或列改了都红——此前「18」散在四处，账本那份收紧成 17，全套测试一条不红")
+    @DisplayName("★ 每个带小数位的列都正好是账本自己的上限：常量改了或列改了都红")
     void everyAmountColumnIsExactlyTheLedgersCapacity() {
         // 带小数位的 numeric 一律当金额列（链上原始单位是 NUMERIC(78,0)，小数位 0，不在其中）。
         // 哪天真要一个不是金额的小数列（比如百分比），在这里显式放行，而不是悄悄放宽规则。
@@ -127,7 +127,7 @@ class SchemaGuardTest extends AbstractPostgresTest {
     }
 
     @Test
-    @DisplayName("★ 地址的形状在库里只写一份：只有 is_eth_address 里有这个正则，约束都调它（2026-09-22 收口，此前 8 个约束各抄一份）")
+    @DisplayName("★ 地址的形状在库里只写一份：只有 is_eth_address 里有这个正则，约束都调它")
     void addressShapeLivesOnlyInIsEthAddress() {
         List<String> constraintsWithRegex = jdbc.sql("""
                         SELECT conrelid::regclass || '.' || conname FROM pg_constraint
@@ -151,7 +151,7 @@ class SchemaGuardTest extends AbstractPostgresTest {
     }
 
     @Test
-    @DisplayName("★ 每个地址类的列都有守：自带调用 is_eth_address 的 CHECK，或外键指向这样的列（2026-09-22：注资登记的 token 两样都没有）")
+    @DisplayName("★ 每个地址类的列都有守：自带调用 is_eth_address 的 CHECK，或外键指向这样的列")
     void everyAddressColumnIsGuarded() {
         // 「地址类的列」按名字认：address、*_address、token、hot_wallet 的 text 列。起了别的名字的地址列这里认不出，要靠评审
         String addressColumns = """

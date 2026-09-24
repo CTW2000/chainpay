@@ -22,7 +22,7 @@ import tools.jackson.databind.ObjectMapper;
  * 这里用真 HTTP 打真 Tomcat：分组、探针、端口这些都是配置，只有真实启动才验得到。
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
-@DisplayName("M6-⓪ · 健康探针")
+@DisplayName("健康探针")
 class HealthProbesTest extends AbstractPostgresTest {
 
     @LocalServerPort
@@ -51,7 +51,7 @@ class HealthProbesTest extends AbstractPostgresTest {
     }
 
     @Test
-    @DisplayName("readiness：两个连接池都通才 UP；db 是 Boot 的组合项，主池与系统池各一个子项（2026-09-15 起系统池是 bean，手写的 systemDb 退役）")
+    @DisplayName("readiness：两个连接池都通才 UP；db 是 Boot 的组合项，主池与系统池各一个子项")
     void readinessListsBothPools() throws Exception {
         HttpResponse<String> r = get(managementPort(), "/actuator/health/readiness");
         assertThat(r.statusCode()).isEqualTo(200);
@@ -86,7 +86,7 @@ class HealthProbesTest extends AbstractPostgresTest {
     }
 
     @Test
-    @DisplayName("管理端口只绑回环地址；主端口默认也只绑回环（M6-②：容器里由 CHAINPAY_BIND_ADDRESS 放开）")
+    @DisplayName("管理端口只绑回环地址；主端口默认也只绑回环（容器里由 CHAINPAY_BIND_ADDRESS 放开）")
     void managementPortBindsLoopbackOnly() {
         assertThat(env.getProperty("management.server.address")).isEqualTo("127.0.0.1");
         assertThat(env.getProperty("server.address")).as("宿主上直接跑 jar 时不该对所有网卡开放").isEqualTo("127.0.0.1");

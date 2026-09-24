@@ -19,7 +19,6 @@ import com.chainpay.chain.rpc.JsonRpcException;
 import com.chainpay.ledger.service.LedgerAmounts;
 import com.chainpay.ledger.system.SystemLedger;
 import com.chainpay.ledger.system.TransientDbFailure;
-import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.time.Duration;
 import java.time.Instant;

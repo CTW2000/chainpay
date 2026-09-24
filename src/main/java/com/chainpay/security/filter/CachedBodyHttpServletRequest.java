@@ -28,11 +28,6 @@ public class CachedBodyHttpServletRequest extends HttpServletRequestWrapper {
         this.body = body;
     }
 
-    /** 原始请求体字节。 */
-    public byte[] body() {
-        return body;
-    }
-
     public String bodyAsString() {
         return new String(body, StandardCharsets.UTF_8);
     }

@@ -25,7 +25,7 @@ import org.springframework.boot.test.context.SpringBootTest;
  * 对账：库里的下一个编号是意图，链上的计数是真相，链比库多 = 有人在别处用了这把钥匙，整把钱包停发。
  */
 @SpringBootTest
-@DisplayName("M4-② · 发送：编号、签名、先落库再广播")
+@DisplayName("发送：编号、签名、先落库再广播")
 class PayoutSenderTest extends AbstractPayoutSendingTest {
 
     @Test

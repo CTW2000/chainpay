@@ -9,7 +9,7 @@ import org.junit.jupiter.api.Test;
  * 没有 Console（管道、IDE 控制台、CI）时必须拒绝，不能退回明文 readLine——那违反「工具不回显」。
  * 这条测试不能真的碰 System.in——Surefire 用它做进程间指令通道——所以只测「没有终端就拒绝」这个分支。
  */
-@DisplayName("扫描补丁 · 离线 xpub 工具没有终端就拒绝，绝不回显助记词")
+@DisplayName("离线 xpub 工具没有终端就拒绝，绝不回显助记词")
 class XpubToolTest {
 
     @Test

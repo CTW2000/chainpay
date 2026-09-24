@@ -32,7 +32,7 @@ import tools.jackson.databind.ObjectMapper;
  * <p>最后两条守的是「读法的洞」：JDK 的请求超时只管到响应头到达，正文滴流它不管；
  * 正文没有上限，坏节点可以一直发到我们内存耗尽。
  */
-@DisplayName("M2 · JSON-RPC 客户端")
+@DisplayName("JSON-RPC 客户端")
 class JsonRpcClientTest {
 
     private enum Mode { CANNED, TRICKLE, ENDLESS }

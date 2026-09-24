@@ -19,7 +19,7 @@ import org.springframework.jdbc.core.simple.JdbcClient;
  * 计时就能确认「这个 api_key 是活的」。响应已经做到不可区分，耗时也要。
  */
 @SpringBootTest
-@DisplayName("扫描补丁 · 凭证查找的耗时不能泄露 key 是否存在")
+@DisplayName("凭证查找的耗时不能泄露 key 是否存在")
 class ApiCredentialServiceTimingTest extends AbstractPostgresTest {
 
     @Autowired

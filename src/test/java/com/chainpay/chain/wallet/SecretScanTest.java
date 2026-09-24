@@ -15,7 +15,7 @@ import org.junit.jupiter.api.Test;
  * 私钥不在代码里、不在镜像里、不在日志里，由检查脚本 tools/check-secrets.sh 守；
  * 这里证明它在当前仓库上过，且真的能抓住埋进去的私钥与助记词，同时不回显命中的值。
  */
-@DisplayName("M4-① · 私钥检查脚本")
+@DisplayName("私钥检查脚本")
 class SecretScanTest {
 
     static final Path SCRIPT = Path.of("tools/check-secrets.sh");

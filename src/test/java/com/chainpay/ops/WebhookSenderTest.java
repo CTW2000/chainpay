@@ -24,7 +24,7 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 /** webhook 出口：真的 POST 到一个本地假接收端；四种载荷形状；非 2xx 算没送到；没配地址只打日志；日志与描述里只有主机名。 */
-@DisplayName("M6-③ · webhook 出口")
+@DisplayName("webhook 出口")
 class WebhookSenderTest {
 
     private HttpServer server;

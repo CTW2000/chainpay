@@ -30,7 +30,7 @@ import org.springframework.boot.test.web.server.LocalServerPort;
  * 签名测试会「绿着但什么都不证明」。删接口时，打它的测试要逐条看过，不能只看红的那些。
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
-@DisplayName("M1 · API 安全契约")
+@DisplayName("API 安全契约")
 class ApiSecurityTest extends AbstractPostgresTest {
 
     /** 签名层的靶子：登记幂等、无副作用、不依赖链上配置。GET 空列表也回 200。 */

@@ -15,7 +15,7 @@ import org.springframework.mock.env.MockEnvironment;
  * 进程角色的判定（纯逻辑，不起容器）。
  * 真的应用里守卫是不是在任何 bean 之前生效，由 {@link ProcessRoleBootTest} 证明；禁用名单的内容对不对，由 {@code EnvInventoryTest} 拿变量清单对。
  */
-@DisplayName("进程拆分 ① · 进程角色：恰好一个，凭证放错就不启动")
+@DisplayName("进程角色：恰好一个，凭证放错就不启动")
 class ProcessRoleTest {
 
     /** 一个不会碰巧出现在报错里的值：报错里出现它，就是把密钥写进了日志。 */
@@ -91,7 +91,7 @@ class ProcessRoleTest {
     }
 
     @Test
-    @DisplayName("worker 该拿的都能拿：系统角色、热钱包私钥、两个节点、告警地址、签名密钥、xpub（取舍 8：记账前要用它重新派生收款地址）")
+    @DisplayName("worker 该拿的都能拿：系统角色、热钱包私钥、两个节点、告警地址、签名密钥、xpub（记账前要用它重新派生收款地址）")
     void workerKeepsItsKeys() {
         MockEnvironment env = env("worker")
                 .withProperty("chainpay.system-db.password", SECRET)

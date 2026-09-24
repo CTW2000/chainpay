@@ -16,7 +16,7 @@ import org.junit.jupiter.api.Test;
  * 我们自己要发的那种交易：Sepolia 上付 1 LINK。字段的排列、类型字节、两个哈希、签名后的原文，
  * 以及「从原文能恢复出签名者」这条自洽性。私钥用公开的 Hardhat 测试私钥 #0（它对应的地址另有已知答案测试钉住）。
  */
-@DisplayName("M4-① · 类型 2 交易：从九个字段到原文")
+@DisplayName("类型 2 交易：从九个字段到原文")
 class Eip1559TransactionTest {
 
     static final BigInteger HARDHAT_KEY_0 = new BigInteger("ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80", 16);

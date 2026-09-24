@@ -37,7 +37,7 @@ import org.springframework.transaction.interceptor.TransactionAspectSupport;
  * <p>用 {@link FakeChain#reorgFrom} 造一次真正的分支切换（不只是改掉一个块哈希），日志跟着分支走。
  */
 @SpringBootTest
-@DisplayName("M2-④ · 重组回滚")
+@DisplayName("重组回滚")
 class ReorgRecoveryTest extends AbstractPostgresTest {
 
     static final String LINK  = "0x779877a7b0d9e8603169ddbd7836e478b4624789";
@@ -128,7 +128,7 @@ class ReorgRecoveryTest extends AbstractPostgresTest {
     }
 
     @Test
-    @DisplayName("★ 交易没被重新打包：旧行永远 ORPHANED，视图里看不到，M3 永远不会记它")
+    @DisplayName("★ 交易没被重新打包：旧行永远 ORPHANED，视图里看不到，入账永远不会记它")
     void aTransferThatIsNotReincludedStaysOrphanedAndInvisible() {
         indexChain(10, 8, 5, 10);
         chain.reorgFrom(10, "A");

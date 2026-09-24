@@ -21,7 +21,7 @@ import org.springframework.transaction.PlatformTransactionManager;
  * 确认等级是<b>算出来的</b>：视图按最后一次看到的链头，给每条在链上的日志一个 SEEN / SAFE / FINAL。
  */
 @SpringBootTest
-@DisplayName("M2-③ · 确认等级视图")
+@DisplayName("确认等级视图")
 class ConfirmationViewTest extends AbstractPostgresTest {
 
     static final String LINK  = "0x779877a7b0d9e8603169ddbd7836e478b4624789";

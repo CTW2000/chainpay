@@ -24,7 +24,7 @@ import org.springframework.jdbc.core.simple.JdbcClient;
  * 三笔都是普通的 ledger.transfer，各有幂等键——「同一笔业务只结算一次」由幂等键的唯一约束守。
  */
 @SpringBootTest
-@DisplayName("M4-⓪ · 提现的三笔账本流：冻结、结算、解冻")
+@DisplayName("提现的三笔账本流：冻结、结算、解冻")
 class PayoutLedgerTest extends AbstractPostgresTest {
 
     private static final BigDecimal ONE = new BigDecimal("1");

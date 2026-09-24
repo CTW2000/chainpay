@@ -36,8 +36,7 @@ class SystemLedgerConfig {
         return new JdbcTransactionManager(systemDataSource);
     }
 
-    /** 池由 systemDataSource 这个 bean 自己关，这里不再关一次。 */
-    @Bean(destroyMethod = "")
+    @Bean
     @DependsOnDatabaseInitialization   // 启动判官要用 V22 的 ledger_judge()：先迁移，再自检。公开注解，不点名 Boot 内部的 bean 名
     SystemLedger systemLedger(@Qualifier(SystemLedger.QUALIFIER) HikariDataSource systemDataSource,
                               @Qualifier(SystemLedger.QUALIFIER) JdbcTransactionManager systemTransactionManager) {
