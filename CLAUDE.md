@@ -128,7 +128,7 @@ SELECT * FROM ledger_judge();   -- 以 chainpay_system 身份跑；必须 0 行
 - `SystemLedger` 建池即自检（不是 BYPASSRLS、或是超级用户 = 拒绝启动，并跑一次判官）；系统身份对账本同样只追加。
 - **系统侧的写法（方案甲，2026-09-23 用户定，同日换完）**：注入 `@Qualifier("system")` 的 `JdbcClient` 与 `LedgerService`。读与单条写直接用系统 `JdbcClient`（一条语句本身就是一个事务）；
   几条写要一起成败的，放进 `@Transactional("system")` 的方法。网络在事务外的类照索引器的做法拆出写入类（`AuditWriter`、`DepositWriter`、`PayoutSendWriter`、`PayoutTrackWriter`），计数靠写入方法的返回值，提交了才算。
-  例外：在别的事务里被调用的系统读，也要自己开一个 system 事务（`PlatformAddresses`，在商户的主池事务里被调）——直接用系统 `JdbcClient` 的话，Spring 会把那条系统连接绑到外层事务上、等它结束才还，而系统池默认只有 2 条（`WithdrawalServiceTest` 钉住）。
+  不要在商户的主池事务里直接用系统 `JdbcClient`：Spring 会把借来的系统连接绑到外层事务上、等它结束才还，而系统池默认只有 2 条。web 要跨商户问「是不是」，用库里的是 / 否函数（见下下条）。
   系统账本 `SystemLedgerService` 把 `transfer` 覆写成 system + `MANDATORY`：父类那个不带限定名的注解指向主池，原样继承的话，在系统事务外调用时系统连接上的几条 SQL 各自提交——现在不在 system 事务里调就当场抛。
   `SystemLedger` 的回调（`inTransaction` / `Session`）已删，它只剩建池、建 `JdbcClient` 与启动自检。
 - 系统池、系统事务管理器、系统 `JdbcClient`、系统账本四个 bean 都是 `@Bean(defaultCandidate = false)` + `@Qualifier("system")`（`SystemLedgerConfig`）。**这四个 `defaultCandidate = false` 都是承重墙**：
@@ -136,6 +136,9 @@ SELECT * FROM ledger_judge();   -- 以 chainpay_system 身份跑；必须 0 行
   去掉 `JdbcClient` 那个，Boot 自动配置的主 `JdbcClient` 退让，所有按类型注入它的地方悄悄拿到系统身份（实测，应用照常启动）；去掉账本那个，两个候选撞车、应用起不来。`SystemPoolBeansTest` 抓得住这四种。
 - 用到系统身份（`SystemLedger` 或字面量限定名 `"system"`）的源文件里，`@Transactional` 必须写明限定名（`SystemTransactionalQualifierTest`）；
   系统侧每个带注解的方法都钉住「是代理、不是 final、限定名 system、传播方式对」（`SystemTransactionalBeansTest`）。controller 包不得引用系统身份的入口与四个 bean（`ControllerBoundaryTest` 扫源码）。
+- **web 问「这是不是平台自己的地址」**：库里的是 / 否函数 `is_platform_address`（V30，进程拆分第 ②）按属主 `chainpay_system` 执行（`SECURITY DEFINER`），应用角色只拿到布尔值、拿不到任何一行。
+  每个 SECURITY DEFINER 函数都锁死：属主是 `chainpay_system`、`search_path` 钉死且 `pg_temp` 在最后、PUBLIC 没有执行权（`SchemaGuardTest`）；函数体先自检属主看得全，看不全就抛、不答「不是」（坑 3）。
+  `PlatformAddressFunctionTest` 实测两种绕法都不成：调用方建同名空临时表并授权给属主（search_path 没钉死时函数就读它）、换一个看不全的属主。
 
 ### 进程角色（进程拆分进行中）
 
@@ -147,7 +150,7 @@ SELECT * FROM ledger_judge();   -- 以 chainpay_system 身份跑；必须 0 行
 
 ### 事务的两种写法
 
-- **容器创建的服务用 `@Transactional`**（`TenantScope`、`LedgerServiceImpl`、`AdminService`、`DepositAddressService`、`HotWalletFundingService`、`PayoutApprovalService`、`PlatformAddresses`，以及下面的写入类……）。注解靠代理生效，三条纪律：
+- **容器创建的服务用 `@Transactional`**（`TenantScope`、`LedgerServiceImpl`、`AdminService`、`DepositAddressService`、`HotWalletFundingService`、`PayoutApprovalService`，以及下面的写入类……）。注解靠代理生效，三条纪律：
   类与带注解的方法不能 final（final 类启动失败；final 方法启动只打一行 WARN，调用时字段全是 null）；不能 this 自调用；容器外 `new` 的实例没有事务（后两条完全静默）。
   删掉注解本身也静默（外层还有事务时测试照绿），所以守卫测试钉住「容器给的是代理、方法带 REQUIRED、类与方法都不是 final」（`DepositAddressServiceTest`、`IndexerWritersTransactionalTest`、`SystemTransactionalBeansTest`）。
 - **网络在事务外、写库在事务里**的类：事务那一段搬进写入类，网络那一侧留在原类。索引器（`BatchWriter` / `ChainHeadWriter` / `ReorgWriter` / `ReconcileWriter`）、
@@ -235,7 +238,7 @@ SELECT * FROM ledger_judge();   -- 以 chainpay_system 身份跑；必须 0 行
   其它带 code 的拒绝与 `underpriced` → 钱包 HALTED。四处问节点的地方都先接 `RpcAuthException` → 钱包 HALTED → 告警。
 - **追踪**（`PayoutTracker`）只读链、只改状态、只在最后一步记账：status 0 也是上链（编号已用、gas 已扣）；主节点说那块哈希变了 = 重组，退回 BROADCAST；
   两个节点的 finalized 都过了那块且哈希一致才结算或解冻。卡单（广播超过 3 分钟、没回执、节点还认着）→ 同编号加价 25% 替换，两个费率都有上限。
-- **申请**（`WithdrawalService.request`，顺序是硬的）：代币 → 金额 → 锁本商户的 merchant 行（同一商户的申请从这里起串行）→ 幂等键 → 平台自己的地址永远拒绝 → 白名单 → 按限额定「放行 / 待核准」→ 冻结 → 插行（冻结与插行同一事务）。
+- **申请**（`WithdrawalService.request`，顺序是硬的）：代币 → 金额 → 锁本商户的 merchant 行（同一商户的申请从这里起串行）→ 幂等键 → 平台自己的地址永远拒绝（问库里的是 / 否函数；热钱包要等发送任务第一轮对账、库里有了它那一行才认得出）→ 白名单 → 按限额定「放行 / 待核准」→ 冻结 → 插行（冻结与插行同一事务）。
   限额没定过 = 一律人工；当日上限只算自动放行过的。
 - **已知缺口**：发送任务签名前不复核白名单、限额、核准与冻结；入账不重新派生收款地址——worker 不能信 web 写进库里的行（进程拆分第 ③ 步修）。
   商户用应用角色仍能插入借方是冻结账户的转账（没有接口会这么做；数据库层的写入检查用户定先不做）。

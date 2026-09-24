@@ -62,6 +62,14 @@ public class WithdrawalRepository {
         return jdbc.sql("SELECT id, address, label, status, created_at FROM payout_address WHERE address = :a").param("a", address).query(ADDRESS).optional();
     }
 
+    /**
+     * 这是不是平台自己的地址（任何商户的收款地址，或热钱包）。本商户看不到别家的行，问的是库里的是 / 否函数（V30）：
+     * 它按系统身份查、只回答布尔值，本连接拿不到任何一行。
+     */
+    public boolean isPlatformAddress(String address) {
+        return jdbc.sql("SELECT is_platform_address(:a)").param("a", address).query(Boolean.class).single();
+    }
+
     /** 停用：RLS 让别人的行改不动（0 行）。 */
     public boolean disableAddress(long id) {
         return jdbc.sql("UPDATE payout_address SET status = 'DISABLED' WHERE id = :id AND status = 'ACTIVE'").param("id", id).update() == 1;

@@ -42,8 +42,7 @@ class SystemTransactionalBeansTest extends AbstractPostgresTest {
             new Expected("payoutTrackWriter", "recordMined", REQUIRED),
             new Expected("payoutTrackWriter", "reorged", REQUIRED),
             new Expected("payoutTrackWriter", "settle", REQUIRED),
-            new Expected("payoutApprovalService", "reject", REQUIRED),
-            new Expected("platformAddresses", "isDepositAddress", REQUIRED));
+            new Expected("payoutApprovalService", "reject", REQUIRED));
 
     @Autowired
     private ApplicationContext context;

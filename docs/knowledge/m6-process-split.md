@@ -176,9 +176,9 @@ flowchart LR
 
 - ✅ ⓪ 取舍与对标（09-23）
 - ✅ ① 进程角色（09-23，`e3a5f81`）
-- ⬜ ② web 的平台地址检查改走是 / 否函数
+- ✅ ② web 的平台地址检查改走是 / 否函数（09-24，做法见下）
 - ✅ 系统侧改用 `@Transactional("system")`（方案甲，09-23 定，同日换完；和拆分正交）：第一批对账、注资登记、健康检查（`4cc09bf`）；第二批入账、核准、追踪、发送，删掉 `inTransaction` / `Session`。
-  `WithdrawalService` 那一问先搬进 `PlatformAddresses`（自己一个系统事务，问完就还连接），② 把它换成是 / 否函数
+  `WithdrawalService` 那一问当时先搬进 `PlatformAddresses`（自己一个系统事务，问完就还连接），② 把它换成了是 / 否函数、删掉
 - ⬜ ③ worker 不信 web 写的行（取舍 8）
 - ⬜ ④ 装配拆开
 - ⬜ ⑤ 属主口令只在迁移那一步 + 启动时校验库版本
@@ -188,3 +188,13 @@ flowchart LR
 
 **① 的做法**：`ops/role/ProcessRole`（两个角色各一张禁用名单，每项写环境变量名、配置键、它能干什么；web 七项，worker 一项）；`ops/role/ProcessRoleConfig`（静态、最高优先级的 BeanFactoryPostProcessor，在造 bean 之前核对，一次性命令的最小上下文不扫描它）；compose 的 `app` 以 `worker` 身份跑，测试基类激活 `test` + `worker`；「密钥形态的变量名」收口到 `tools/image-check.sh`（补 `WEBHOOK_URL`、`RPC`），测试经 `SecretNames` 读；探针的节点地址挪到 `env/probe.env.example`。
 拆墙：守卫写成普通 bean → 应用在它之前就去建连接（`Connection refused`）；名单上的配置键拼错 → 只有起真应用的测试红。真跑：同一份环境以 web 身份起 → 拒绝启动、点名六个变量、没建任何连接池；不给角色 → 拒绝启动；输出里没有任何密钥值。
+
+**② 的做法**：V30 建 `is_platform_address(candidate)`，`SECURITY DEFINER`、属主 `chainpay_system`、`SET search_path = public, pg_temp`，`REVOKE ALL … FROM PUBLIC` 后只 `GRANT EXECUTE` 给 `chainpay_app`（同一个迁移事务）；
+函数体先照 `ledger_judge` 自检执行身份，看不全就抛 `insufficient_privilege`；入参先 `lower()`。`WithdrawalService` 只剩应用角色的两样东西（主池的 `JdbcClient` 与账本），
+热钱包签名器与 `PlatformAddresses` 都拿掉；两句报错合成一句，错误码 2010 不变。热钱包要等发送任务第一轮对账、库里有了它那一行才认得出（之前那段由 ③ 的 worker 复核兜）。
+守卫与测试：`SchemaGuardTest` 守每个 SECURITY DEFINER 函数（属主、search_path 以 pg_temp 结尾、PUBLIC 无执行权）；`PlatformAddressFunctionTest`：应用角色一行都看不到却问得到是 / 否、临时表冒名骗不了、属主看不全时拒答；
+`WithdrawalServiceTest` 只用应用角色：别家的收款地址、有行的热钱包都 2010。
+拆墙（六面，全红）：去掉自检 → 看不全的属主答「不是」；不钉 search_path → 调用方建同名空临时表并授权给属主，函数答「不是」（少了授权那一步只会报 permission denied，不是答「不是」）；
+不 REVOKE、不改属主 → 只有守卫红（属主是超级用户时行为照对，正是坑 3 的形状）；去掉热钱包那半句 → 函数测试与提现测试都红；去掉 SECURITY DEFINER → 自检当场拒绝应用角色，连正常登记都失败（响亮，不静默）。
+真跑（从 worktree 部署，`COMPOSE_PROJECT_NAME=chainpay`）：迁移到 V30；库里属主 `chainpay_system`、`search_path=public, pg_temp`、PUBLIC 不能执行；切成 `chainpay_app` 看不到任何收款地址行，函数对收款地址、热钱包（含大写写法）答是、外面的地址答否；
+商户接口（`tools/api.py`，演练商户 acme）登记热钱包地址、登记自己的收款地址 → 都是 400 + 2010，白名单没多行；0 条 ERROR / WARN。

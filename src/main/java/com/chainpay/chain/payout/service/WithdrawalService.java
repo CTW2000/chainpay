@@ -8,7 +8,6 @@ import com.chainpay.chain.payout.repository.WithdrawalRepository.Limit;
 import com.chainpay.chain.payout.repository.WithdrawalRepository.TokenRow;
 import com.chainpay.chain.payout.repository.WithdrawalRepository.WithdrawalRow;
 import com.chainpay.chain.wallet.EthAddress;
-import com.chainpay.chain.wallet.HotWalletSigner;
 import com.chainpay.common.web.ErrorCode;
 import com.chainpay.ledger.service.LedgerAmounts;
 import com.chainpay.ledger.service.LedgerService;
@@ -31,15 +30,11 @@ public class WithdrawalService {
 
     private final WithdrawalRepository repo;
     private final PayoutLedger payoutLedger;
-    private final PlatformAddresses platformAddresses;
-    private final Optional<HotWalletSigner> hotWallet;
 
-    /** 热钱包只在设了私钥时装配（{@code Optional}）：没装配就没有热钱包地址可拒，别的规则照常。 */
-    public WithdrawalService(JdbcClient jdbc, LedgerService ledger, PlatformAddresses platformAddresses, Optional<HotWalletSigner> hotWallet) {
+    /** 只拿应用角色的两样东西：商户连接上的 SQL 客户端与账本。没有系统身份、没有热钱包签名器——拆分之后 web 手里就这些。 */
+    public WithdrawalService(JdbcClient jdbc, LedgerService ledger) {
         this.repo = new WithdrawalRepository(jdbc);
         this.payoutLedger = new PayoutLedger(jdbc, ledger);
-        this.platformAddresses = platformAddresses;
-        this.hotWallet = hotWallet;
     }
 
     public AddressRow registerAddress(long merchantId, String address, String label) {
@@ -125,15 +120,13 @@ public class WithdrawalService {
     }
 
     /**
-     * 平台自己的口袋不能当提现目标：任何商户的收款地址（内部转账；商户连接看不到别家的行，由 {@link PlatformAddresses} 以系统身份只问是或否），
-     * 以及热钱包自己的地址（to == from 的一笔交易：编号照用、gas 照付、账本记「付出去了」，链上什么都没变）。
+     * 平台自己的口袋不能当提现目标：任何商户的收款地址（内部挪动），以及热钱包自己的地址（to == from 的一笔交易：
+     * 编号照用、gas 照付、账本记「付出去了」，链上什么都没变）。商户连接看不到别家的行，问的是库里的是 / 否函数（V30）；
+     * 热钱包也从库里认——发送任务第一轮对账时建了它那一行，这里才认得出。
      */
     private void rejectPlatformAddress(String lower) {
-        if (hotWallet.map(w -> w.address().equalsIgnoreCase(lower)).orElse(false)) {
-            throw new WithdrawalRejectedException(HttpStatus.BAD_REQUEST, ErrorCode.INTERNAL_ADDRESS, "这是平台的热钱包地址，不能作为提现目标");
-        }
-        if (platformAddresses.isDepositAddress(lower)) {
-            throw new WithdrawalRejectedException(HttpStatus.BAD_REQUEST, ErrorCode.INTERNAL_ADDRESS, "这是平台的收款地址，不能作为提现目标");
+        if (repo.isPlatformAddress(lower)) {
+            throw new WithdrawalRejectedException(HttpStatus.BAD_REQUEST, ErrorCode.INTERNAL_ADDRESS, "这是平台自己的地址（收款地址或热钱包），不能作为提现目标");
         }
     }
 }

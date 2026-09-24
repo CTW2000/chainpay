@@ -104,6 +104,33 @@ class SchemaGuardTest extends AbstractPostgresTest {
     }
 
     @Test
+    @DisplayName("★ 每个 SECURITY DEFINER 函数：属主是 chainpay_system、search_path 钉死且 pg_temp 在最后、PUBLIC 没有执行权")
+    void everySecurityDefinerFunctionIsLockedDown() {
+        // 按属主身份执行的函数是一扇侧门。search_path 没钉死（或 pg_temp 不在最后），调用方能在自己的临时 schema 里建同名表喂给它；
+        // PUBLIC 能执行，谁都能从这扇门进；属主是迁移账号时，开发库、测试库（超级用户）照绿，托管库（非超级用户）一行都看不到。
+        List<String> functions = jdbc.sql("""
+                        SELECT p.oid::regprocedure::text FROM pg_proc p
+                        WHERE p.pronamespace = 'public'::regnamespace AND p.prosecdef ORDER BY 1
+                        """).query(String.class).list();
+        assertThat(functions).as("守卫的匹配集合不能为空").isNotEmpty();
+
+        List<String> violations = jdbc.sql("""
+                        SELECT p.oid::regprocedure::text || '：' || concat_ws('、',
+                                 CASE WHEN pg_get_userbyid(p.proowner) <> 'chainpay_system' THEN '属主是 ' || pg_get_userbyid(p.proowner) END,
+                                 CASE WHEN NOT EXISTS (SELECT 1 FROM unnest(p.proconfig) c WHERE c ~ '^search_path=.*pg_temp$')
+                                      THEN 'search_path 没钉死或 pg_temp 不在最后' END,
+                                 CASE WHEN has_function_privilege('public', p.oid, 'EXECUTE') THEN 'PUBLIC 能执行' END)
+                        FROM pg_proc p
+                        WHERE p.pronamespace = 'public'::regnamespace AND p.prosecdef
+                          AND (pg_get_userbyid(p.proowner) <> 'chainpay_system'
+                               OR NOT EXISTS (SELECT 1 FROM unnest(p.proconfig) c WHERE c ~ '^search_path=.*pg_temp$')
+                               OR has_function_privilege('public', p.oid, 'EXECUTE'))
+                        ORDER BY 1
+                        """).query(String.class).list();
+        assertThat(violations).as("没锁好的 SECURITY DEFINER 函数").isEmpty();
+    }
+
+    @Test
     @DisplayName("★ 每个带小数位的列都正好是账本自己的上限：常量改了或列改了都红")
     void everyAmountColumnIsExactlyTheLedgersCapacity() {
         // 带小数位的 numeric 一律当金额列（链上原始单位是 NUMERIC(78,0)，小数位 0，不在其中）。
