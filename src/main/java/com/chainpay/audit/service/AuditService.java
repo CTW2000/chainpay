@@ -17,7 +17,6 @@ import com.chainpay.chain.rpc.ChainReader;
 import com.chainpay.chain.rpc.Hex;
 import com.chainpay.chain.rpc.JsonRpcException;
 import com.chainpay.ledger.service.LedgerAmounts;
-import com.chainpay.ledger.system.SystemLedger;
 import com.chainpay.ledger.system.TransientDbFailure;
 import java.math.BigInteger;
 import java.time.Duration;
@@ -31,6 +30,7 @@ import java.util.Optional;
 import java.util.function.Function;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.jdbc.core.simple.JdbcClient;
 
 /**
  * 对账：站在两个节点都认的 finalized 块 F 上，把链上事实和库内记录逐项比对。只读、只报，不改任何业务表。
@@ -50,15 +50,18 @@ public final class AuditService {
 
     public record Status(Optional<AuditResult> lastRun, boolean stale) {}
 
-    private final SystemLedger system;
+    private final JdbcClient systemJdbc;
+    private final AuditWriter writer;
     private final ChainReader primary;
     private final ChainReader audit;
     private final Erc20Calls primaryCalls;
     private final Erc20Calls auditCalls;
     private final int lagBlocks;
 
-    public AuditService(SystemLedger system, ChainReader primary, ChainReader audit, int lagBlocks) {
-        this.system = system;
+    /** @param systemJdbc 系统连接（读全部商户的行）；写结论走 {@link AuditWriter}，它在自己的 system 事务里落库 */
+    public AuditService(JdbcClient systemJdbc, AuditWriter writer, ChainReader primary, ChainReader audit, int lagBlocks) {
+        this.systemJdbc = systemJdbc;
+        this.writer = writer;
         this.primary = primary;
         this.audit = audit;
         this.primaryCalls = new Erc20Calls(primary);
@@ -122,7 +125,7 @@ public final class AuditService {
             holders.addAll(hotWallets);
             for (String holder : holders) {
                 String role = hotWallets.contains(holder) ? "热钱包" : "收款地址";
-                BigInteger expected = system.inTransaction(s -> new DepositRepository(s.jdbc()).netTransfersUpTo(holder, t.address(), f));   // 与入账核余额同一条 SQL
+                BigInteger expected = new DepositRepository(systemJdbc).netTransfersUpTo(holder, t.address(), f);   // 与入账核余额同一条 SQL
                 BigInteger onPrimary = primaryCalls.balanceOf(t.address(), holder, tag);
                 BigInteger onAudit = auditCalls.balanceOf(t.address(), holder, tag);
                 String subject = role + " " + holder + " · " + t.symbol();
@@ -248,12 +251,7 @@ public final class AuditService {
     private AuditResult record(Instant started, String status, Head head, List<AuditFinding> findings, String detail) {
         Long number = head == null ? null : head.number();
         String hash = head == null ? null : head.hash();
-        long runId = system.inTransaction(s -> {
-            AuditRepository repo = new AuditRepository(s.jdbc());
-            long id = repo.insertRun(started, status, number, hash, findings.size(), detail);
-            repo.insertFindings(id, findings);
-            return id;
-        });
+        long runId = writer.record(started, status, number, hash, findings, detail);
         if ("FAILED".equals(status)) {
             log.error("对账 run {} 没跑完：{}", runId, detail);
         } else if (!findings.isEmpty()) {
@@ -264,6 +262,6 @@ public final class AuditService {
     }
 
     private <T> T read(Function<AuditRepository, T> query) {
-        return system.inTransaction(s -> query.apply(new AuditRepository(s.jdbc())));
+        return query.apply(new AuditRepository(systemJdbc));
     }
 }

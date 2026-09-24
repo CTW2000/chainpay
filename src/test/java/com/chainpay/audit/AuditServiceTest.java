@@ -6,7 +6,9 @@ import com.chainpay.audit.domain.AuditFinding;
 import com.chainpay.audit.domain.AuditKind;
 import com.chainpay.audit.domain.AuditResult;
 import com.chainpay.audit.service.AuditService;
+import com.chainpay.audit.service.AuditWriter;
 import com.chainpay.chain.deposit.service.AbstractDepositPostingTest;
+import com.chainpay.chain.payout.service.HotWalletFundingService;
 import com.chainpay.chain.rpc.JsonRpcException;
 import com.chainpay.chain.support.FakeChain;
 import com.chainpay.ledger.service.LedgerService.TransferCode;
@@ -18,7 +20,10 @@ import java.util.List;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.jdbc.core.simple.JdbcClient;
 
 /**
  * 对账是判官：站在两个节点都认的 finalized 块上，把链上事实和库内记录逐项比对。
@@ -63,7 +68,7 @@ class AuditServiceTest extends AbstractDepositPostingTest {
         AuditResult before = auditor().runOnce();
         assertThat(kinds(before, "CUSTODY_TOTAL")).containsExactly(AuditKind.MISSING_IN_LEDGER);
 
-        new com.chainpay.chain.payout.service.HotWalletFundingService(systemLedger).register(FUNDING_TX, null, "演练充币");
+        funding.register(FUNDING_TX, null, "演练充币");
         AuditResult after = auditor().runOnce();
         assertThat(after.status()).as(after.detail() + " " + after.findings()).isEqualTo("OK");
     }
@@ -74,7 +79,7 @@ class AuditServiceTest extends AbstractDepositPostingTest {
         chain.addTransfer(LINK, 30, ALICE, HOT, ONE_LINK, FUNDING_TX);
         fundedAndPosted();
         balancesAt(F, TEN_LINK, BigInteger.ZERO);                                  // 链上热钱包其实是 0：那笔充币不在主分支
-        new com.chainpay.chain.payout.service.HotWalletFundingService(systemLedger).register(FUNDING_TX, null, null);
+        funding.register(FUNDING_TX, null, null);
         jdbc.sql("UPDATE chain_transfer_log SET status = 'ORPHANED' WHERE tx_hash = :h").param("h", FUNDING_TX).update();
 
         AuditResult r = auditor().runOnce();
@@ -86,8 +91,18 @@ class AuditServiceTest extends AbstractDepositPostingTest {
 
     static final String FUNDING_TX = "0x" + "f".repeat(64);
 
+    @Autowired
+    private HotWalletFundingService funding;
+
+    @Autowired
+    @Qualifier("system")
+    private JdbcClient systemJdbc;
+
+    @Autowired
+    private AuditWriter auditWriter;
+
     private AuditService auditor() {
-        return new AuditService(systemLedger, chain, audit, 10);
+        return new AuditService(systemJdbc, auditWriter, chain, audit, 10);
     }
 
     private static List<AuditKind> kinds(AuditResult r, String check) {

@@ -23,13 +23,13 @@ import org.junit.jupiter.api.Test;
 class SystemTransactionalQualifierTest {
 
     @Test
-    @DisplayName("★ 在代码里用到 SystemLedger 的源文件，每个 @Transactional 都写明了限定名；且扫描到的文件不少于五个")
+    @DisplayName("★ 在代码里用到系统身份（SystemLedger，或字面量写的限定名 system）的源文件，每个 @Transactional 都写明了限定名；且扫描到的文件不少于五个")
     void transactionalNextToTheSystemLedgerNamesItsManager() throws IOException {
         List<Path> systemSide;
         try (Stream<Path> files = Files.walk(Path.of("src/main/java"))) {
             systemSide = files.filter(p -> p.toString().endsWith(".java"))
                     .filter(p -> !p.getFileName().toString().equals("SystemLedger.java"))
-                    .filter(SystemTransactionalQualifierTest::usesSystemLedgerInCode)
+                    .filter(SystemTransactionalQualifierTest::usesSystemIdentityInCode)
                     .toList();
         }
         assertThat(systemSide).as("守卫的匹配集合不能是空的").hasSizeGreaterThanOrEqualTo(5);
@@ -64,12 +64,15 @@ class SystemTransactionalQualifierTest {
                 || annotationLine.contains("transactionManager") || annotationLine.contains("value");
     }
 
-    /** 只数代码行：注释里提到 SystemLedger 的文件（比如解释「为什么不用它」）不算系统侧。 */
-    private static boolean usesSystemLedgerInCode(Path file) {
+    /**
+     * 只数代码行：注释里提到 SystemLedger 的文件（比如解释「为什么不用它」）不算系统侧。
+     * 字面量写 {@code "system"} 限定名的也算：系统身份的 bean 靠一个字符串就能注入，扫描不能只认类名。
+     */
+    private static boolean usesSystemIdentityInCode(Path file) {
         try {
             return Files.readAllLines(file).stream().map(String::strip)
                     .filter(l -> !l.startsWith("*") && !l.startsWith("//") && !l.startsWith("/*"))
-                    .anyMatch(l -> l.contains("SystemLedger"));
+                    .anyMatch(l -> l.contains("SystemLedger") || l.contains("Qualifier(\"system\")") || l.contains("Transactional(\"system\")"));
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }

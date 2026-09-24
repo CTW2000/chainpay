@@ -38,12 +38,14 @@ class ControllerBoundaryTest {
             String source = Files.readString(controller);
             assertThat(source).as(controller.toString()).doesNotContain("asSystem(");
             assertThat(source).as(controller.toString()).doesNotContain("SystemLedger");
-            // 系统池与系统事务管理器是容器里的 bean（限定名 system）：注入它们或在事务上点它们的名字，同样等于拿到全库
+            // 系统池、系统事务管理器、系统连接上的 JdbcClient 与账本都是容器里的 bean（限定名 system）：注入它们或在事务上点它们的名字，同样等于拿到全库
             assertThat(source).as(controller.toString())
                     .doesNotContain("Qualifier(\"system\")")
                     .doesNotContain("Transactional(\"system\")")
                     .doesNotContain("systemDataSource")
-                    .doesNotContain("systemTransactionManager");
+                    .doesNotContain("systemTransactionManager")
+                    .doesNotContain("systemJdbcClient")
+                    .doesNotContain("systemLedgerService");
         }
     }
 

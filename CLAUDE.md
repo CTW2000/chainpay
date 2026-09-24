@@ -121,13 +121,19 @@ SELECT * FROM ledger_judge();   -- 以 chainpay_system 身份跑；必须 0 行
 | | 谁用 | 看到什么 | 权限来自 |
 |---|---|---|---|
 | `TenantScope.asMerchant(id, …)` | HTTP 控制器 | 只有该商户的行 | 会话变量（同一条应用连接） |
-| `SystemLedger.inTransaction(…)` | 入账、结算、出账、对账、控制面、账本测试的脚手架 | 全部行 | **连接身份**：独立角色 `chainpay_system`（BYPASSRLS，非超级用户，非属主）+ 独立连接池 |
+| `@Transactional("system")` + 注入限定名 system 的 `JdbcClient` / `LedgerService`（还没换完的类仍走 `SystemLedger.inTransaction(…)`） | 入账、结算、出账、对账、控制面、账本测试的脚手架 | 全部行 | **连接身份**：独立角色 `chainpay_system`（BYPASSRLS，非超级用户，非属主）+ 独立连接池 |
 
 - 没有任何会话变量能打开整库（`PayoutSchemaTest.theSessionVariableDoorIsGone`）。但商户号这个会话变量是连接自己设的：RLS 挡的是「代码忘了限定商户」，挡不住一个已被控制的连接——所以强凭证不能放在对外的进程里（见「进程角色」）。
 - 开了 RLS 的表一律 FORCE；策略里的会话函数包成 `(SELECT …)`，每条语句只算一次；每个视图都按调用者执行（`security_invoker`——否则视图用主人的身份读表，换一个受行级安全约束的主人，判官就静默报 0 行）。`SchemaGuardTest` 守这三条。
-- `SystemLedger` 建池即自检（不是 BYPASSRLS、或是超级用户 = 拒绝启动，并跑一次判官）；绑在系统连接上的 `JdbcClient` 与账本只在回调的 `Session` 里可见；系统身份对账本同样只追加。
-- 系统池与事务管理器是 `@Bean(defaultCandidate = false)` + `@Qualifier("system")`（`SystemLedgerConfig`）。**这两个 `defaultCandidate = false` 是承重墙**：去掉池那个，Boot 对主数据源的自动配置整体退让，应用侧的 `JdbcClient` 悄悄连成系统身份（读会绕过租户隔离）；去掉事务管理器那个，`asMerchant` 的事务开在系统池上，租户变量设不上。`SystemPoolBeansTest` 抓得住两者。
-- 系统侧写 `@Transactional("system")` 会和 `inTransaction` 叠在同一个事务里；用到系统身份的源文件里，`@Transactional` 必须写明限定名（`SystemTransactionalQualifierTest`）。controller 包不得引用系统身份的入口与两个 bean（`ControllerBoundaryTest` 扫源码）。
+- `SystemLedger` 建池即自检（不是 BYPASSRLS、或是超级用户 = 拒绝启动，并跑一次判官）；系统身份对账本同样只追加。
+- **系统侧的写法（方案甲，2026-09-23 用户定）**：注入 `@Qualifier("system")` 的 `JdbcClient` 与 `LedgerService`，方法上写 `@Transactional("system")`；网络在事务外的类照索引器的做法拆出写入类（`AuditWriter`）。
+  系统账本 `SystemLedgerService` 把 `transfer` 覆写成 system + `MANDATORY`：父类那个不带限定名的注解指向主池，原样继承的话，在系统事务外调用时系统连接上的几条 SQL 各自提交——现在不在 system 事务里调就当场抛。
+  迁移进度：对账、注资登记、健康检查已换；入账、核准、追踪、发送与测试脚手架仍走 `inTransaction` 的回调（`Session`），全部换完就删它。
+- 系统池、系统事务管理器、系统 `JdbcClient`、系统账本四个 bean 都是 `@Bean(defaultCandidate = false)` + `@Qualifier("system")`（`SystemLedgerConfig`）。**这四个 `defaultCandidate = false` 都是承重墙**：
+  去掉池那个，Boot 对主数据源的自动配置整体退让，应用侧的 `JdbcClient` 悄悄连成系统身份（读会绕过租户隔离）；去掉事务管理器那个，`asMerchant` 的事务开在系统池上，租户变量设不上；
+  去掉 `JdbcClient` 那个，Boot 自动配置的主 `JdbcClient` 退让，所有按类型注入它的地方悄悄拿到系统身份（实测，应用照常启动）；去掉账本那个，两个候选撞车、应用起不来。`SystemPoolBeansTest` 抓得住这四种。
+- 系统侧写 `@Transactional("system")` 会和 `inTransaction` 叠在同一个事务里；用到系统身份（`SystemLedger` 或字面量限定名 `"system"`）的源文件里，`@Transactional` 必须写明限定名（`SystemTransactionalQualifierTest`）；
+  系统侧每个带注解的方法都钉住「是代理、不是 final、限定名 system、传播方式对」（`SystemTransactionalBeansTest`）。controller 包不得引用系统身份的入口与四个 bean（`ControllerBoundaryTest` 扫源码）。
 
 ### 进程角色（进程拆分进行中）
 
@@ -139,10 +145,10 @@ SELECT * FROM ledger_judge();   -- 以 chainpay_system 身份跑；必须 0 行
 
 ### 事务的两种写法
 
-- **容器创建的服务用 `@Transactional`**（`TenantScope`、`LedgerServiceImpl`、`AdminService`、`DepositAddressService`、索引器的四个写入类……）。注解靠代理生效，三条纪律：
+- **容器创建的服务用 `@Transactional`**（`TenantScope`、`LedgerServiceImpl`、`AdminService`、`DepositAddressService`、索引器的四个写入类、`AuditWriter`、`HotWalletFundingService`……）。注解靠代理生效，三条纪律：
   类与带注解的方法不能 final（final 类启动失败；final 方法启动只打一行 WARN，调用时字段全是 null）；不能 this 自调用；容器外 `new` 的实例没有事务（后两条完全静默）。
-  删掉注解本身也静默（外层还有事务时测试照绿），所以守卫测试钉住「容器给的是代理、方法带 REQUIRED、类与方法都不是 final」（`DepositAddressServiceTest`、`IndexerWritersTransactionalTest`）。
-- **`TransactionTemplate` 只剩 `SystemLedger`**：它本身就是事务边界。
+  删掉注解本身也静默（外层还有事务时测试照绿），所以守卫测试钉住「容器给的是代理、方法带 REQUIRED、类与方法都不是 final」（`DepositAddressServiceTest`、`IndexerWritersTransactionalTest`、`SystemTransactionalBeansTest`）。
+- **`TransactionTemplate` 只剩 `SystemLedger.inTransaction`**：系统侧还没换成注解的类在用，换完就删。
 - **网络在事务外、写库在事务里**的类（索引器）：事务那一段搬进写入类（`BatchWriter` / `ChainHeadWriter` / `ReorgWriter` / `ReconcileWriter`），网络那一侧留在原类。
   测试用 `IndexerWriters`（`TransactionalProxy` 给 new 出来的对象套上和容器同样的事务代理）。后三个写入类的注解被删，只有守卫测试发现得了。
 - 两种写法能叠加靠传播方式 REQUIRED：外层开的事务，内层直接加入。

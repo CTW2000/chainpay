@@ -4,9 +4,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.chainpay.audit.config.AuditProperties;
 import com.chainpay.audit.service.AuditService;
+import com.chainpay.audit.service.AuditWriter;
 import com.chainpay.chain.deposit.service.AbstractDepositPostingTest;
 import com.chainpay.chain.support.FakeChain;
-import com.chainpay.ledger.system.SystemLedger;
 import com.chainpay.security.filter.AdminAuthFilter;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -17,11 +17,13 @@ import java.time.Duration;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
+import org.springframework.jdbc.core.simple.JdbcClient;
 
 /** 管理接口：没跑过 = stale；POST run 立刻跑一轮并把结论回给人；没令牌 401。对账服务由测试装配（主节点在测试里是 FakeChain）。 */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
@@ -36,8 +38,8 @@ class AuditApiTest extends AbstractDepositPostingTest {
         static final FakeChain AUDIT = new FakeChain();
 
         @Bean
-        AuditService auditService(SystemLedger system) {
-            return new AuditService(system, PRIMARY, AUDIT, 10);
+        AuditService auditService(@Qualifier("system") JdbcClient systemJdbc, AuditWriter writer) {
+            return new AuditService(systemJdbc, writer, PRIMARY, AUDIT, 10);
         }
 
         @Bean

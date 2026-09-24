@@ -17,7 +17,11 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * 系统身份的账本入口：以 {@code chainpay_system}（BYPASSRLS、非超级用户）连库的<b>独立连接池</b>，
- * 加一份绑在这条连接上的账本实现。系统侧的读写（入账、出账、对账、控制面）都从这里走。
+ * 加一份绑在这条连接上的账本实现。
+ *
+ * <p><b>迁移中（方案甲）：</b>系统侧改为注入限定名 {@value #QUALIFIER} 的 {@code JdbcClient} 与账本（{@link SystemLedgerService}）、
+ * 方法上写 {@code @Transactional("system")}（见 {@link SystemLedgerConfig}）；还没换的类仍走 {@link #inTransaction} 的回调，
+ * 全部换完就删掉回调与 {@link Session}，这里只剩建池（{@link #pool}、{@link #jdbcClient}）与启动自检。下面两段说的是回调这条路。
  *
  * <p><b>池与事务管理器是容器里的 bean，账本不是：</b>前两者是限定名 {@value #QUALIFIER} 的非默认候选 bean
  * （见 {@link SystemLedgerConfig}）；绑在系统连接上的 {@code JdbcClient} 与账本只在 {@link #inTransaction} 的回调里可见，
@@ -52,9 +56,7 @@ public final class SystemLedger {
             throw new IllegalArgumentException("系统事务管理器必须管着系统池：否则 inTransaction 开的事务管不住账本的 SQL，每条各自提交");
         }
         this.tx = new TransactionTemplate(transactionManager);
-        JdbcTemplate template = new JdbcTemplate(pool);
-        template.setExceptionTranslator(lockTimeoutAsTransient(template.getExceptionTranslator()));
-        JdbcClient jdbc = JdbcClient.create(template);
+        JdbcClient jdbc = jdbcClient(pool);
         this.session = new Session(jdbc, new LedgerServiceImpl(jdbc));
     }
 
@@ -82,6 +84,13 @@ public final class SystemLedger {
         // 会话级 SET：池里每条物理连接建立时执行一次、之后一直带着；值来自 Duration，不是外部字符串。
         pool.setConnectionInitSql("SET lock_timeout = '" + lockTimeout.toMillis() + "ms'");
         return pool;
+    }
+
+    /** 系统连接上的 SQL 客户端：等锁超时（55P03）翻成瞬时异常。容器里限定名 system 的 JdbcClient 与回调里的 Session 用同一个做法。 */
+    public static JdbcClient jdbcClient(HikariDataSource pool) {
+        JdbcTemplate template = new JdbcTemplate(pool);
+        template.setExceptionTranslator(lockTimeoutAsTransient(template.getExceptionTranslator()));
+        return JdbcClient.create(template);
     }
 
     /** 用容器里的系统池与系统事务管理器建账本，并做启动自检（身份、判官）。任何一步不满足都抛出；池是容器的 bean，由容器关。 */

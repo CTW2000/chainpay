@@ -11,6 +11,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 
 /**
@@ -27,7 +28,8 @@ class HotWalletFundingServiceTest extends AbstractDepositPostingTest {
     static final String TX_TO_DEPOSIT = "0x" + "d".repeat(64);
     static final String TX_INTERNAL = "0x" + "e".repeat(64);
 
-    private HotWalletFundingService service;
+    @Autowired
+    private HotWalletFundingService service;                  // 容器里的：register 的 system 事务靠代理生效
 
     @BeforeEach
     void seed() {
@@ -40,7 +42,6 @@ class HotWalletFundingServiceTest extends AbstractDepositPostingTest {
         pay(5, TEN_LINK);
         indexUpTo(100, 90, 50);
         jdbc.sql("INSERT INTO hot_wallet (address, chain, next_nonce) VALUES (:a, 'test', 0)").param("a", HOT).update();
-        service = new HotWalletFundingService(systemLedger);
     }
 
     @AfterEach

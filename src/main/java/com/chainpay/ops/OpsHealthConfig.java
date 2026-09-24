@@ -15,9 +15,11 @@ import com.chainpay.ops.health.IndexerHealthIndicator;
 import java.time.Duration;
 import java.util.Optional;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.jdbc.core.simple.JdbcClient;
 
 /**
  * 把四个指示器装进健康端点。两个连接池的健康与指标不在这里：系统池也是容器里的 bean，Boot 的 db 组合项与 hikaricp.* 指标自动覆盖它。
@@ -42,9 +44,9 @@ class OpsHealthConfig {
     }
 
     @Bean
-    HotWalletHealthIndicator hotWalletHealthIndicator(Optional<HotWalletSigner> signer, SystemLedger system) {
+    HotWalletHealthIndicator hotWalletHealthIndicator(Optional<HotWalletSigner> signer, @Qualifier(SystemLedger.QUALIFIER) JdbcClient systemJdbc) {
         return new HotWalletHealthIndicator(signer.map(HotWalletSigner::address),
-                address -> system.inTransaction(s -> new HotWalletRepository(s.jdbc()).find(address)));
+                address -> new HotWalletRepository(systemJdbc).find(address));
     }
 
     @Bean
