@@ -32,9 +32,6 @@ import org.springframework.jdbc.support.JdbcTransactionManager;
 @DisplayName("系统账本：权限来自连接身份")
 class SystemLedgerTest extends AbstractPostgresTest {
 
-    @Autowired
-    private SystemLedger systemLedger;
-
     /** 应用自己的账本 bean 与连接：商户视角只能拿它们来问。 */
     @Autowired
     private LedgerService appLedger;
@@ -64,10 +61,10 @@ class SystemLedgerTest extends AbstractPostgresTest {
     void connectsAsTheSystemRole() {
         record Identity(String user, boolean bypassRls, boolean superuser) {}
 
-        Identity id = systemLedger.inTransaction(s -> s.jdbc()
+        Identity id = systemJdbc
                 .sql("SELECT current_user, rolbypassrls, rolsuper FROM pg_roles WHERE rolname = current_user")
                 .query((rs, i) -> new Identity(rs.getString(1), rs.getBoolean(2), rs.getBoolean(3)))
-                .single());
+                .single();
 
         assertThat(id.user()).isEqualTo("chainpay_system");
         assertThat(id.bypassRls()).as("权限来自角色属性，不来自会话变量").isTrue();
@@ -77,7 +74,7 @@ class SystemLedgerTest extends AbstractPostgresTest {
     @Test
     @DisplayName("★ 不设任何会话变量也看得到全部账户；应用连接在同样的条件下一行都看不到")
     void seesEveryRowWithoutAnySessionVariable() {
-        long system = systemLedger.inTransaction(s -> s.jdbc().sql("SELECT count(*) FROM account").query(Long.class).single());
+        long system = systemJdbc.sql("SELECT count(*) FROM account").query(Long.class).single();
         long app = appJdbc.sql("SELECT count(*) FROM account").query(Long.class).single();
 
         assertThat(system).as("两个商户的账户 + 平台镜像账户").isEqualTo(3);
@@ -87,7 +84,7 @@ class SystemLedgerTest extends AbstractPostgresTest {
     @Test
     @DisplayName("★ 以系统身份记一笔 DEPOSIT：镜像账户变负、商户账户变正，商户在自己的作用域里看到余额")
     void postsADepositAcrossTheTenantBoundary() {
-        long transferId = systemLedger.inTransaction(s -> s.ledger().transfer(new TransferCommand(
+        long transferId = inSystemTransaction(() -> systemLedgerService.transfer(new TransferCommand(
                 "deposit:0xblock:7", "USDT", new BigDecimal("10"), custodyAccount, acmeAccount,
                 TransferCode.DEPOSIT, Instant.parse("2026-09-06T00:00:00Z"))));
 
@@ -101,15 +98,15 @@ class SystemLedgerTest extends AbstractPostgresTest {
     }
 
     @Test
-    @DisplayName("★ 事务边界在系统池上真的成立：回调里抛异常，转账一条不留")
-    void rollsBackTheWholeCallback() {
-        assertThatThrownBy(() -> systemLedger.inTransaction(s -> {
-            s.ledger().transfer(new TransferCommand("deposit:0xblock:8", "USDT", new BigDecimal("3"),
+    @DisplayName("★ 系统账本加入外层的系统事务：事务里抛异常，转账一条不留")
+    void rollsBackWithTheSurroundingSystemTransaction() {
+        assertThatThrownBy(() -> inSystemTransaction(() -> {
+            systemLedgerService.transfer(new TransferCommand("deposit:0xblock:8", "USDT", new BigDecimal("3"),
                     custodyAccount, acmeAccount, TransferCode.DEPOSIT, null));
             throw new IllegalStateException("模拟：账本已记、后半段失败");
         })).isInstanceOf(IllegalStateException.class);
 
-        assertThat(transferCount()).as("手工 new 的 LedgerServiceImpl 没有 @Transactional 代理，边界只能由 SystemLedger 给").isZero();
+        assertThat(transferCount()).as("系统账本的 transfer 是 MANDATORY：加入外层事务、不自己提交，外层回滚它就一起回滚").isZero();
         assertThat(jdbc.sql("SELECT balance FROM account WHERE id = :id").param("id", acmeAccount)
                 .query(BigDecimal.class).single()).isEqualByComparingTo("0");
     }
@@ -117,10 +114,10 @@ class SystemLedgerTest extends AbstractPostgresTest {
     @Test
     @DisplayName("★ 系统身份也删不了账本：DELETE 被数据库拒绝，账本对谁都是只追加的")
     void cannotDeleteLedgerRows() {
-        systemLedger.inTransaction(s -> s.ledger().transfer(new TransferCommand("deposit:0xblock:9", "USDT",
+        inSystemTransaction(() -> systemLedgerService.transfer(new TransferCommand("deposit:0xblock:9", "USDT",
                 new BigDecimal("1"), custodyAccount, acmeAccount, TransferCode.DEPOSIT, null)));
 
-        assertThatThrownBy(() -> systemLedger.inTransaction(s -> s.jdbc().sql("DELETE FROM entry").update()))
+        assertThatThrownBy(() -> systemJdbc.sql("DELETE FROM entry").update())
                 .isInstanceOf(DataAccessException.class)
                 // PG 的 SQLSTATE 42501（权限不足）被 Spring 归到 42 这一类 = BadSqlGrammarException，原文只在根因里
                 .hasStackTraceContaining("permission denied");
@@ -133,8 +130,8 @@ class SystemLedgerTest extends AbstractPostgresTest {
         try (AutoCloseable lock = holdExclusiveLock("entry", Duration.ofSeconds(6))) {
             long started = System.nanoTime();
 
-            assertThatThrownBy(() -> systemLedger.inTransaction(s ->
-                    s.jdbc().sql("LOCK TABLE entry IN ROW EXCLUSIVE MODE").update()))
+            assertThatThrownBy(() -> inSystemTransaction(() ->                          // LOCK TABLE 只能在事务块里用
+                    systemJdbc.sql("LOCK TABLE entry IN ROW EXCLUSIVE MODE").update()))
                     .isInstanceOf(TransientDataAccessException.class)
                     .hasStackTraceContaining("lock timeout");
 
@@ -147,7 +144,7 @@ class SystemLedgerTest extends AbstractPostgresTest {
     @Test
     @DisplayName("系统池里每条连接都带着配置的 lock_timeout（测试钉 1s）")
     void systemConnectionsCarryTheConfiguredLockTimeout() {
-        String timeout = systemLedger.inTransaction(s -> s.jdbc().sql("SHOW lock_timeout").query(String.class).single());
+        String timeout = systemJdbc.sql("SHOW lock_timeout").query(String.class).single();
 
         assertThat(timeout).isEqualTo("1s");
     }

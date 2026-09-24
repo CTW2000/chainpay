@@ -27,10 +27,23 @@ class SystemTransactionalBeansTest extends AbstractPostgresTest {
 
     private record Expected(String bean, String method, int propagation) {}
 
+    private static final int REQUIRED = TransactionDefinition.PROPAGATION_REQUIRED;
+
     private static final List<Expected> EXPECTED = List.of(
             new Expected("systemLedgerService", "transfer", TransactionDefinition.PROPAGATION_MANDATORY),
-            new Expected("auditWriter", "record", TransactionDefinition.PROPAGATION_REQUIRED),
-            new Expected("hotWalletFundingService", "register", TransactionDefinition.PROPAGATION_REQUIRED));
+            new Expected("auditWriter", "record", REQUIRED),
+            new Expected("hotWalletFundingService", "register", REQUIRED),
+            new Expected("depositWriter", "apply", REQUIRED),
+            new Expected("depositWriter", "holdWithError", REQUIRED),
+            new Expected("payoutSendWriter", "reconcile", REQUIRED),
+            new Expected("payoutSendWriter", "signAndRecord", REQUIRED),
+            new Expected("payoutSendWriter", "markBroadcast", REQUIRED),
+            new Expected("payoutSendWriter", "fail", REQUIRED),
+            new Expected("payoutTrackWriter", "recordMined", REQUIRED),
+            new Expected("payoutTrackWriter", "reorged", REQUIRED),
+            new Expected("payoutTrackWriter", "settle", REQUIRED),
+            new Expected("payoutApprovalService", "reject", REQUIRED),
+            new Expected("platformAddresses", "isDepositAddress", REQUIRED));
 
     @Autowired
     private ApplicationContext context;

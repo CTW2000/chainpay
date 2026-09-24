@@ -34,6 +34,13 @@ abstract class AbstractPayoutSendingTest extends AbstractPostgresTest {
     @Autowired
     protected LedgerService appLedger;
 
+    /** 容器里的两个写入类（是代理，事务落在 system 上）：{@link #sender()}、{@link #tracker()} 用它们。 */
+    @Autowired
+    protected PayoutSendWriter sendWriter;
+
+    @Autowired
+    protected PayoutTrackWriter trackWriter;
+
     protected FakeChain chain;
     protected HotWalletSigner signer;
     protected long acmeId;
@@ -78,22 +85,22 @@ abstract class AbstractPayoutSendingTest extends AbstractPostgresTest {
     }
 
     protected PayoutSender sender() {
-        return new PayoutSender(systemLedger, chain, chain, signer, new FeePolicy(GWEI, GWEI.multiply(BigInteger.valueOf(50)), 200_000), SEPOLIA, 10);
+        return new PayoutSender(systemJdbc, sendWriter, chain, chain, signer, new FeePolicy(GWEI, GWEI.multiply(BigInteger.valueOf(50)), 200_000), SEPOLIA, 10);
     }
 
     /** 卡住多久算卡住由测试定；Duration.ZERO = 广播过的一律算卡住。 */
     protected PayoutSender sender(java.time.Duration stuckAfter) {
-        return new PayoutSender(systemLedger, chain, chain, signer, new FeePolicy(GWEI, GWEI.multiply(BigInteger.valueOf(50)), 200_000),
+        return new PayoutSender(systemJdbc, sendWriter, chain, chain, signer, new FeePolicy(GWEI, GWEI.multiply(BigInteger.valueOf(50)), 200_000),
                 SEPOLIA, "sepolia", 10, stuckAfter);
     }
 
     /** 追踪任务：主节点与审计节点都是同一个假节点。 */
     protected PayoutTracker tracker() {
-        return new PayoutTracker(systemLedger, chain, chain);
+        return new PayoutTracker(systemJdbc, trackWriter, chain, chain);
     }
 
     protected PayoutTracker tracker(FakeChain audit) {
-        return new PayoutTracker(systemLedger, chain, audit);
+        return new PayoutTracker(systemJdbc, trackWriter, chain, audit);
     }
 
     protected long transfersWithKey(String idempotencyKey) {

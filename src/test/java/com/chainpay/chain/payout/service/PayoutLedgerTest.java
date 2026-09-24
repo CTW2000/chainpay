@@ -94,7 +94,7 @@ class PayoutLedgerTest extends AbstractPostgresTest {
         freeze("req-4", "1");
         long frozen = accountId("user:acme:LINK:frozen");
 
-        long settleId = systemLedger.inTransaction(s -> new PayoutLedger(s.jdbc(), s.ledger())
+        long settleId = inSystemTransaction(() -> new PayoutLedger(systemJdbc, systemLedgerService)
                 .settle(41L, "LINK", ONE, frozen, custodyAccount, Instant.now()));
 
         assertThat(balance("user:acme:LINK:frozen")).isEqualByComparingTo("0");
@@ -109,7 +109,7 @@ class PayoutLedgerTest extends AbstractPostgresTest {
         freeze("req-5", "1");
         long frozen = accountId("user:acme:LINK:frozen");
 
-        long reverseId = systemLedger.inTransaction(s -> new PayoutLedger(s.jdbc(), s.ledger())
+        long reverseId = inSystemTransaction(() -> new PayoutLedger(systemJdbc, systemLedgerService)
                 .reverse(42L, "LINK", ONE, frozen, userAccount, Instant.now()));
 
         assertThat(balance("user:acme:LINK")).isEqualByComparingTo("25");
@@ -122,10 +122,10 @@ class PayoutLedgerTest extends AbstractPostgresTest {
     void aSettledPayoutCannotAlsoBeReversed() {
         freeze("req-6", "1");
         long frozen = accountId("user:acme:LINK:frozen");
-        systemLedger.inTransaction(s -> new PayoutLedger(s.jdbc(), s.ledger())
+        inSystemTransaction(() -> new PayoutLedger(systemJdbc, systemLedgerService)
                 .settle(43L, "LINK", ONE, frozen, custodyAccount, Instant.now()));
 
-        assertThatThrownBy(() -> systemLedger.inTransaction(s -> new PayoutLedger(s.jdbc(), s.ledger())
+        assertThatThrownBy(() -> inSystemTransaction(() -> new PayoutLedger(systemJdbc, systemLedgerService)
                 .reverse(43L, "LINK", ONE, frozen, userAccount, Instant.now())))
                 .isInstanceOf(LedgerException.class)
                 .extracting(e -> ((LedgerException) e).reason())

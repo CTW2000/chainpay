@@ -21,9 +21,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.jdbc.core.simple.JdbcClient;
 
 /**
  * 对账是判官：站在两个节点都认的 finalized 块上，把链上事实和库内记录逐项比对。
@@ -93,10 +91,6 @@ class AuditServiceTest extends AbstractDepositPostingTest {
 
     @Autowired
     private HotWalletFundingService funding;
-
-    @Autowired
-    @Qualifier("system")
-    private JdbcClient systemJdbc;
 
     @Autowired
     private AuditWriter auditWriter;

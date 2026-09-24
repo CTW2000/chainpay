@@ -4,6 +4,7 @@ import com.chainpay.chain.deposit.domain.DepositCandidate;
 import com.chainpay.chain.deposit.domain.DepositStatus;
 import com.chainpay.chain.deposit.domain.PostingResult;
 import com.chainpay.chain.deposit.repository.DepositRepository;
+import com.chainpay.chain.deposit.service.DepositWriter.Outcome;
 import com.chainpay.chain.erc20.AmountOverflowException;
 import com.chainpay.chain.erc20.Erc20Calls;
 import com.chainpay.chain.erc20.TokenAmounts;
@@ -14,9 +15,6 @@ import com.chainpay.chain.rpc.JsonRpcException;
 import com.chainpay.chain.rpc.RpcAuthException;
 import com.chainpay.chain.rpc.RpcFailure;
 import com.chainpay.ledger.service.LedgerAmounts;
-import com.chainpay.ledger.service.LedgerService.TransferCode;
-import com.chainpay.ledger.service.LedgerService.TransferCommand;
-import com.chainpay.ledger.system.SystemLedger;
 import com.chainpay.ledger.system.TransientDbFailure;
 import java.math.BigDecimal;
 import java.math.BigInteger;
@@ -26,7 +24,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.function.Function;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -44,7 +41,7 @@ import org.springframework.jdbc.core.simple.JdbcClient;
  *   <li><b>判决</b>：零值 = IGNORED_ZERO；金额只经 {@link TokenAmounts#toLedger}，装不下 = HELD_OVERFLOW；
  *       低于代币的最小入账额 = REJECTED_DUST；然后<b>信合约做的，不信合约说的</b>——向两个节点问该地址在那一块的 balanceOf，
  *       必须等于事件累计（转入减转出），对不上 = HELD_BALANCE_MISMATCH；问不到时怎么判见 {@link #unreadable}</li>
- *   <li><b>落库（系统池上一个事务）</b>：先占坑（INSERT … ON CONFLICT DO NOTHING，状态 POSTING），占不到 = 别的实例已处理，什么都不做；
+ *   <li><b>落库（系统池上一个事务，{@link DepositWriter}）</b>：先占坑（INSERT … ON CONFLICT DO NOTHING，状态 POSTING），占不到 = 别的实例已处理，什么都不做；
  *       占到了才记账（幂等键 = 链上坐标），再把行改成 CREDITED。崩在中间整个事务回滚</li>
  * </ol>
  * 失败分三种：瞬时的（节点、数据库）让这一轮提前结束、已提交的不受影响；重试永远没用的（节点撤了我们的凭证）让这一轮 HALTED、叫人；
@@ -62,24 +59,22 @@ public final class DepositPoster {
      */
     static final int UNKNOWN_BALANCE_ROUNDS = 5;
 
-    private final SystemLedger system;
+    /** 读（候选、事件累计）直接走系统连接：只读，不需要外面再包事务。 */
+    private final DepositRepository repo;
+    private final DepositWriter writer;
     private final ChainReader primary;
     private final ChainReader audit;
     private final Erc20Calls primaryCalls;
     private final Erc20Calls auditCalls;
     private final int batchSize;
     private final long finalityToleranceBlocks;
-    private final Function<JdbcClient, DepositRepository> repositories;
     /** 日志 id → 「余额问不到且错误码不认识」的连续轮数。只有入账这一个线程动它（调度器串行跑）。 */
     private final Map<Long, Integer> unknownBalanceRounds = new HashMap<>();
 
-    public DepositPoster(SystemLedger system, ChainReader primary, ChainReader audit, int batchSize, long finalityToleranceBlocks) {
-        this(system, primary, audit, batchSize, finalityToleranceBlocks, DepositRepository::new);
-    }
-
-    DepositPoster(SystemLedger system, ChainReader primary, ChainReader audit, int batchSize, long finalityToleranceBlocks,
-                  Function<JdbcClient, DepositRepository> repositories) {
-        this.system = system;
+    public DepositPoster(JdbcClient systemJdbc, DepositWriter writer, ChainReader primary, ChainReader audit, int batchSize,
+                         long finalityToleranceBlocks) {
+        this.repo = new DepositRepository(systemJdbc);
+        this.writer = writer;
         this.primary = primary;
         this.audit = audit;
         this.primaryCalls = new Erc20Calls(primary);
@@ -89,7 +84,6 @@ public final class DepositPoster {
             throw new IllegalArgumentException("finality-tolerance-blocks 不能为负：" + finalityToleranceBlocks);
         }
         this.finalityToleranceBlocks = finalityToleranceBlocks;
-        this.repositories = repositories;
     }
 
     public PostingResult postOnce() {
@@ -98,12 +92,9 @@ public final class DepositPoster {
 
     /** 人核准的行排在前面：它们已经等过人了。 */
     List<DepositCandidate> candidates() {
-        return system.inTransaction(s -> {
-            DepositRepository repo = repositories.apply(s.jdbc());
-            List<DepositCandidate> all = new ArrayList<>(repo.findApproved(batchSize));
-            all.addAll(repo.findFinalUnposted(batchSize));
-            return all;
-        });
+        List<DepositCandidate> all = new ArrayList<>(repo.findApproved(batchSize));
+        all.addAll(repo.findFinalUnposted(batchSize));
+        return all;
     }
 
     PostingResult post(List<DepositCandidate> candidates) {
@@ -130,14 +121,14 @@ public final class DepositPoster {
             }
             Outcome outcome;
             try {
-                outcome = system.inTransaction(s -> apply(repositories.apply(s.jdbc()), s, c, verdict));
+                outcome = writer.apply(c, verdict);
             } catch (RuntimeException e) {
                 if (TransientDbFailure.isTransient(e)) {             // 锁等超时、拿不到连接、事务开不出来：下一轮再来，不进 HELD
                     return k.retryLater("记块 " + c.blockNumber() + " 时数据库瞬时失败：" + e.getMessage());
                 }
                 String reason = "入账时异常：" + e;
                 log.error("入账 HELD_ERROR：块 {} 日志 {} —— {}", c.blockNumber(), c.logIndex(), reason);
-                outcome = system.inTransaction(s -> holdWithError(repositories.apply(s.jdbc()), c, verdict, reason));
+                outcome = writer.holdWithError(c, verdict, reason);
             }
             k.count(outcome, c);
         }
@@ -210,7 +201,7 @@ public final class DepositPoster {
      * 转账扣费、弹性供应、静默铸币、节点撒谎，都会在这里对不上。问不到也不记——「不知道」和「对上了」不是一回事。
      */
     private Optional<Verdict> balanceVerdict(DepositCandidate c, BigDecimal amount, Instant occurredAt) {
-        BigInteger expected = system.inTransaction(s -> repositories.apply(s.jdbc()).netTransfersUpTo(c.toAddress(), c.token(), c.blockNumber()));
+        BigInteger expected = repo.netTransfersUpTo(c.toAddress(), c.token(), c.blockNumber());
         String tag = Hex.fromLong(c.blockNumber());
         BigInteger onPrimary;
         BigInteger onAudit;
@@ -281,73 +272,8 @@ public final class DepositPoster {
         }
     }
 
-    /** 系统池上的一个事务：先占坑，再动钱，再改状态。 */
-    private static Outcome apply(DepositRepository repo, SystemLedger.Session session, DepositCandidate c, Verdict verdict) {
-        if (c.isApproved()) {
-            if (verdict.status() != DepositStatus.CREDITED) {
-                return repo.holdApproved(c.approvedDepositId(), verdict.reason())
-                        ? Outcome.written(DepositStatus.HELD_ERROR, verdict.reason())   // holdApproved 的 SQL 写死 HELD_ERROR
-                        : Outcome.SKIPPED;
-            }
-            Optional<Long> claimed = repo.claimApproved(c.approvedDepositId(), verdict.amount(), verdict.occurredAt());
-            if (claimed.isEmpty()) {
-                return Outcome.SKIPPED;
-            }
-            return credit(repo, session, c, verdict, claimed.get());
-        }
-        if (verdict.status() != DepositStatus.CREDITED) {
-            Optional<Long> claimed = repo.claim(c, verdict.status(), verdict.amount(), verdict.reason(), verdict.occurredAt());
-            if (claimed.isEmpty()) {
-                return Outcome.SKIPPED;
-            }
-            return Outcome.written(verdict.status(), verdict.reason());
-        }
-        Optional<Long> claimed = repo.claim(c, DepositStatus.POSTING, verdict.amount(), null, verdict.occurredAt());
-        if (claimed.isEmpty()) {
-            return Outcome.SKIPPED;                                   // 别的实例已处理：不碰账本
-        }
-        return credit(repo, session, c, verdict, claimed.get());
-    }
-
-    private static Outcome credit(DepositRepository repo, SystemLedger.Session session, DepositCandidate c, Verdict verdict, long depositId) {
-        long custody = repo.ensureCustodyAccount(c.symbol());
-        long transferId = session.ledger().transfer(new TransferCommand(
-                c.idempotencyKey(), c.symbol(), verdict.amount(), custody, c.accountId(), TransferCode.DEPOSIT, verdict.occurredAt()));
-        repo.credit(depositId, transferId);
-        return Outcome.written(DepositStatus.CREDITED, null);
-    }
-
-    /** 结构性异常：这一笔记成 HELD_ERROR（新事务），队列继续。 */
-    private static Outcome holdWithError(DepositRepository repo, DepositCandidate c, Verdict verdict, String reason) {
-        if (c.isApproved()) {
-            return repo.holdApproved(c.approvedDepositId(), reason)
-                    ? Outcome.written(DepositStatus.HELD_ERROR, reason) : Outcome.SKIPPED;
-        }
-        return repo.claim(c, DepositStatus.HELD_ERROR, verdict.amount(), reason, verdict.occurredAt()).isPresent()
-                ? Outcome.written(DepositStatus.HELD_ERROR, reason) : Outcome.SKIPPED;
-    }
-
-    /**
-     * 落库的结果：写进 deposit 表的<b>实际</b>状态与原因，不是判决阶段的打算。
-     *
-     * <p>两者在异常路径上会分叉：判决说记账，落库崩了，实际写进去的是 HELD_ERROR。计数与日志只读这里、不回头读 {@link Verdict}；
-     * {@code kind} 由 {@code status} 推出，两者不可能各说一套。
-     */
-    private record Outcome(Kind kind, DepositStatus status, String reason) {
-
-        enum Kind { CREDITED, HELD, IGNORED, SKIPPED }
-
-        /** 别的实例已经处理过这条日志：我们一行都没写，也就没有状态可报。 */
-        static final Outcome SKIPPED = new Outcome(Kind.SKIPPED, null, null);
-
-        /** 写进库了。kind 从 status 推，不另外传。 */
-        static Outcome written(DepositStatus status, String reason) {
-            Kind kind = status == DepositStatus.CREDITED ? Kind.CREDITED : status.isHeld() ? Kind.HELD : Kind.IGNORED;
-            return new Outcome(kind, status, reason);
-        }
-    }
-
-    private record Verdict(DepositStatus status, BigDecimal amount, String reason, Instant occurredAt) {
+    /** 判决：落库照它写（{@link DepositWriter}）。 */
+    record Verdict(DepositStatus status, BigDecimal amount, String reason, Instant occurredAt) {
         static Verdict held(DepositStatus status, BigDecimal amount, Instant occurredAt, String reason) {
             return new Verdict(status, amount, reason, occurredAt);
         }

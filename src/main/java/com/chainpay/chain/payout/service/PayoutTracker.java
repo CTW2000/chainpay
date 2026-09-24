@@ -9,15 +9,14 @@ import com.chainpay.chain.rpc.BlockHeader;
 import com.chainpay.chain.rpc.ChainReader;
 import com.chainpay.chain.rpc.JsonRpcException;
 import com.chainpay.chain.rpc.TransactionReceipt;
-import com.chainpay.ledger.system.SystemLedger;
 import com.chainpay.ledger.system.TransientDbFailure;
-import java.time.Instant;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.jdbc.core.simple.JdbcClient;
 
 /**
  * 追踪任务：广播之后只有回执能宣布结局，钱只在 FINAL 之后动。它只读链、只改状态、只在最后一步记账，从不签名、不广播。
@@ -27,18 +26,21 @@ import org.slf4j.LoggerFactory;
  *   <li><b>MINED 的尝试</b>：主节点现在说那块的哈希变了 → 重组，退回 BROADCAST 继续等；审计节点意见不同 → 等；两个节点的 finalized 都过了那块 →
  *       结算（冻结 → 托管，CONFIRMED）或解冻（回执 status 0，FAILED）。与入账同一道门：动钱要两个节点都点头。</li>
  * </ol>
- * 网络永远不在事务里；节点失败这一轮提前结束，状态原地不动，下一轮再来。
+ * 网络永远不在事务里；节点失败这一轮提前结束，状态原地不动，下一轮再来。几条写要一起成败的（记上链、退回、结算）在 {@link PayoutTrackWriter}。
  */
 public final class PayoutTracker {
 
     private static final Logger log = LoggerFactory.getLogger(PayoutTracker.class);
 
-    private final SystemLedger system;
+    /** 读与单条的改状态直接走系统连接：一条语句本身就是一个事务。 */
+    private final PayoutSendRepository repo;
+    private final PayoutTrackWriter writer;
     private final ChainReader primary;
     private final ChainReader audit;
 
-    public PayoutTracker(SystemLedger system, ChainReader primary, ChainReader audit) {
-        this.system = system;
+    public PayoutTracker(JdbcClient systemJdbc, PayoutTrackWriter writer, ChainReader primary, ChainReader audit) {
+        this.repo = new PayoutSendRepository(systemJdbc);
+        this.writer = writer;
         this.primary = primary;
         this.audit = audit;
     }
@@ -87,90 +89,52 @@ public final class PayoutTracker {
     }
 
     private List<PayoutAttempt> find(PayoutTxStatus status) {
-        return system.inTransaction(s -> new PayoutSendRepository(s.jdbc()).findAttemptsInStatus(status.name()));
+        return repo.findAttemptsInStatus(status.name());
     }
 
-    /** 回执来了：尝试 MINED、提现 MINED、同编号的兄弟 REPLACED，一个事务。 */
+    /** 回执来了：落库一个事务（{@link PayoutTrackWriter#recordMined}），提交了才计数。 */
     private void recordMined(PayoutAttempt a, TransactionReceipt r, Counters k) {
-        system.inTransaction(s -> {
-            PayoutSendRepository repo = new PayoutSendRepository(s.jdbc());
-            PayoutTxStatus.BROADCAST.require(PayoutTxStatus.MINED);
-            if (!repo.markMined(a.id(), r.blockNumber(), r.blockHash(), !r.success(), r.gasUsed(), r.effectiveGasPrice())) {
-                return null;                                                            // 别的实例先记了
-            }
-            PayoutStatus.BROADCAST.require(PayoutStatus.MINED);
-            if (!repo.moveStatus(a.payoutId(), PayoutStatus.BROADCAST.name(), PayoutStatus.MINED.name())) {
-                throw new IllegalStateException("尝试 " + a.id() + " 刚记成 MINED，它的提现 " + a.payoutId() + " 却不在 BROADCAST");
-            }
+        writer.recordMined(a, r).ifPresent(replaced -> {
             k.mined++;
-            k.replaced += repo.replaceSiblings(a.hotWallet(), a.nonce(), a.id());
-            log.info("提现 {} 上链：块 {}（{}），{}", a.payoutId(), r.blockNumber(), a.txHash(), r.success() ? "执行成功" : "合约 revert");
-            return null;
+            k.replaced += replaced;
         });
     }
 
     /** 节点不认识这笔：被替身顶掉（有个兄弟正被节点认着）→ REPLACED；否则节点忘了 → DROPPED，发送任务原样重发。 */
     private void forgottenOrReplaced(PayoutAttempt a, Counters k) {
-        List<PayoutAttempt> siblings = system.inTransaction(s -> new PayoutSendRepository(s.jdbc()).siblings(a.hotWallet(), a.nonce(), a.id()));
+        List<PayoutAttempt> siblings = repo.siblings(a.hotWallet(), a.nonce(), a.id());
         boolean replaced = siblings.stream()
                 .filter(sib -> !PayoutTxStatus.valueOf(sib.status()).isTerminal())
                 .anyMatch(sib -> primary.transactionKnown(sib.txHash()));
         PayoutTxStatus to = replaced ? PayoutTxStatus.REPLACED : PayoutTxStatus.DROPPED;
         PayoutTxStatus.BROADCAST.require(to);
-        system.inTransaction(s -> {
-            if (new PayoutSendRepository(s.jdbc()).moveAttempt(a.id(), PayoutTxStatus.BROADCAST.name(), to.name())) {
-                if (replaced) {
-                    k.replaced++;
-                } else {
-                    k.dropped++;
-                    log.warn("节点忘了提现 {} 的尝试 {}（编号 {}）：DROPPED，发送任务下一轮原样重发", a.payoutId(), a.txHash(), a.nonce());
-                }
-            }
-            return null;
-        });
+        if (!repo.moveAttempt(a.id(), PayoutTxStatus.BROADCAST.name(), to.name())) {
+            return;                                                                     // 别的实例先改了
+        }
+        if (replaced) {
+            k.replaced++;
+        } else {
+            k.dropped++;
+            log.warn("节点忘了提现 {} 的尝试 {}（编号 {}）：DROPPED，发送任务下一轮原样重发", a.payoutId(), a.txHash(), a.nonce());
+        }
     }
 
     /** 那块被重组掉了：尝试与提现都退回 BROADCAST，继续等回执。 */
     private void reorged(PayoutAttempt a, BlockHeader nowAt, Counters k) {
         log.warn("提现 {} 所在的块 {} 被重组（库里 {}，主节点现在说 {}）：退回 BROADCAST 继续等", a.payoutId(), a.blockNumber(), a.blockHash(), nowAt.hash());
-        system.inTransaction(s -> {
-            PayoutSendRepository repo = new PayoutSendRepository(s.jdbc());
-            PayoutTxStatus.MINED.require(PayoutTxStatus.BROADCAST);
-            if (!repo.unmine(a.id())) {
-                return null;
-            }
-            PayoutStatus.MINED.require(PayoutStatus.BROADCAST);
-            if (!repo.moveStatus(a.payoutId(), PayoutStatus.MINED.name(), PayoutStatus.BROADCAST.name())) {
-                throw new IllegalStateException("尝试 " + a.id() + " 刚退回 BROADCAST，它的提现 " + a.payoutId() + " 却不在 MINED");
-            }
+        if (writer.reorged(a)) {
             k.reorged++;
-            return null;
-        });
+        }
     }
 
-    /** FINAL 了：先锁提现行看状态（别的实例可能先到），再记账、再改状态，一个事务。 */
+    /** FINAL 了：结算或解冻一个事务（{@link PayoutTrackWriter#settle}），提交了才计数。 */
     private void settle(PayoutAttempt a, Counters k) {
-        system.inTransaction(s -> {
-            PayoutSendRepository repo = new PayoutSendRepository(s.jdbc());
-            if (!PayoutStatus.MINED.name().equals(repo.lockStatus(a.payoutId()))) {
-                return null;
-            }
-            PayoutSendRepository.Settlement t = repo.findSettlement(a.payoutId());
-            PayoutLedger ledger = new PayoutLedger(s.jdbc(), s.ledger());
-            if (Boolean.TRUE.equals(a.reverted())) {
-                PayoutStatus.MINED.require(PayoutStatus.FAILED);
-                long reverse = ledger.reverse(t.payoutId(), t.symbol(), t.amount(), t.frozenAccountId(), t.userAccountId(), Instant.now());
-                repo.markFailedFromMined(t.payoutId(), "链上执行失败（回执 status 0，块 " + a.blockNumber() + "）：编号已用、gas 已扣，转账没发生", reverse);
+        writer.settle(a).ifPresent(status -> {
+            if (status == PayoutStatus.FAILED) {
                 k.failed++;
-                log.warn("提现 {} FINAL 但合约 revert：解冻，FAILED", a.payoutId());
             } else {
-                PayoutStatus.MINED.require(PayoutStatus.CONFIRMED);
-                long settle = ledger.settle(t.payoutId(), t.symbol(), t.amount(), t.frozenAccountId(), t.custodyAccountId(), Instant.now());
-                repo.markConfirmed(t.payoutId(), settle);
                 k.confirmed++;
-                log.info("提现 {} FINAL：结算 {} {}，CONFIRMED", a.payoutId(), t.amount(), t.symbol());
             }
-            return null;
         });
     }
 

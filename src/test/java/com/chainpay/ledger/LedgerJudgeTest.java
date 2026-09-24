@@ -30,7 +30,6 @@ import org.springframework.jdbc.datasource.DriverManagerDataSource;
 class LedgerJudgeTest extends AbstractPostgresTest {
 
     private final JdbcClient appJdbc = JdbcClient.create(new DriverManagerDataSource(jdbcUrl(), "chainpay_app", "chainpay_app_dev"));
-    private final JdbcClient systemJdbc = JdbcClient.create(new DriverManagerDataSource(jdbcUrl(), "chainpay_system", "chainpay_system_dev"));
 
     @Test
     @DisplayName("★ 应用角色调判官：拒绝并说明原因，不是静默返回 0 行")
@@ -113,7 +112,7 @@ class LedgerJudgeTest extends AbstractPostgresTest {
     }
 
     private List<String> judge() {
-        return systemJdbc.sql("SELECT check_name || ' ' || subject || ' ' || detail FROM ledger_judge()")
+        return judgeJdbc.sql("SELECT check_name || ' ' || subject || ' ' || detail FROM ledger_judge()")
                 .query(String.class).list();
     }
 }

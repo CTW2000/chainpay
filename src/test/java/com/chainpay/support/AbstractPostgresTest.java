@@ -6,6 +6,7 @@ import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.Duration;
+import java.util.function.Supplier;
 
 import com.chainpay.ledger.service.LedgerService;
 import com.chainpay.ledger.system.SystemLedger;
@@ -15,6 +16,7 @@ import com.redis.testcontainers.RedisContainer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -23,6 +25,8 @@ import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.utility.MountableFile;
 
@@ -151,10 +155,10 @@ public abstract class AbstractPostgresTest {
             POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword()));
 
     /**
-     * 系统角色的连接，只给判官用：{@code ledger_judge()} 只在能看到全部行的身份下给结论。
+     * 系统角色的连接，只给判官用（不是容器里的系统池）：{@code ledger_judge()} 只在能看到全部行的身份下给结论。
      * 不用属主连接——它能读通只因为 Testcontainers 的属主恰好是超级用户。
      */
-    protected final JdbcClient systemJdbc = JdbcClient.create(new DriverManagerDataSource(
+    protected final JdbcClient judgeJdbc = JdbcClient.create(new DriverManagerDataSource(
             POSTGRES.getJdbcUrl(), "chainpay_system", "chainpay_system_dev"));
 
     @Autowired
@@ -163,9 +167,23 @@ public abstract class AbstractPostgresTest {
     @Autowired
     protected StringRedisTemplate redisTemplate;
 
-    /** 系统身份的账本入口：系统任务与直接调账本的测试都从这里进。 */
+    /** 容器里限定名 system 的 SQL 客户端、账本与事务管理器：系统任务与它们的写入类用的就是这三样，测试直接拿来用。 */
     @Autowired
-    protected SystemLedger systemLedger;
+    @Qualifier(SystemLedger.QUALIFIER)
+    protected JdbcClient systemJdbc;
+
+    @Autowired
+    @Qualifier(SystemLedger.QUALIFIER)
+    protected LedgerService systemLedgerService;
+
+    @Autowired
+    @Qualifier(SystemLedger.QUALIFIER)
+    protected PlatformTransactionManager systemTransactionManager;
+
+    /** 在一个系统事务里做一件事：测试要自己开 system 事务时用（生产代码写 {@code @Transactional("system")}）。回调抛出 = 整体回滚。 */
+    protected <T> T inSystemTransaction(Supplier<T> work) {
+        return new TransactionTemplate(systemTransactionManager).execute(status -> work.get());
+    }
 
     /** 控制面的门是管理员会话。测试里直接用服务建用户、登录拿令牌，不走 HTTP（HTTP 那条路由由 AdminAuthApiTest 验）。 */
     @Autowired
@@ -208,7 +226,7 @@ public abstract class AbstractPostgresTest {
      */
     @BeforeEach
     void resetLedger() {
-        ledger = new SystemScopedLedger(systemLedger);
+        ledger = new SystemScopedLedger(systemTransactionManager, systemLedgerService);
         jdbc.sql("TRUNCATE entry, transfer, account RESTART IDENTITY CASCADE").update();
         // 计数主要存在 Redis 里，只清本地等于没清
         redisTemplate.getConnectionFactory().getConnection().serverCommands().flushAll();
@@ -265,14 +283,14 @@ public abstract class AbstractPostgresTest {
 
     /** 核心不变量：每种币的分录金额之和恒为 0。返回违反的币种数，任何时刻都必须是 0。 */
     protected long invariantViolations() {
-        return systemJdbc.sql("SELECT COUNT(*) FROM ledger_judge() WHERE check_name = 'ledger_invariant'")
+        return judgeJdbc.sql("SELECT COUNT(*) FROM ledger_judge() WHERE check_name = 'ledger_invariant'")
                 .query(Long.class)
                 .single();
     }
 
     /** 有多少个「不该为负」的账户余额为负。任何时刻都必须是 0。 */
     protected long illegalNegativeBalances() {
-        return systemJdbc.sql("SELECT COUNT(*) FROM ledger_judge() WHERE check_name = 'negative_balance'")
+        return judgeJdbc.sql("SELECT COUNT(*) FROM ledger_judge() WHERE check_name = 'negative_balance'")
                 .query(Long.class)
                 .single();
     }
@@ -285,7 +303,7 @@ public abstract class AbstractPostgresTest {
      * 两个都为 0，账才既平又准。
      */
     protected long balanceDrift() {
-        return systemJdbc.sql("SELECT COUNT(*) FROM ledger_judge() WHERE check_name = 'balance_consistency'")
+        return judgeJdbc.sql("SELECT COUNT(*) FROM ledger_judge() WHERE check_name = 'balance_consistency'")
                 .query(Long.class)
                 .single();
     }

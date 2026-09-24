@@ -32,7 +32,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
  * 系统身份的四个 bean（池、事务管理器、JdbcClient、账本）都在容器里（官方双数据源的形状）。这几件事必须同时成立：
  * <ol>
  *   <li>它们是「非默认候选」：按类型注入 DataSource / 事务管理器 / JdbcClient / LedgerService 的地方永远拿到主池那一套，主连接的自动配置不退让；</li>
- *   <li>系统侧的写入加入容器里 system 的事务：{@code @Transactional("system")} 里调 inTransaction 或系统 JdbcClient，外层失败一起回滚；</li>
+ *   <li>系统侧的写入加入容器里 system 的事务：{@code @Transactional("system")} 里用系统 JdbcClient 写的行，外层失败一起回滚；</li>
  *   <li>系统账本的转账必须在 system 事务里：事务外、主池事务里都当场拒绝。</li>
  * </ol>
  * 限定名在测试里写成字面量 "system"：它是对外的约定，改名要让这里红。
@@ -44,29 +44,19 @@ class SystemPoolBeansTest extends AbstractPostgresTest {
     @TestConfiguration
     static class ProbeConfig {
         @Bean
-        Probe systemTransactionalProbe(SystemLedger system, @Qualifier("system") JdbcClient systemJdbc,
-                                       @Qualifier("system") LedgerService systemLedgerService) {
-            return new Probe(system, systemJdbc, systemLedgerService);
+        Probe systemTransactionalProbe(@Qualifier("system") JdbcClient systemJdbc, @Qualifier("system") LedgerService systemLedgerService) {
+            return new Probe(systemJdbc, systemLedgerService);
         }
     }
 
-    /** 一个贴 {@code @Transactional("system")} 的 bean：证明注解和 inTransaction 能叠在同一个事务里。 */
+    /** 一个贴 {@code @Transactional} 的 bean（容器造的，注解才生效）：事务落在哪个池、外层失败回不回滚、系统账本认不认这个事务，都从它身上看。 */
     static class Probe {
-        private final SystemLedger system;
         private final JdbcClient systemJdbc;
         private final LedgerService systemLedgerService;
 
-        Probe(SystemLedger system, JdbcClient systemJdbc, LedgerService systemLedgerService) {
-            this.system = system;
+        Probe(JdbcClient systemJdbc, LedgerService systemLedgerService) {
             this.systemJdbc = systemJdbc;
             this.systemLedgerService = systemLedgerService;
-        }
-
-        @Transactional("system")
-        public String connectionSeenByBoth(DataSource systemPool) {
-            Object outer = TransactionSynchronizationManager.getResource(systemPool);
-            Object inner = system.inTransaction(s -> TransactionSynchronizationManager.getResource(systemPool));
-            return outer != null && outer == inner ? "同一个" : "不同：外层 " + outer + " / 回调 " + inner;
         }
 
         /** 不带限定名的 @Transactional：必须落在主池上，和系统池毫无关系（Spring 6.2 起按 defaultCandidate 选默认事务管理器，这里直接钉住而不靠间接证据）。 */
@@ -75,12 +65,6 @@ class SystemPoolBeansTest extends AbstractPostgresTest {
             boolean onMain = TransactionSynchronizationManager.getResource(mainPool) != null;
             boolean onSystem = TransactionSynchronizationManager.getResource(systemPool) != null;
             return onMain && !onSystem ? "主池" : "主池=" + onMain + " 系统池=" + onSystem;
-        }
-
-        @Transactional("system")
-        public void writeThroughLedgerThenFail() {
-            system.inTransaction(s -> s.jdbc().sql("INSERT INTO audit_run (started_at, status, detail) VALUES (now(), 'OK', 'system-pool-beans-test')").update());
-            throw new IllegalStateException("外层失败");
         }
 
         /** 容器里的系统 JdbcClient 同样加入外层的 system 事务。 */
@@ -116,25 +100,13 @@ class SystemPoolBeansTest extends AbstractPostgresTest {
     private DataSource systemPool;
 
     @Autowired
-    @Qualifier("system")
-    private PlatformTransactionManager systemTransactionManager;
-
-    @Autowired
     private Probe probe;
 
     @Autowired
     private JdbcClient jdbcClientByType;
 
     @Autowired
-    @Qualifier("system")
-    private JdbcClient systemJdbc;
-
-    @Autowired
     private LedgerService ledgerByType;
-
-    @Autowired
-    @Qualifier("system")
-    private LedgerService systemLedgerService;
 
     @Test
     @DisplayName("★ 系统池是容器里的 bean、以 chainpay_system 登录；但不是默认候选：按类型注入拿到的仍是主池与主池的事务管理器")
@@ -152,24 +124,9 @@ class SystemPoolBeansTest extends AbstractPostgresTest {
     }
 
     @Test
-    @DisplayName("★ 系统账本的事务就是容器里 system 的事务管理器：@Transactional(\"system\") 里调 inTransaction，看到的是同一条连接")
-    void ledgerTransactionsJoinTheContainerManagedSystemTransaction() {
-        assertThat(probe.connectionSeenByBoth(systemPool)).isEqualTo("同一个");
-    }
-
-    @Test
     @DisplayName("★ 不带限定名的 @Transactional 落在主池上：事务里主池有绑定的连接、系统池没有")
     void unqualifiedTransactionalRunsOnTheMainPool() {
         assertThat(probe.unqualifiedTransactionUsesTheMainPool(dataSourceByType, systemPool)).isEqualTo("主池");
-    }
-
-    @Test
-    @DisplayName("★ 外层 @Transactional(\"system\") 失败，账本回调里写的行一起回滚")
-    void outerSystemTransactionRollsBackTheLedgerWrite() {
-        String count = "SELECT count(*) FROM audit_run WHERE detail = 'system-pool-beans-test'";
-        long before = jdbc.sql(count).query(Long.class).single();
-        assertThatThrownBy(probe::writeThroughLedgerThenFail).hasMessage("外层失败");
-        assertThat(jdbc.sql(count).query(Long.class).single()).as("回调里插的那一行必须随外层事务回滚").isEqualTo(before);
     }
 
     @Test

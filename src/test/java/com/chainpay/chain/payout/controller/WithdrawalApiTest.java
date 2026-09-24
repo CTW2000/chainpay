@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.chainpay.chain.deposit.service.AbstractDepositPostingTest;
 import com.chainpay.chain.payout.service.FeePolicy;
+import com.chainpay.chain.payout.service.PayoutSendWriter;
 import com.chainpay.chain.payout.service.PayoutSender;
 import com.chainpay.chain.support.FakeChain;
 import com.chainpay.chain.wallet.EthAddress;
@@ -44,6 +45,8 @@ class WithdrawalApiTest extends AbstractDepositPostingTest {
     private int port;
     @Autowired
     private SecretCipher cipher;
+    @Autowired
+    private PayoutSendWriter sendWriter;
     private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
     private String acmeSecret;
     private String evilSecret;
@@ -240,7 +243,7 @@ class WithdrawalApiTest extends AbstractDepositPostingTest {
         long id = Long.parseLong(field(withdraw(acmeSecret, "ak_acme", DEST, "1", "w-1").body(), "id"));
         FakeChain node = new FakeChain().withBlocks(5);
         HotWalletSigner signer = HotWalletSigner.fromHex(HOT_KEY);
-        new PayoutSender(systemLedger, node, node, signer, new FeePolicy(BigInteger.TEN.pow(9), BigInteger.TEN.pow(9).multiply(BigInteger.valueOf(50)), 200_000), 11_155_111L, 10).sendOnce();
+        new PayoutSender(systemJdbc, sendWriter, node, node, signer, new FeePolicy(BigInteger.TEN.pow(9), BigInteger.TEN.pow(9).multiply(BigInteger.valueOf(50)), 200_000), 11_155_111L, 10).sendOnce();
 
         String mine = signedGet(acmeSecret, "ak_acme", "/api/v1/withdrawals?token=" + LINK).body();
         String theirs = signedGet(evilSecret, "ak_evilco", "/api/v1/withdrawals").body();

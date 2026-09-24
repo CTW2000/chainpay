@@ -206,7 +206,7 @@ class DepositPosterTest extends AbstractDepositPostingTest {
         indexUpTo(100, 90, 50);
         audit.reportFinalized(4);
 
-        PostingResult result = new DepositPoster(systemLedger, chain, audit, 50, 0).postOnce();
+        PostingResult result = new DepositPoster(systemJdbc, depositWriter, chain, audit, 50, 0).postOnce();
 
         assertThat(result.held()).isEqualTo(1);
         assertThat(result.deferred()).isZero();
@@ -304,7 +304,7 @@ class DepositPosterTest extends AbstractDepositPostingTest {
     void crashAfterTheLedgerPostingLeavesNothingBehind() {
         pay(5, TEN_LINK);
         indexUpTo(100, 90, 50);
-        DepositPoster crashing = new DepositPoster(systemLedger, chain, audit, 50, 64, jdbcClient -> new DepositRepository(jdbcClient) {
+        DepositPoster crashing = posterWith(new DepositRepository(systemJdbc) {
             @Override
             public void credit(long depositId, long transferId) {
                 throw new IllegalStateException("模拟：记账之后、改状态之前崩溃");
@@ -328,7 +328,7 @@ class DepositPosterTest extends AbstractDepositPostingTest {
     void theHeldLogLineReportsWhatWasWritten() {
         pay(5, TEN_LINK);
         indexUpTo(100, 90, 50);
-        DepositPoster crashing = new DepositPoster(systemLedger, chain, audit, 50, 64, jdbcClient -> new DepositRepository(jdbcClient) {
+        DepositPoster crashing = posterWith(new DepositRepository(systemJdbc) {
             @Override
             public void credit(long depositId, long transferId) {
                 throw new IllegalStateException("模拟：记账之后、改状态之前崩溃");
@@ -379,7 +379,7 @@ class DepositPosterTest extends AbstractDepositPostingTest {
     void databaseOutageMakesTheRoundRetryLaterNotHeld() {
         pay(5, TEN_LINK);
         indexUpTo(100, 90, 50);
-        DepositPoster outage = new DepositPoster(systemLedger, chain, audit, 50, 64, jdbcClient -> new DepositRepository(jdbcClient) {
+        DepositPoster outage = posterWith(new DepositRepository(systemJdbc) {
             @Override
             public void credit(long depositId, long transferId) {
                 throw new CannotGetJdbcConnectionException("模拟：连接池拿不到连接");

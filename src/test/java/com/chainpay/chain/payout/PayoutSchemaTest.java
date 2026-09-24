@@ -173,10 +173,10 @@ class PayoutSchemaTest extends AbstractPostgresTest {
         insertPayout(acmeId, "k-s1", "QUEUED", acmeFreeze, null, null, null);
         insertPayout(evilcoId, "k-s2", "QUEUED", evilcoFreeze, null, null, null);
 
-        long seenBySystem = systemLedger.inTransaction(s -> s.jdbc().sql("SELECT count(*) FROM payout").query(Long.class).single());
+        long seenBySystem = systemJdbc.sql("SELECT count(*) FROM payout").query(Long.class).single();
         assertThat(seenBySystem).isEqualTo(2);
         for (String table : new String[] {"payout", "payout_tx", "hot_wallet", "payout_address"}) {
-            assertThatThrownBy(() -> systemLedger.inTransaction(s -> s.jdbc().sql("DELETE FROM " + table).update()))
+            assertThatThrownBy(() -> systemJdbc.sql("DELETE FROM " + table).update())
                     .as(table).isInstanceOf(DataAccessException.class)
                     .hasStackTraceContaining("permission denied");
         }

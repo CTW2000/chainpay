@@ -177,7 +177,8 @@ flowchart LR
 - ✅ ⓪ 取舍与对标（09-23）
 - ✅ ① 进程角色（09-23，`e3a5f81`）
 - ⬜ ② web 的平台地址检查改走是 / 否函数
-- ◐ 系统侧改用 `@Transactional("system")`（方案甲，09-23 定；和拆分正交，但要赶在 ③ 之前）：对账、注资登记、健康检查已换；入账、核准、追踪、发送还走 `inTransaction`，③ 重写发送路径时一起换（`WithdrawalService` 那一处随 ② 消失）
+- ✅ 系统侧改用 `@Transactional("system")`（方案甲，09-23 定，同日换完；和拆分正交）：第一批对账、注资登记、健康检查（`4cc09bf`）；第二批入账、核准、追踪、发送，删掉 `inTransaction` / `Session`。
+  `WithdrawalService` 那一问先搬进 `PlatformAddresses`（自己一个系统事务，问完就还连接），② 把它换成是 / 否函数
 - ⬜ ③ worker 不信 web 写的行（取舍 8）
 - ⬜ ④ 装配拆开
 - ⬜ ⑤ 属主口令只在迁移那一步 + 启动时校验库版本

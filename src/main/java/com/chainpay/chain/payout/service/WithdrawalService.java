@@ -12,7 +12,6 @@ import com.chainpay.chain.wallet.HotWalletSigner;
 import com.chainpay.common.web.ErrorCode;
 import com.chainpay.ledger.service.LedgerAmounts;
 import com.chainpay.ledger.service.LedgerService;
-import com.chainpay.ledger.system.SystemLedger;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
@@ -32,14 +31,14 @@ public class WithdrawalService {
 
     private final WithdrawalRepository repo;
     private final PayoutLedger payoutLedger;
-    private final SystemLedger system;
+    private final PlatformAddresses platformAddresses;
     private final Optional<HotWalletSigner> hotWallet;
 
     /** 热钱包只在设了私钥时装配（{@code Optional}）：没装配就没有热钱包地址可拒，别的规则照常。 */
-    public WithdrawalService(JdbcClient jdbc, LedgerService ledger, SystemLedger system, Optional<HotWalletSigner> hotWallet) {
+    public WithdrawalService(JdbcClient jdbc, LedgerService ledger, PlatformAddresses platformAddresses, Optional<HotWalletSigner> hotWallet) {
         this.repo = new WithdrawalRepository(jdbc);
         this.payoutLedger = new PayoutLedger(jdbc, ledger);
-        this.system = system;
+        this.platformAddresses = platformAddresses;
         this.hotWallet = hotWallet;
     }
 
@@ -126,16 +125,14 @@ public class WithdrawalService {
     }
 
     /**
-     * 平台自己的口袋不能当提现目标：任何商户的收款地址（内部转账；商户连接看不到别家的行，走系统身份只问是或否），
+     * 平台自己的口袋不能当提现目标：任何商户的收款地址（内部转账；商户连接看不到别家的行，由 {@link PlatformAddresses} 以系统身份只问是或否），
      * 以及热钱包自己的地址（to == from 的一笔交易：编号照用、gas 照付、账本记「付出去了」，链上什么都没变）。
      */
     private void rejectPlatformAddress(String lower) {
         if (hotWallet.map(w -> w.address().equalsIgnoreCase(lower)).orElse(false)) {
             throw new WithdrawalRejectedException(HttpStatus.BAD_REQUEST, ErrorCode.INTERNAL_ADDRESS, "这是平台的热钱包地址，不能作为提现目标");
         }
-        boolean platform = system.inTransaction(s -> s.jdbc().sql("SELECT EXISTS (SELECT 1 FROM deposit_address WHERE address = :a)")
-                .param("a", lower).query(Boolean.class).single());
-        if (platform) {
+        if (platformAddresses.isDepositAddress(lower)) {
             throw new WithdrawalRejectedException(HttpStatus.BAD_REQUEST, ErrorCode.INTERNAL_ADDRESS, "这是平台的收款地址，不能作为提现目标");
         }
     }

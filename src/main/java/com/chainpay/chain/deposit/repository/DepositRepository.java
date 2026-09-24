@@ -15,8 +15,8 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 /**
  * deposit 表的 SQL，以及入账时依赖的镜像账户与「事件累计」。
  *
- * <p><b>不是 Spring bean</b>：它跑在系统连接上，由入账任务与对账在 {@code SystemLedger.inTransaction} 的回调里
- * 用会话的 JdbcClient 现造一个——同 SystemLedger 的纪律，系统身份的 SQL 只在系统事务里出现。
+ * <p><b>不是 Spring bean</b>：它跑在系统连接上，由入账任务、对账（只读）与 {@code DepositWriter}（写，在 system 事务里）
+ * 拿容器里限定名 system 的 JdbcClient 各造一个。
  */
 public class DepositRepository {
 

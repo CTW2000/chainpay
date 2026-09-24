@@ -1,5 +1,6 @@
 package com.chainpay.chain.deposit.service;
 
+import com.chainpay.chain.deposit.repository.DepositRepository;
 import com.chainpay.chain.indexer.domain.BatchOutcome;
 import com.chainpay.chain.indexer.repository.ChainHeadRepository;
 import com.chainpay.chain.indexer.repository.IndexerCursorRepository;
@@ -10,6 +11,7 @@ import com.chainpay.chain.support.FakeChain;
 import com.chainpay.ledger.service.LedgerService;
 import com.chainpay.support.AbstractPostgresTest;
 import com.chainpay.support.IndexerWriters;
+import com.chainpay.support.TransactionalProxy;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.util.List;
@@ -55,6 +57,10 @@ public abstract class AbstractDepositPostingTest extends AbstractPostgresTest {
     @Autowired
     protected LedgerService appLedger;
 
+    /** 容器里的入账写入类（是代理，事务落在 system 上）：{@link #poster()} 用它。 */
+    @Autowired
+    protected DepositWriter depositWriter;
+
     protected long acmeId;
     protected long evilcoId;
     protected long acmeAccount;
@@ -91,7 +97,16 @@ public abstract class AbstractDepositPostingTest extends AbstractPostgresTest {
     }
 
     protected DepositPoster poster() {
-        return new DepositPoster(systemLedger, chain, audit, 50, 64);
+        return new DepositPoster(systemJdbc, depositWriter, chain, audit, 50, 64);
+    }
+
+    /**
+     * 落库时换一个会在某一步出事的仓储（故障注入）。写入类是测试里 new 的，用 {@link TransactionalProxy} 套上和容器一样的事务代理：
+     * 事务照样开在系统事务管理器上，账本照样是容器里的系统账本。
+     */
+    protected DepositPoster posterWith(DepositRepository faulty) {
+        DepositWriter writer = TransactionalProxy.of(new DepositWriter(faulty, systemLedgerService), systemTransactionManager);
+        return new DepositPoster(systemJdbc, writer, chain, audit, 50, 64);
     }
 
     /** 两条链同样的块，主链上有日志；真的索引进库、真的刷新链头。 */
