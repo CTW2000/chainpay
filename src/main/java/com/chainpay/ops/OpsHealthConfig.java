@@ -5,6 +5,7 @@ import com.chainpay.audit.service.AuditService;
 import com.chainpay.chain.indexer.repository.IndexerStateRepository;
 import com.chainpay.chain.indexer.service.ChainIndexerScheduler;
 import com.chainpay.chain.payout.repository.HotWalletRepository;
+import com.chainpay.chain.wallet.EthAddress;
 import com.chainpay.chain.wallet.HotWalletSigner;
 import com.chainpay.ledger.system.SystemLedger;
 import com.chainpay.chain.deposit.service.DepositPostingScheduler;
@@ -43,10 +44,11 @@ class OpsHealthConfig {
                 () -> posting == null ? 0 : posting.consecutiveFailures());
     }
 
+    /** 私钥推出的地址是 EIP-55 大小写混写的，库里一律存小写：按库的写法去查，否则永远查不到那一行，停发了也报 UP（OpsHealthWiringTest）。 */
     @Bean
     HotWalletHealthIndicator hotWalletHealthIndicator(Optional<HotWalletSigner> signer, @Qualifier(SystemLedger.QUALIFIER) JdbcClient systemJdbc) {
         return new HotWalletHealthIndicator(signer.map(HotWalletSigner::address),
-                address -> new HotWalletRepository(systemJdbc).find(address));
+                address -> new HotWalletRepository(systemJdbc).find(EthAddress.lowercase(address)));
     }
 
     @Bean
