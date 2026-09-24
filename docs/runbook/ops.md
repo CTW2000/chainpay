@@ -25,10 +25,10 @@ HTTP：UP / DEGRADED / UNKNOWN = 200；DOWN = 503。`DEGRADED` 是本项目多�
 
 | 部件 | 状态 | 意思 | 做什么 |
 |---|---|---|---|
-| `indexer` | UNKNOWN | 没配主节点 | 没事，除非它本该索引 |
+| `indexer` | UNKNOWN | 这个进程不索引：web 进程，或节点地址写成了 false | web 上正常；worker 上是配错了——配真的节点地址，重启 |
 | `indexer` | DEGRADED | 连续瞬时失败（节点在抖） | `tools/admin.sh GET /admin/v1/indexer`；恢复后自己回 RUNNING |
 | `indexer` | DOWN | HALTED，`reason` 里是原因 | 按 `chain-indexer.md` 处理，处理完才能复位 |
-| `deposit` | UNKNOWN | 没配主节点 | 没事，除非它本该入账 |
+| `deposit` | UNKNOWN | 这个进程不入账：web 进程，或节点地址写成了 false | 同上 |
 | `deposit` | DEGRADED | 连续 5 轮没跑完（节点答不上来、库在抖） | 看 `reason`；恢复后自己回 UP |
 | `deposit` | DOWN | 上一轮 HALTED：节点拒绝了凭证 | 换 RPC key 后重启，见 `deposit.md` |
 | `hotWallet` | DOWN | 钱包 HALTED（编号被别处用掉之类） | 按 `payout.md`「钱包 HALTED」 |
@@ -112,19 +112,21 @@ tools/admin.sh logout
 ## 进程角色
 
 同一个镜像起成两种常驻进程：`web` 对外接商户请求，`worker` 跑定时任务与控制面、握着重钥匙。角色由 `SPRING_PROFILES_ACTIVE` 给，**恰好一个**。
-拆成两个服务（进程拆分第 ⑥ 步）之前，compose 里唯一的 `app` 以 `worker` 身份跑。启动日志里有一行 `进程角色：worker（禁用名单 N 项，环境里一项都没有）`。
+拆成两个服务（进程拆分第 ⑥ 步）之前，compose 里唯一的 `app` 以 `worker` 身份跑。启动日志里有一行 `进程角色：worker（禁用名单 N 项，环境里一项都没有；必填 M 项，一项不缺）`。
 
 | 起不来时的报错 | 意思 | 做什么 |
 |---|---|---|
 | 进程角色必须恰好是 web、worker 之一……现在激活的 profile 是 […] | 没给角色，或给了两个 | 在这个进程的环境里设 `SPRING_PROFILES_ACTIVE=web` 或 `worker`。别写进 application.yml：给个默认角色等于没有角色 |
 | web（或 worker）进程的环境里有它不该拿的凭证，拒绝启动：CHAINPAY_…（它能干什么） | 这把钥匙不属于这个进程 | 从这个进程的 env 文件里按名字删掉点名的变量（只删行，不要 cat 文件）。报错里只有变量名，没有值 |
+| worker 进程缺它离不开的配置（没设或留空），拒绝启动：CHAINPAY_…（缺了它哪些活干不了） | 节点地址或热钱包私钥没配 | 在这个进程的 env 文件里配上（照 `env/local.env.example`）。别写成 false 绕过去：那是测试夹具的写法，模块就不装配了，部署脚本也不放行 |
 
-| 禁用名单（`ops/role/ProcessRole`） | web | worker |
+| 禁用与必填名单（`ops/role/ProcessRole`） | web | worker |
 |---|---|---|
 | `CHAINPAY_SYSTEM_DB_PASSWORD` | 禁 | 要 |
 | `CHAINPAY_FLYWAY_PASSWORD` | 禁 | 第 ⑤ 步起禁（在那之前唯一的容器启动时还要自己迁移） |
-| `CHAINPAY_PAYOUT_HOT_WALLET_KEY` | 禁 | 要 |
-| `CHAINPAY_CHAIN_RPC_URL` / `_AUDIT_RPC_URL` | 禁 | 要 |
+| `CHAINPAY_PAYOUT_HOT_WALLET_KEY` | 禁 | 必填 |
+| `CHAINPAY_CHAIN_RPC_URL` | 禁 | 必填 |
+| `CHAINPAY_CHAIN_AUDIT_RPC_URL` | 禁 | 要（可不设：单节点） |
 | `CHAINPAY_ALERT_WEBHOOK_URL` | 禁 | 要 |
 | `CHAINPAY_ADMIN_PASSWORD` | 禁 | 禁：只属于 `--create-admin` 那一条一次性命令（另一个 JVM，守卫不管） |
 

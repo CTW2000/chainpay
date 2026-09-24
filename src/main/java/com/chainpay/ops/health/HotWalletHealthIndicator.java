@@ -7,7 +7,7 @@ import org.springframework.boot.health.contributor.Health;
 import org.springframework.boot.health.contributor.HealthIndicator;
 
 /**
- * 热钱包算不算「能付」：hot_wallet 表里它那一行的状态。没配私钥 = UNKNOWN；还没有行（一笔都没发过）= UP；HALTED = DOWN 带原因。
+ * 热钱包算不算「能付」：hot_wallet 表里它那一行的状态。没装配（web 进程，或私钥写成 false）= UNKNOWN；还没有行（一笔都没发过）= UP；HALTED = DOWN 带原因。
  * 细节里只有地址和下一个编号——地址本来就是公开的，私钥、节点地址永远不进来。
  */
 public final class HotWalletHealthIndicator implements HealthIndicator {
@@ -23,7 +23,7 @@ public final class HotWalletHealthIndicator implements HealthIndicator {
     @Override
     public Health health() {
         if (address.isEmpty()) {
-            return Health.unknown().withDetail("reason", "没有配置 CHAINPAY_PAYOUT_HOT_WALLET_KEY：这个进程不付款").build();
+            return Health.unknown().withDetail("reason", "这个进程不付款（web 进程，或 CHAINPAY_PAYOUT_HOT_WALLET_KEY=false）").build();
         }
         String a = address.get();
         Optional<HotWallet> w = lookup.apply(a);

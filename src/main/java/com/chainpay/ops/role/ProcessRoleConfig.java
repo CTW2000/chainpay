@@ -44,7 +44,8 @@ class ProcessRoleConfig {
         @Override
         public void postProcessBeanFactory(ConfigurableListableBeanFactory beanFactory) {
             ProcessRole role = ProcessRole.resolve(environment);
-            log.info("进程角色：{}（禁用名单 {} 项，环境里一项都没有）", role.profile(), role.forbidden().size());
+            log.info("进程角色：{}（禁用名单 {} 项，环境里一项都没有；必填 {} 项，一项不缺）",
+                    role.profile(), role.forbidden().size(), role.required().size());
         }
 
         @Override

@@ -103,7 +103,7 @@ flowchart LR
 | ① ✅ | 进程角色：恰好一个 profile；每个角色一张禁用名单；守卫在造 bean 之前核对（做法见第八节） | 每个禁用项各一条；没有角色、两个角色都起不来；名单名字真实存在（起真应用）；env 样例每个变量都有归属 |
 | ② | 新迁移建取舍 2 的函数，同时查 `deposit_address` 与 `hot_wallet`：`SECURITY DEFINER`、钉死 `search_path`、先 `REVOKE EXECUTE … FROM PUBLIC` 再只授权 `chainpay_app`、函数体先核对执行身份能看到全部行（照 `ledger_judge()` 的「拒绝盲跑」）。`WithdrawalService` 去掉系统身份与热钱包签名器 | 只有应用角色的上下文里：提现到别家收款地址 → 400 `INTERNAL_ADDRESS`；到热钱包（已有行时）→ 400。函数守卫：SECURITY DEFINER、`search_path` 钉死、PUBLIC 无执行权。**坑 3**：非超级用户、非 BYPASSRLS 的属主调用时必须抛异常，不能返回 false |
 | ③ | 取舍 8：8a 签名前复核 + 库守两条；8b 记账前重新派生 + 撤掉 UPDATE。复核写成入口只有「签第 N 笔提现」的部件 | **以应用身份直接写库**（模拟被攻破的 web）：「放行」但地址不在白名单 → 不签、停下；冻结金额不符 → 不签；超限写成「放行」→ 不签；假收款地址 + 一条转入 → 不记账；应用角色插不进后续状态、写不了核准标记、改不了收款地址 |
-| ④ | 装配拆开：配置类与控制器挂 profile；`@EnableScheduling` 挪到只在 worker 生效、**不看节点配置**的类上（坑 2）；入账的装配条件改掉；拆开 `OpsHealthConfig`；`work` 分组只写在 worker 的 profile yml（Boot 默认校验分组成员存在）；worker 主端口默认绑回环；测试基类拆成 web 与 worker 两个 | web：没有系统身份、系统池、热钱包签名器、节点读取的 bean；定时任务数 0；没有 `/admin/` 映射；`db` 只有主池。worker：没有 `/api/` 映射；不配节点也调度告警；配了节点时 6 个任务、调度线程数不少于任务数 |
+| ④ | 装配拆开：配置类与控制器挂 profile（节点与热钱包的五个装配类 09-24 已先挂上）；`@EnableScheduling` 挪到只在 worker 生效、**不看节点配置**的类上（坑 2）；入账的装配条件改掉；拆开 `OpsHealthConfig`；`work` 分组只写在 worker 的 profile yml（Boot 默认校验分组成员存在）；worker 主端口默认绑回环；测试基类拆成 web 与 worker 两个 | web：没有系统身份、系统池、热钱包签名器、节点读取的 bean；定时任务数 0；没有 `/admin/` 映射；`db` 只有主池。worker：没有 `/api/` 映射；节点写成 false 时也调度告警；6 个任务、调度线程数不少于任务数 |
 | ⑤ | web / worker 的 profile yml 里 Flyway 只校验（取舍 1）；worker 名单加上属主口令；「只迁移」用单独的 `env/migrate.env`；实测只给属主凭证时 `--migrate-only` 能不能起来（它的最小上下文会装配主数据源） | web / worker 不迁移；库缺迁移时拒绝启动、库比代码新时照常；只有属主凭证时 `MigrateOnlyTest` 仍绿 |
 | ⑥ | 三份 env 文件各配 `.example`（第五节）；compose 拆成 `web` + `worker`，同一镜像，加固项照抄，worker 不写 `ports:`；`deploy.sh` / `rollback.sh` 按取舍 7；`tools/admin.sh` 与 `--create-admin` 指向 worker；探针与退役的变量不进任何一份 | `ContainerGuardTest` 两个服务都守；`web.env.example` 里没有 web 禁用的名字；`DeployGuardTest` 的顺序断言加上两个服务 |
 | ⑦ | 真跑：两个容器都 healthy；商户流程（`tools/api.py`）与管理流程（`tools/admin.sh`）；演练：停 worker → web 照常受理并冻结，恢复后队列被消化；停 Redis → worker 告警；部署一次再回滚一次 | web 容器里按名字查，web 禁用的一个都没有；worker 里没有属主凭证 |
@@ -117,8 +117,9 @@ flowchart LR
 | `CHAINPAY_DB_USER` / `_PASSWORD`（应用角色） | ✓ | ✓（索引器、管理员表） | 看第 ⑤ 步实测 |
 | `CHAINPAY_SYSTEM_DB_USER` / `_PASSWORD` | ✗ 有就拒绝启动 | ✓ | ✗ |
 | `CHAINPAY_FLYWAY_USER` / `_PASSWORD` | ✗ 有就拒绝启动 | ✗（第 ⑤ 步起拒绝启动） | ✓ |
-| `CHAINPAY_PAYOUT_HOT_WALLET_KEY` | ✗ 有就拒绝启动 | ✓ | ✗ |
-| `CHAINPAY_CHAIN_RPC_URL` / `_AUDIT_RPC_URL` | ✗ 有就拒绝启动 | ✓ | ✗ |
+| `CHAINPAY_PAYOUT_HOT_WALLET_KEY` | ✗ 有就拒绝启动 | ✓ 必填（09-24 起，缺了拒绝启动） | ✗ |
+| `CHAINPAY_CHAIN_RPC_URL` | ✗ 有就拒绝启动 | ✓ 必填（同上） | ✗ |
+| `CHAINPAY_CHAIN_AUDIT_RPC_URL` | ✗ 有就拒绝启动 | ✓（可不设） | ✗ |
 | `CHAINPAY_CHAIN_START_BLOCK`（不是密钥） | ✗ | ✓ | ✗ |
 | `CHAINPAY_DEPOSIT_XPUB` | ✓（分配地址） | ✓（取舍 8b：记账前重新派生） | ✗ |
 | `CHAINPAY_SECRET_KEY` | ✓（验签） | ✓（发凭证时加密） | ✗ |
@@ -138,7 +139,7 @@ flowchart LR
 
 ### 坑 2：`@EnableScheduling` 挂在「配了节点」上（读代码 + 推断）
 
-全仓库只有 `ChainIndexerConfig` 一处 `@EnableScheduling`，而这个类只在配了节点地址时装配。没有它的进程里，`@Scheduled` 方法根本不会被调度：bean 还在、方法永远不被调用、没有任何报错（按 Spring 的装配规则推断，未实测）。现有的告警测试是手动调用 `tick()`，证明的是「装配了」不是「在跑」。第 ④ 步的第一条红测要先把它实测出来。
+全仓库只有 `ChainIndexerConfig` 一处 `@EnableScheduling`，而这个类只在 worker 里、节点地址不是 false 时装配（09-24 起节点地址是 worker 必填，生产里总会装配；测试基类写成 false，测试里就没有调度）。没有它的进程里，`@Scheduled` 方法根本不会被调度：bean 还在、方法永远不被调用、没有任何报错（按 Spring 的装配规则推断，未实测）。现有的告警测试是手动调用 `tick()`，证明的是「装配了」不是「在跑」。第 ④ 步的第一条红测要先把它实测出来。
 
 ### 坑 3：`SECURITY DEFINER` + FORCE RLS + 非超级用户属主，对所有地址都回答「不是」
 
@@ -177,6 +178,7 @@ flowchart LR
 - ✅ ⓪ 取舍与对标（09-23）
 - ✅ ① 进程角色（09-23，`e3a5f81`）
 - ✅ ② web 的平台地址检查改走是 / 否函数（09-24，做法见下）
+- ✅ 节点地址与热钱包私钥改为 worker 必填（09-24，用户定；和拆分同向）：守卫加必填名单，没设或留空拒绝启动；五个装配类挂 `worker` profile、只有写成 false 才不装配；部署脚本连 false 也拦
 - ✅ 系统侧改用 `@Transactional("system")`（方案甲，09-23 定，同日换完；和拆分正交）：第一批对账、注资登记、健康检查（`4cc09bf`）；第二批入账、核准、追踪、发送，删掉 `inTransaction` / `Session`。
   `WithdrawalService` 那一问当时先搬进 `PlatformAddresses`（自己一个系统事务，问完就还连接），② 把它换成了是 / 否函数、删掉
 - ⬜ ③ worker 不信 web 写的行（取舍 8）

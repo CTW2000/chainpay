@@ -146,6 +146,8 @@ class DeployScriptTest {
                 CHAINPAY_SYSTEM_DB_PASSWORD=fake-system-password-0001
                 CHAINPAY_SECRET_KEY=%s
                 CHAINPAY_DEPOSIT_XPUB=xpub-fake-0001
+                CHAINPAY_CHAIN_RPC_URL=https://node.example/fake-rpc-key-0001
+                CHAINPAY_PAYOUT_HOT_WALLET_KEY=fake-hot-wallet-key-0001
                 """.formatted(Base64.getEncoder().encodeToString(new byte[32])));
         Run r = bash("""
                 check_config
@@ -167,10 +169,30 @@ class DeployScriptTest {
         assertThat(missing.exit()).isNotZero();
         assertThat(missing.out()).contains("✗ CHAINPAY_FLYWAY_PASSWORD 没设").doesNotContain("fake-db-password-0001");
         assertThat(missing.out()).as("收款 xpub 必填：应用没它起不来，部署前就该拦下").contains("✗ CHAINPAY_DEPOSIT_XPUB 没设");
+        assertThat(missing.out()).as("节点地址与热钱包私钥是 worker 的必填项")
+                .contains("✗ CHAINPAY_CHAIN_RPC_URL 没设").contains("✗ CHAINPAY_PAYOUT_HOT_WALLET_KEY 没设");
 
         Run absent = bash("check_config", "CHAINPAY_ENV_FILE", dir.resolve("nope.env").toString());
         assertThat(absent.exit()).isNotZero();
         assertThat(absent.out()).contains("找不到");
+    }
+
+    @Test
+    @DisplayName("节点地址或热钱包私钥写成 false：部署前拦下——应用把它当「明确不要这个模块」，那是测试夹具的写法")
+    void falseIsNotAConfigurationToDeploy() throws Exception {
+        Path env = dir.resolve("off.env");
+        Files.writeString(env, """
+                CHAINPAY_DB_PASSWORD=fake-db-password-0001
+                CHAINPAY_FLYWAY_PASSWORD=fake-flyway-password-0001
+                CHAINPAY_SYSTEM_DB_PASSWORD=fake-system-password-0001
+                CHAINPAY_SECRET_KEY=%s
+                CHAINPAY_DEPOSIT_XPUB=xpub-fake-0001
+                CHAINPAY_CHAIN_RPC_URL=false
+                CHAINPAY_PAYOUT_HOT_WALLET_KEY=FALSE
+                """.formatted(Base64.getEncoder().encodeToString(new byte[32])));
+        Run r = bash("check_config", "CHAINPAY_ENV_FILE", env.toString());
+        assertThat(r.exit()).isNotZero();
+        assertThat(r.out()).contains("✗ CHAINPAY_CHAIN_RPC_URL 写成了 false").contains("✗ CHAINPAY_PAYOUT_HOT_WALLET_KEY 写成了 false");
     }
 
     @Test

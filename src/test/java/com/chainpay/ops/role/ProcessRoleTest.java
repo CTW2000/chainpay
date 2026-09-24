@@ -42,7 +42,50 @@ class ProcessRoleTest {
     @DisplayName("恰好一个角色时认出它；别的 profile（测试用的 test）可以同时开")
     void resolvesTheSingleRole() {
         assertThat(ProcessRole.resolve(env("web"))).isEqualTo(ProcessRole.WEB);
-        assertThat(ProcessRole.resolve(env("test", "worker"))).isEqualTo(ProcessRole.WORKER);
+        // 同测试基类：节点与热钱包写成 false（明确不装配），worker 的必填项才算有交代
+        assertThat(ProcessRole.resolve(env("test", "worker")
+                .withProperty("chainpay.chain.rpc-url", "false")
+                .withProperty("chainpay.payout.hot-wallet-key", "false"))).isEqualTo(ProcessRole.WORKER);
+    }
+
+    @Test
+    @DisplayName("★ worker 缺节点地址或热钱包私钥：拒绝启动，两个一次点名；没设、留空、解析不出的占位符都算缺")
+    void workerRequiresNodeAndHotWallet() {
+        List<MockEnvironment> missing = List.of(
+                env("worker"),
+                env("worker")
+                        .withProperty("chainpay.chain.rpc-url", "")
+                        .withProperty("chainpay.payout.hot-wallet-key", "  "),
+                env("worker")
+                        .withProperty("chainpay.chain.rpc-url", "${NOT_SET_ANYWHERE}")
+                        .withProperty("chainpay.payout.hot-wallet-key", "${NOT_SET_EITHER}"));
+        for (MockEnvironment env : missing) {
+            assertThatThrownBy(() -> ProcessRole.resolve(env))
+                    .isInstanceOf(ProcessRoleException.class)
+                    .hasMessageContaining("CHAINPAY_CHAIN_RPC_URL")
+                    .hasMessageContaining("CHAINPAY_PAYOUT_HOT_WALLET_KEY");
+        }
+    }
+
+    @Test
+    @DisplayName("worker 里写成 false：明确不要这个模块，守卫放行（测试基类这样关掉节点与热钱包；部署脚本不放行）")
+    void falseIsADeliberateOff() {
+        MockEnvironment env = env("worker")
+                .withProperty("chainpay.chain.rpc-url", "false")
+                .withProperty("chainpay.payout.hot-wallet-key", "FALSE");
+        assertThat(ProcessRole.resolve(env)).isEqualTo(ProcessRole.WORKER);
+    }
+
+    @Test
+    @DisplayName("禁用项在、必填项缺：一次全部点名，报错不带值")
+    void reportsForbiddenAndMissingTogether() {
+        MockEnvironment env = env("worker").withProperty("chainpay.admin-password", SECRET);
+        assertThatThrownBy(() -> ProcessRole.resolve(env))
+                .isInstanceOf(ProcessRoleException.class)
+                .hasMessageContaining("CHAINPAY_ADMIN_PASSWORD")
+                .hasMessageContaining("CHAINPAY_CHAIN_RPC_URL")
+                .hasMessageContaining("CHAINPAY_PAYOUT_HOT_WALLET_KEY")
+                .hasMessageNotContaining(SECRET);
     }
 
     static Stream<ProcessRole.Credential> webForbidden() {
@@ -73,14 +116,15 @@ class ProcessRoleTest {
     }
 
     @Test
-    @DisplayName("「有没有」和 @ConditionalOnProperty 同一口径：空白、false、解析不出的占位符都算没配")
-    void absentMeansBlankFalseOrUnresolvable() {
-        assertThat(ProcessRole.isConfigured(new MockEnvironment(), "k")).isFalse();
-        assertThat(ProcessRole.isConfigured(new MockEnvironment().withProperty("k", " "), "k")).isFalse();
-        assertThat(ProcessRole.isConfigured(new MockEnvironment().withProperty("k", "false"), "k")).isFalse();
-        assertThat(ProcessRole.isConfigured(new MockEnvironment().withProperty("k", "FALSE"), "k")).isFalse();
-        assertThat(ProcessRole.isConfigured(new MockEnvironment().withProperty("k", "${NOT_SET_ANYWHERE}"), "k")).isFalse();
-        assertThat(ProcessRole.isConfigured(new MockEnvironment().withProperty("k", "x"), "k")).isTrue();
+    @DisplayName("配置项三种状态：有值、false（明确不要）、没配（没设、空白、解析不出的占位符）——空白算没配，这一点和 @ConditionalOnProperty 不同")
+    void threeStates() {
+        assertThat(ProcessRole.presence(new MockEnvironment(), "k")).isEqualTo(ProcessRole.Presence.MISSING);
+        assertThat(ProcessRole.presence(new MockEnvironment().withProperty("k", ""), "k")).isEqualTo(ProcessRole.Presence.MISSING);
+        assertThat(ProcessRole.presence(new MockEnvironment().withProperty("k", " "), "k")).isEqualTo(ProcessRole.Presence.MISSING);
+        assertThat(ProcessRole.presence(new MockEnvironment().withProperty("k", "${NOT_SET_ANYWHERE}"), "k")).isEqualTo(ProcessRole.Presence.MISSING);
+        assertThat(ProcessRole.presence(new MockEnvironment().withProperty("k", "false"), "k")).isEqualTo(ProcessRole.Presence.OFF);
+        assertThat(ProcessRole.presence(new MockEnvironment().withProperty("k", "FALSE"), "k")).isEqualTo(ProcessRole.Presence.OFF);
+        assertThat(ProcessRole.presence(new MockEnvironment().withProperty("k", "x"), "k")).isEqualTo(ProcessRole.Presence.SET);
 
         // application.yml 里告警地址默认空、测试基类把节点设成 "false"、系统口令是没有默认值的占位符：这些 web 都能起
         MockEnvironment web = env("web")

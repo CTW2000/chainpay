@@ -12,12 +12,14 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Profile;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
-/** 有主节点才装配对账（要问链上余额）。测试基类把 rpc-url 钉成 "false"，测试自己拿 FakeChain 造。 */
+/** 对账要问链上余额：只在 worker 里，跟着主节点装配。测试基类把节点写成 "false"（不装配），测试自己拿 FakeChain 造。 */
 @Configuration
+@Profile("worker")
 @EnableConfigurationProperties(AuditProperties.class)
-@ConditionalOnProperty("chainpay.chain.rpc-url")
+@ConditionalOnProperty(name = "chainpay.chain.rpc-url", matchIfMissing = true)
 class AuditConfig {
 
     private static final Logger log = LoggerFactory.getLogger(AuditConfig.class);

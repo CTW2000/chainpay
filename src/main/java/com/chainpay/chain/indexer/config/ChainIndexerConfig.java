@@ -27,21 +27,24 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Profile;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
 /**
- * 把索引器接进 Spring：<b>只在配了节点地址时</b>装配。
+ * 把索引器接进 Spring：<b>只在 worker 里</b>装配。
  *
- * <p>没配 {@code chainpay.chain.rpc-url}（环境变量 CHAINPAY_CHAIN_RPC_URL）时这个类整个不生效，
- * 应用照常启动——账本和 API 不该因为链节点没配而起不来。
+ * <p>主节点地址（{@code chainpay.chain.rpc-url}，环境变量 CHAINPAY_CHAIN_RPC_URL）是 worker 的必填项：没配、留空由进程角色守卫
+ * 在造 bean 之前拦下；形状不对（或者容器里没有守卫）由 {@link RpcEndpoint} 拒绝启动，同样只报变量名。
+ * 只有写成 {@code false} 才不装配——测试基类这样关掉它，部署脚本不放行。web 不许拿节点地址，这个类在 web 里整个不生效。
  *
  * <p>轮询：{@link ChainIndexerScheduler#tick()} 按 {@code chainpay.chain.poll-interval} 定时跑。
- * {@code @EnableScheduling} 也只在这里、也只在配了节点时打开。
+ * {@code @EnableScheduling} 也只在这里、也只在装配了索引器时打开。
  */
 @Configuration
+@Profile("worker")
 @EnableScheduling
 @EnableConfigurationProperties(ChainIndexerProperties.class)
-@ConditionalOnProperty(prefix = "chainpay.chain", name = "rpc-url")
+@ConditionalOnProperty(name = "chainpay.chain.rpc-url", matchIfMissing = true)
 class ChainIndexerConfig {
 
     private static final Logger log = LoggerFactory.getLogger(ChainIndexerConfig.class);

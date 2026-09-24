@@ -104,7 +104,7 @@ class HealthProbesTest extends AbstractPostgresTest {
     private com.chainpay.ops.alert.AlertScheduler alerts;
 
     @Test
-    @DisplayName("★ 告警任务真的装配了、读的是 work 组：这里没配节点，五个部件 UNKNOWN / UP，一轮零告警；调度线程够用")
+    @DisplayName("★ 告警任务真的装配了、读的是 work 组：这里节点与热钱包写成 false，五个部件 UNKNOWN / UP，一轮零告警；调度线程够用")
     void alertSchedulerWatchesTheWorkGroup() {
         assertThat(alerts.tick()).isEmpty();
         assertThat(alerts.lastObserved().keySet()).containsExactlyInAnyOrder("indexer", "deposit", "hotWallet", "audit", "redis");

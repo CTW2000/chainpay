@@ -25,7 +25,7 @@ import tools.jackson.databind.ObjectMapper;
 
 /**
  * 「停下叫人」需要一个能被问到的地方。这个接口只读，挂在 /admin/ 下，和其它管理接口同一道门。
- * 测试里没配节点，所以进程视角是 NOT_CONFIGURED；表里的状态、书签、链头照样要给全。
+ * 测试基类把节点地址写成 false（不装配索引器），所以进程视角是 NOT_CONFIGURED；表里的状态、书签、链头照样要给全。
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @DisplayName("索引器状态接口")
@@ -55,7 +55,7 @@ class IndexerStatusEndpointTest extends AbstractPostgresTest {
     }
 
     @Test
-    @DisplayName("★ 一次给全：表里的状态与原因、书签、三个头、落后块数、争议块数；没配节点时进程视角是 NOT_CONFIGURED")
+    @DisplayName("★ 一次给全：表里的状态与原因、书签、三个头、落后块数、争议块数；没装配索引器时进程视角是 NOT_CONFIGURED")
     void reportsPersistedState() {
         // token 列自 V15 起 NOT NULL 且外键指向 chain_token：这里用 V13 预置的 LINK
         jdbc.sql("INSERT INTO indexer_cursor (name, last_block_number, last_block_hash, start_block, token) VALUES (:n, 100, :h, 0, :t)")

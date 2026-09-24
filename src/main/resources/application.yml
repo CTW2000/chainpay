@@ -70,8 +70,8 @@ chainpay:
     # 等锁上限。超时按瞬时失败处理：这一轮提前结束、下一轮再来，不进 HELD。账本事务都很短，等 5 秒还拿不到说明有人握着不该握的锁
     lock-timeout: 5s
 
-  # 索引器。节点地址带 key、按口令对待，只从环境变量来：设了 CHAINPAY_CHAIN_RPC_URL 才装配，不设时应用照常启动；
-  # 审计节点 CHAINPAY_CHAIN_AUDIT_RPC_URL 可不设
+  # 索引器。节点地址带 key、按口令对待，只从环境变量来：CHAINPAY_CHAIN_RPC_URL 是 worker 的必填项（没设或留空就拒绝启动，web 不许有）；
+  # 写成字面值 false 才不装配（测试基类这样关掉它，部署脚本不放行）。审计节点 CHAINPAY_CHAIN_AUDIT_RPC_URL 可不设
   chain:
     chain-name: sepolia
     # 必须加引号：YAML 1.1 把不加引号的 0x… 当十六进制整数，转回字符串成了十进制
@@ -90,7 +90,7 @@ chainpay:
     # 按时间封顶不按批数：一轮跑太久，压住的是自己的降级检测与状态更新
     catch-up-budget: 5m
 
-  # 收款。xpub 必填、只从环境变量来（CHAINPAY_DEPOSIT_XPUB，没配或留空就拒绝启动）；入账任务要配了主节点才装配
+  # 收款。xpub 必填、只从环境变量来（CHAINPAY_DEPOSIT_XPUB，没配或留空就拒绝启动）；入账任务在 worker 里跟着主节点装配
   deposit:
     # 入账任务多久跑一轮。finalized 本身落后十几分钟，比 30 秒更勤没有意义
     post-interval: 30s
@@ -100,7 +100,7 @@ chainpay:
     # 超出它（或库里的视图比两个节点都超前这么多）才判 HELD_NODE_DISAGREE。64 块 ≈ 两个 epoch；调大 = 卡住的节点更晚被发现
     finality-tolerance-blocks: 64
 
-  # 付款。热钱包私钥只从环境变量来：设了 CHAINPAY_PAYOUT_HOT_WALLET_KEY 才装配付款模块；发送任务还要同时有主节点
+  # 付款。热钱包私钥只从环境变量来：CHAINPAY_PAYOUT_HOT_WALLET_KEY 是 worker 的必填项，规矩同节点地址；发送任务要热钱包和主节点
   payout:
     # 签进交易里的链号（EIP-155）。Sepolia = 11155111；签错链号的交易别的链不认
     chain-id: 11155111
@@ -119,7 +119,7 @@ chainpay:
     # 广播后多久还没上链算卡住：同编号加价 25% 再发一笔。Sepolia 3 分钟约 15 块；太短会白白多付小费
     stuck-after: 3m
 
-  # 对账：站在两个节点都认的 finalized 块上，把链上事实和库内记录逐项比对；结论落 audit_run，差异落 audit_finding。设了主节点才装配
+  # 对账：站在两个节点都认的 finalized 块上，把链上事实和库内记录逐项比对；结论落 audit_run，差异落 audit_finding。在 worker 里跟着主节点装配
   audit:
     # 多久对一次账。上次 OK / DIFF 距今超过两个周期，GET /admin/v1/audit 报 stale：「没跑」和「跑了没事」必须分得开
     interval: 1h

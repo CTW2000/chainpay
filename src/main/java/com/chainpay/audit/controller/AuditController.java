@@ -55,7 +55,7 @@ public class AuditController {
     }
 
     private static ResponseEntity<ApiResponse<StatusView>> notAssembled() {
-        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(ApiResponse.error(ErrorCode.INVALID_REQUEST, "对账未装配：没有配置主节点"));
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(ApiResponse.error(ErrorCode.INVALID_REQUEST, "对账未装配：这个进程不对账（web 进程，或 CHAINPAY_CHAIN_RPC_URL=false）"));
     }
 
     private static RunView view(AuditResult r) {

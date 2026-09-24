@@ -12,14 +12,16 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Profile;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
 /**
- * 装配入账任务：配了主节点（有链可问）才装配；收款 xpub 必填，不是条件。
- * 测试基类把 rpc-url 钉成 "false"（@ConditionalOnProperty 视为未开启），所以测试里不装配，测试自己拿 FakeChain 造。
+ * 装配入账任务：只在 worker 里，跟着主节点装配（节点地址是 worker 的必填项）；收款 xpub 也必填，不是条件。
+ * 测试基类把节点写成 "false"（@ConditionalOnProperty 视为不装配），所以测试里不装配，测试自己拿 FakeChain 造。
  */
 @Configuration
-@ConditionalOnProperty("chainpay.chain.rpc-url")
+@Profile("worker")
+@ConditionalOnProperty(name = "chainpay.chain.rpc-url", matchIfMissing = true)
 @EnableConfigurationProperties(DepositProperties.class)
 class DepositPostingConfig {
 

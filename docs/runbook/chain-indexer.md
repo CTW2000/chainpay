@@ -21,7 +21,7 @@ tools/admin.sh GET /admin/v1/indexer          # 先 eval "$(tools/admin.sh login
 
 | 字段 | 含义 |
 |---|---|
-| `status` | **这个进程**的视角：`NOT_CONFIGURED`（没配 `CHAINPAY_CHAIN_RPC_URL`）或表里的状态 |
+| `status` | **这个进程**的视角：`NOT_CONFIGURED`（这个进程不索引：web 进程，或 `CHAINPAY_CHAIN_RPC_URL=false`）或表里的状态 |
 | `persistedStatus` / `reason` / `since` | **状态表**的视角：上一个进程停下的原因，重启后还在 |
 | `cursorBlock`、`latestBlock`、`safeBlock`、`finalizedBlock`、`lagBlocks` | 书签、三个头、落后多少块 |
 | `lastTickOutcome`、`lastTickAt`、`consecutiveFailures` | 最近一轮的结局与时间、连续瞬时失败次数 |

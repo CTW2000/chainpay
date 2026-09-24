@@ -143,7 +143,8 @@ SELECT * FROM ledger_judge();   -- 以 chainpay_system 身份跑；必须 0 行
 ### 进程角色（进程拆分进行中）
 
 - 同一个镜像起成 `web`（对外接商户请求）/ `worker`（定时任务、控制面、重钥匙）两种常驻进程，`SPRING_PROFILES_ACTIVE` **恰好一个**，没给或两个都给就拒绝启动。
-- 每个角色一张禁用名单（`ops/role/ProcessRole`：环境变量名 + 配置键 + 它能干什么），出现就拒绝启动，报错只写变量名。「有没有」与 `@ConditionalOnProperty` 同口径：非空白、不是 false，解析不出的占位符算没配。
+- 每个角色一张禁用名单、一张必填名单（`ops/role/ProcessRole`：环境变量名 + 配置键 + 说明），禁用项出现、必填项缺了都拒绝启动，一次全部点名，报错只写变量名。worker 必填主节点地址与热钱包私钥。
+- 配置项三种状态：有值；字面值 false（明确不要：测试基类用它关掉节点与热钱包模块，`deploy.sh` 不放行）；没配（没设、空白、解析不出的占位符）。`@ConditionalOnProperty` 把空串当「有」，所以空白由守卫判。节点与热钱包的五个装配类挂 `worker` profile、`matchIfMissing = true`：没配就装配、当场报错，不会悄悄不装配（`WorkerOnlyAssemblyTest`）。
 - 守卫是静态、最高优先级的 BeanFactoryPostProcessor，在造任何 bean 之前核对。写成普通 bean 就晚了：应用已经在建连接。一次性命令（`--migrate-only`、`--create-admin`）不属于任何角色，守卫不管。
 - 名单上的名字必须真实存在：`ProcessRoleBootTest` 起真应用、逐项设运维真会设的环境变量（从名单派生的单元测试查不出名单里的拼写错误）；`EnvInventoryTest` 让 env 样例里每个变量都有归属。
 - 拆服务（第 ⑥ 步）之前，compose 唯一的 `app` 以 `worker` 身份跑，测试基类激活 `test` + `worker`。九条取舍、步骤与进度见 `docs/knowledge/m6-process-split.md`。

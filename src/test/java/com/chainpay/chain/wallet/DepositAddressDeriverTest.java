@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.core.env.StandardEnvironment;
 
 /**
  * 端到端的已知答案：Hardhat 的公开默认助记词，路径 m/44'/60'/0'/0/i（v2.hardhat.org 参考文档）。
@@ -75,7 +76,11 @@ class DepositAddressDeriverTest {
     void theContainerBuildsItFromTheConfiguredXpubOrRefusesToStart() {
         String accountXpub = ExtendedPrivateKey.fromSeed(Bip39.seed(HARDHAT_MNEMONIC, ""))
                 .derivePath("m/44'/60'/0'").neuter().serialize();
-        ApplicationContextRunner runner = new ApplicationContextRunner().withBean(DepositAddressDeriver.class);
+        ApplicationContextRunner runner = new ApplicationContextRunner()
+                // 拿掉操作系统环境：开发机 source 过 env/local.env 再跑测试，真的 xpub 会从 CHAINPAY_DEPOSIT_XPUB 混进来，「没配」那一条就测不到
+                .withInitializer(context -> context.getEnvironment().getPropertySources()
+                        .remove(StandardEnvironment.SYSTEM_ENVIRONMENT_PROPERTY_SOURCE_NAME))
+                .withBean(DepositAddressDeriver.class);
 
         runner.run(context -> assertThat(context).hasFailed()
                 .getFailure().rootCause().hasMessageContaining("CHAINPAY_DEPOSIT_XPUB"));

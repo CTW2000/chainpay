@@ -87,9 +87,11 @@ public abstract class AbstractPostgresTest {
         // source 过 env/local.env 再跑 mvn test，OS 环境变量（如 CHAINPAY_CHAIN_RPC_URL）的优先级高于
         // application-test.yml，索引器会被装配起来去打真节点。DynamicPropertySource 又高于环境变量，在这里钉死。
         r.add("chainpay.secret-key", () -> "Y2hhaW5wYXktdGVzdC1rZXktbm90LWZvci1wcm9kISE=");
-        // @ConditionalOnProperty 把 "false" 当作未开启：测试里永远不装配真节点的索引器。
-        // 唯一的例外是启动冒烟测试：它在类加载时把这个系统属性指向本地假节点，让容器真的装配一次
+        // 节点地址与热钱包私钥是 worker 的必填项；写成 "false" = 明确不装配（守卫放行，@ConditionalOnProperty 不装配）。
+        // 测试里永远不装配真节点的索引器、不装配热钱包：要签名的测试自己拿 Hardhat 的公开私钥造签名器。
+        // 唯一的例外是启动冒烟测试：它在类加载时把这个系统属性指向本地假节点，让容器真的装配一次索引器
         r.add("chainpay.chain.rpc-url", () -> System.getProperty(TEST_RPC_URL_PROPERTY, "false"));
+        r.add("chainpay.payout.hot-wallet-key", () -> "false");
         r.add("chainpay.chain.audit-rpc-url", () -> "");
         r.add("chainpay.chain.start-block", () -> "");
         // 系统池以 chainpay_system 连同一个库（同 db/init/01-roles.sql）

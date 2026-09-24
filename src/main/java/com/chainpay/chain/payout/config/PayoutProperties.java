@@ -7,7 +7,7 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * 付款模块的配置：{@code chainpay.payout.*}。
  *
  * @param hotWalletKey     热钱包私钥，只从环境变量 {@code CHAINPAY_PAYOUT_HOT_WALLET_KEY} 来（application.yml 里故意没有它）：
- *                         不设 = 付款模块整个不装配，应用照常启动
+ *                         worker 必填，没配、留空都拒绝启动（见 {@code ProcessRole}）
  * @param chainId          签进交易里的链号（EIP-155）：签错链号的交易别的链不认，同一把私钥在别的链上也发不出去。Sepolia = 11155111
  * @param batchSize        发送任务每轮最多签几笔
  * @param priorityFloorGwei 小费地板：节点建议低于它时按它出，太低会一直排不上

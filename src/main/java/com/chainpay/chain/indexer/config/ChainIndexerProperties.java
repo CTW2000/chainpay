@@ -13,7 +13,7 @@ import org.springframework.validation.annotation.Validated;
  * 索引器的配置，前缀 {@code chainpay.chain}。
  *
  * @param rpcUrl           主节点。<b>故意不在 application.yml 里给</b>：只从环境变量
- *                         {@code CHAINPAY_CHAIN_RPC_URL} 来，没设就不装配索引器，应用照常启动
+ *                         {@code CHAINPAY_CHAIN_RPC_URL} 来，worker 必填（没配、留空都拒绝启动，见 {@code ProcessRole}）
  * @param auditRpcUrl      审计节点，环境变量 {@code CHAINPAY_CHAIN_AUDIT_RPC_URL}，可不设。
  *                         对账和 finalized 核对走它，要独立于主节点才有价值（同一台主机拒绝启动，见 ChainIndexerConfig）。
  *                         不设时用主节点自己的回执路径，能抓住索引漏日志，抓不住节点整体撒谎

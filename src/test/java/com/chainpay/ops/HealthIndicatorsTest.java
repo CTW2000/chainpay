@@ -34,11 +34,11 @@ class HealthIndicatorsTest {
     class Indexer {
 
         @Test
-        @DisplayName("没配节点：UNKNOWN，说明原因")
+        @DisplayName("没装配（web 进程，或节点地址写成 false）：UNKNOWN，原因里写明")
         void notAssembledIsUnknown() {
             Health h = new IndexerHealthIndicator(false, Optional::empty).health();
             assertThat(h.getStatus()).isEqualTo(Status.UNKNOWN);
-            assertThat(h.getDetails().get("reason").toString()).contains("没有配置");
+            assertThat(h.getDetails().get("reason").toString()).contains("web 进程").contains("CHAINPAY_CHAIN_RPC_URL=false");
         }
 
         @Test
@@ -69,9 +69,11 @@ class HealthIndicatorsTest {
         private static final String ADDRESS = "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC";
 
         @Test
-        @DisplayName("没配私钥：UNKNOWN")
+        @DisplayName("没装配（web 进程，或私钥写成 false）：UNKNOWN，原因里写明")
         void notAssembledIsUnknown() {
-            assertThat(new HotWalletHealthIndicator(Optional.empty(), a -> Optional.empty()).health().getStatus()).isEqualTo(Status.UNKNOWN);
+            Health h = new HotWalletHealthIndicator(Optional.empty(), a -> Optional.empty()).health();
+            assertThat(h.getStatus()).isEqualTo(Status.UNKNOWN);
+            assertThat(h.getDetails().get("reason").toString()).contains("web 进程").contains("CHAINPAY_PAYOUT_HOT_WALLET_KEY=false");
         }
 
         @Test
@@ -104,9 +106,11 @@ class HealthIndicatorsTest {
     class Audit {
 
         @Test
-        @DisplayName("没装配对账：UNKNOWN")
+        @DisplayName("没装配对账（web 进程，或节点地址写成 false）：UNKNOWN，原因里写明")
         void notAssembledIsUnknown() {
-            assertThat(new AuditHealthIndicator(Optional.empty()).health().getStatus()).isEqualTo(Status.UNKNOWN);
+            Health h = new AuditHealthIndicator(Optional.empty()).health();
+            assertThat(h.getStatus()).isEqualTo(Status.UNKNOWN);
+            assertThat(h.getDetails().get("reason").toString()).contains("web 进程").contains("CHAINPAY_CHAIN_RPC_URL=false");
         }
 
         @Test
@@ -146,11 +150,11 @@ class HealthIndicatorsTest {
     class DepositPosting {
 
         @Test
-        @DisplayName("没配 xpub 或节点：UNKNOWN，说明这个进程不入账")
+        @DisplayName("没装配（web 进程，或节点地址写成 false）：UNKNOWN，说明这个进程不入账")
         void notAssembledIsUnknown() {
             Health h = new DepositHealthIndicator(false, Optional::empty, () -> 0).health();
             assertThat(h.getStatus()).isEqualTo(Status.UNKNOWN);
-            assertThat(h.getDetails().get("reason").toString()).contains("不入账");
+            assertThat(h.getDetails().get("reason").toString()).contains("不入账").contains("CHAINPAY_CHAIN_RPC_URL=false");
         }
 
         @Test

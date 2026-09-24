@@ -22,7 +22,7 @@ public final class AuditHealthIndicator implements HealthIndicator {
     @Override
     public Health health() {
         if (status.isEmpty()) {
-            return Health.unknown().withDetail("reason", "没有配置主节点：这个进程不对账").build();
+            return Health.unknown().withDetail("reason", "这个进程不对账（web 进程，或 CHAINPAY_CHAIN_RPC_URL=false）").build();
         }
         AuditService.Status s = status.get().get();
         Optional<AuditResult> last = s.lastRun();

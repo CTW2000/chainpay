@@ -25,7 +25,7 @@ import org.springframework.web.bind.annotation.RestController;
  * <p>「停下叫人」需要的是<b>状态</b>而不是<b>事件</b>：一行 ERROR 响一次就过去了，这个接口任何时候问都能答。
  * 挂在 {@code /admin/} 前缀下，和其它管理接口同一道门（回环地址、不经代理、管理员会话）；它不改任何东西。
  *
- * <p>两个视角并列：{@code status} 是<b>这个进程</b>的视角（没配节点就是 NOT_CONFIGURED），
+ * <p>两个视角并列：{@code status} 是<b>这个进程</b>的视角（没装配索引器就是 NOT_CONFIGURED：web 进程，或节点地址写成 false），
  * {@code persistedStatus} 是<b>状态表</b>的视角（上一个进程停下的原因，重启也还在）。
  */
 @RestController
@@ -72,7 +72,7 @@ public class IndexerStatusController {
         String persisted = state.map(s -> s.status().name()).orElse(null);
         String status = running == null ? "NOT_CONFIGURED" : persisted == null ? "RUNNING" : persisted;
         String reason = state.map(IndexerState::reason)
-                .orElse(running == null ? "没有配置 CHAINPAY_CHAIN_RPC_URL：这个进程不索引" : null);
+                .orElse(running == null ? "这个进程不索引（web 进程，或 CHAINPAY_CHAIN_RPC_URL=false）" : null);
         Long cursorBlock = cursor.map(IndexerCursor::lastBlockNumber).orElse(null);
         Long latest = head.map(h -> h.latest().number()).orElse(null);
         Long lag = cursorBlock == null || latest == null ? null : latest - cursorBlock;

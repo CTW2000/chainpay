@@ -64,9 +64,13 @@ check_config() (
   if [[ -n ${CHAINPAY_SECRET_KEY:-} && $(printf '%s' "$CHAINPAY_SECRET_KEY" | base64 -d 2>/dev/null | wc -c | tr -d ' ') != 32 ]]; then
     echo "✗ CHAINPAY_SECRET_KEY 不是 Base64 的 32 字节"; bad=1
   fi
-  for k in CHAINPAY_CHAIN_RPC_URL CHAINPAY_PAYOUT_HOT_WALLET_KEY CHAINPAY_ALERT_WEBHOOK_URL; do
-    [[ -n ${!k:-} ]] && echo "✓ $k（已设）" || echo "· $k 未设：对应模块不装配"
+  # 节点地址与热钱包私钥：worker 的必填项。应用把字面值 false 当「明确不要这个模块」（测试夹具的写法），部署出去的 worker 连它也不许
+  for k in CHAINPAY_CHAIN_RPC_URL CHAINPAY_PAYOUT_HOT_WALLET_KEY; do
+    if [[ -z ${!k:-} ]]; then echo "✗ $k 没设"; bad=1
+    elif [[ ${!k} == [Ff][Aa][Ll][Ss][Ee] ]]; then echo "✗ $k 写成了 false：那是测试夹具关掉模块的写法，部署出去的 worker 要配真的"; bad=1
+    else echo "✓ $k"; fi
   done
+  [[ -n ${CHAINPAY_ALERT_WEBHOOK_URL:-} ]] && echo "✓ CHAINPAY_ALERT_WEBHOOK_URL（已设）" || echo "· CHAINPAY_ALERT_WEBHOOK_URL 未设：告警只打 ERROR 日志"
   return $bad
 )
 

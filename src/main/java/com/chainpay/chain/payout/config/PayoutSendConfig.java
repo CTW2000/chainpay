@@ -18,14 +18,16 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Profile;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
 /**
- * 装配发送任务：同时设了热钱包私钥（有钱包能签）和主节点（有链可发）才装配。
- * 测试基类把 rpc-url 钉成 "false"，所以测试里不装配，测试自己拿 FakeChain 造。
+ * 装配发送与追踪任务：只在 worker 里，要热钱包（有钱包能签）和主节点（有链可发），两个都是 worker 的必填项。
+ * 测试基类把两个都写成 "false"，所以测试里不装配，测试自己拿 FakeChain 造。
  */
 @Configuration
-@ConditionalOnProperty({"chainpay.payout.hot-wallet-key", "chainpay.chain.rpc-url"})
+@Profile("worker")
+@ConditionalOnProperty(name = {"chainpay.payout.hot-wallet-key", "chainpay.chain.rpc-url"}, matchIfMissing = true)
 class PayoutSendConfig {
 
     private static final Logger log = LoggerFactory.getLogger(PayoutSendConfig.class);
