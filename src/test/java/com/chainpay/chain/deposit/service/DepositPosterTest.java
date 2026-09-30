@@ -214,6 +214,68 @@ class DepositPosterTest extends AbstractDepositPostingTest {
     }
 
     @Test
+    @DisplayName("★ 审计节点落后到连这个块都还没有（后端落后、重同步），差距在容忍以内：只延后这一笔、这一轮照常跑完——不是「节点失败、整轮提前结束」；它追上来之后自己记上")
+    void defersWhenTheAuditNodeDoesNotHaveTheBlockYet() {
+        pay(5, TEN_LINK);
+        indexUpTo(100, 90, 50);
+        FakeChain lagging = new FakeChain().withBlocks(3);      // 只同步到块 3：问块 5 会得到「区块不存在」
+        lagging.reportFinalized(3);
+
+        PostingResult first = new DepositPoster(systemJdbc, depositWriter, chain, lagging, 50, 64).postOnce();
+
+        assertThat(first.retryLater()).as("这一笔还没到，不是节点失败：整轮提前结束连续 5 轮就会 DEGRADED 叫人").isFalse();
+        assertThat(first.deferred()).isEqualTo(1);
+        assertThat(first.held()).isZero();
+        assertThat(jdbc.sql("SELECT count(*) FROM deposit").query(Long.class).single()).as("不占坑").isZero();
+
+        lagging.withBlocks(100);
+        lagging.reportFinalized(50);
+        lagging.defineBalanceAt(LINK, ACME_ADDRESS, 5, TEN_LINK);
+
+        assertThat(new DepositPoster(systemJdbc, depositWriter, chain, lagging, 50, 64).postOnce().credited())
+                .as("追上来就自己记上").isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("★ 审计节点还没 finalize 这个块、暂时站在另一条分叉上（哈希不同），差距在容忍以内：延后、不叫人——没 final 的块哈希不同不代表意见不同；它回到主链后自己记上")
+    void defersAHashDifferenceOnABlockTheNodeHasNotFinalized() {
+        pay(5, TEN_LINK);
+        indexUpTo(100, 90, 50);
+        audit.tamperHash(5, FakeChain.hashOf(5, "fork"));
+        audit.reportFinalized(4);
+
+        PostingResult first = poster().postOnce();
+
+        assertThat(first.held()).as("没 final 的块哈希不同，不能判 HELD_NODE_DISAGREE").isZero();
+        assertThat(first.deferred()).isEqualTo(1);
+
+        audit.tamperHash(5, FakeChain.hashOf(5));
+        audit.reportFinalized(50);
+
+        assertThat(poster().postOnce().credited()).as("回到主链、finalize 之后自己记上").isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("★ 审计节点落后到连这个块都没有、而且超出容忍：不必问到块头就 HELD 叫人，发生时间留空——不是整轮提前结束")
+    void holdsWithoutAskingForAHeaderTheNodeDoesNotHave() {
+        chain.withBlocks(600);
+        audit.withBlocks(600);
+        pay(200, TEN_LINK);
+        indexUpTo(600, 550, 500);
+        FakeChain lagging = new FakeChain().withBlocks(100);    // 落后 400 块：问块 200 会得到「区块不存在」
+        lagging.reportFinalized(100);
+
+        PostingResult result = new DepositPoster(systemJdbc, depositWriter, chain, lagging, 50, 64).postOnce();
+
+        assertThat(result.retryLater()).isFalse();
+        assertThat(result.held()).isEqualTo(1);
+        assertThat(depositStatus(200)).startsWith("HELD_NODE_DISAGREE").contains("去看节点");
+        assertThat(jdbc.sql("SELECT occurred_at IS NULL FROM deposit WHERE block_number = 200").query(Boolean.class).single())
+                .as("这一支不问块头，发生时间留空；人核准后记账时会重新取").isTrue();
+        assertThat(transferCount()).isZero();
+    }
+
+    @Test
     @DisplayName("★ 主节点现在给的块哈希和库里那行不一样（索引之后换了说法）：HELD，不记")
     void holdsWhenThePrimaryNodeChangesItsStory() {
         pay(5, TEN_LINK);

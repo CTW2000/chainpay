@@ -33,11 +33,13 @@ import org.springframework.jdbc.core.simple.JdbcClient;
  *
  * <p>每条候选三步：
  * <ol>
- *   <li><b>核对（网络，事务外）</b>：主节点与审计节点各取一次该块的头，哈希必须等于库里那行的 block_hash，
- *       块号必须不高于两个节点各自的 finalized。哈希对不上 = HELD_NODE_DISAGREE 叫人；finalized 还没到则分两种：
+ *   <li><b>核对（网络，事务外）</b>：先看块号是否不高于两个节点各自的 finalized。还没到则分两种：
  *       两个节点之间的差距、以及「库里的视图比两个节点都超前」的幅度都在 {@code finality-tolerance-blocks} 以内 =
  *       <b>这一轮延后</b>（不占坑、不写库，节点追上来就自己记上）；超出 = HELD_NODE_DISAGREE 叫人去看节点。
- *       两条路都不记账，动钱的边界没有松。同一轮内的块头与 finalized 复用，不逐笔重问</li>
+ *       两个节点都 finalize 了，才各取一次该块的头：哈希必须等于库里那行的 block_hash，对不上 = HELD_NODE_DISAGREE 叫人。
+ *       先比 finalized 是有意的：还没 finalize 的块，节点可能连它都没有（后端落后、重同步），也可能暂时站在另一条分叉上——
+ *       那时去要块头，前者让整轮提前结束，后者把「还没跟上」误判成「意见不同」。
+ *       这几条路都不记账，动钱的边界没有松。同一轮内的块头与 finalized 复用，不逐笔重问</li>
  *   <li><b>判决</b>：零值 = IGNORED_ZERO；金额只经 {@link TokenAmounts#toLedger}，装不下 = HELD_OVERFLOW；
  *       低于代币的最小入账额 = REJECTED_DUST；然后<b>信合约做的，不信合约说的</b>——向两个节点问该地址在那一块的 balanceOf，
  *       必须等于事件累计（转入减转出），对不上 = HELD_BALANCE_MISMATCH；问不到时怎么判见 {@link #unreadable}</li>
@@ -135,8 +137,25 @@ public final class DepositPoster {
         return k.done();
     }
 
-    /** 两个节点都点头才算 FINAL；然后零值、溢出、灰尘；最后信合约做的。 */
+    /** 先看两个节点都 finalize 了没有，再比块哈希；然后零值、溢出、灰尘；最后信合约做的。 */
     private Verdict judge(DepositCandidate c, RoundCache cache) {
+        // finalized 每轮只问一次（已缓存），先比它：两个节点没都 finalize 的块不去要块头——节点可能连这个块都没有（后端落后、重同步），
+        // 要了就是「区块不存在」、整轮提前结束；也可能暂时站在另一条分叉上，那时比出来的哈希不同并不代表意见不同
+        long primaryFinalized = cache.primaryFinalized();
+        long auditFinalized = cache.auditFinalized();
+        if (c.blockNumber() > Math.min(primaryFinalized, auditFinalized)) {
+            long ahead = c.blockNumber() - Math.max(primaryFinalized, auditFinalized);   // 库里的视图比两个节点都超前多少
+            long spread = Math.abs(primaryFinalized - auditFinalized);                   // 两个节点之间差多少
+            if (ahead <= finalityToleranceBlocks && spread <= finalityToleranceBlocks) {
+                return Verdict.notYet("块 " + c.blockNumber() + " 还没在两个节点上 finalized（主节点 " + primaryFinalized
+                        + "，审计节点 " + auditFinalized + "）：等下一轮，不占坑");
+            }
+            // 发生时间留空：这一支不问块头（节点可能根本没有这个块）；人核准后记账时 judgeApproved 会重新取
+            return Verdict.held(DepositStatus.HELD_NODE_DISAGREE, amountOrNull(c), null,
+                    "块 " + c.blockNumber() + " 尚未在两个节点上 finalized（主节点 " + primaryFinalized
+                            + "，审计节点 " + auditFinalized + "），超出 " + finalityToleranceBlocks
+                            + " 块的容忍：等不回来了，去看节点");
+        }
         BlockHeader p = cache.primaryHeader(c.blockNumber());
         BlockHeader a = cache.auditHeader(c.blockNumber());
         Instant occurredAt = Instant.ofEpochSecond(p.timestamp());
@@ -148,20 +167,6 @@ public final class DepositPoster {
         if (!a.hash().equalsIgnoreCase(c.blockHash())) {
             return Verdict.held(DepositStatus.HELD_NODE_DISAGREE, amountOrNull(c), occurredAt,
                     "审计节点对块 " + c.blockNumber() + " 的哈希意见不同：它说 " + a.hash() + "，库里是 " + c.blockHash());
-        }
-        long primaryFinalized = cache.primaryFinalized();
-        long auditFinalized = cache.auditFinalized();
-        if (c.blockNumber() > Math.min(primaryFinalized, auditFinalized)) {
-            long ahead = c.blockNumber() - Math.max(primaryFinalized, auditFinalized);   // 库里的视图比两个节点都超前多少
-            long spread = Math.abs(primaryFinalized - auditFinalized);                   // 两个节点之间差多少
-            if (ahead <= finalityToleranceBlocks && spread <= finalityToleranceBlocks) {
-                return Verdict.notYet("块 " + c.blockNumber() + " 还没在两个节点上 finalized（主节点 " + primaryFinalized
-                        + "，审计节点 " + auditFinalized + "）：等下一轮，不占坑");
-            }
-            return Verdict.held(DepositStatus.HELD_NODE_DISAGREE, amountOrNull(c), occurredAt,
-                    "块 " + c.blockNumber() + " 尚未在两个节点上 finalized（主节点 " + primaryFinalized
-                            + "，审计节点 " + auditFinalized + "），超出 " + finalityToleranceBlocks
-                            + " 块的容忍：等不回来了，去看节点");
         }
         if (c.rawValue().signum() == 0) {
             return new Verdict(DepositStatus.IGNORED_ZERO, BigDecimal.ZERO, null, occurredAt);

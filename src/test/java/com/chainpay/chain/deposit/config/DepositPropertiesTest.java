@@ -9,8 +9,12 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.context.properties.bind.Binder;
 import org.springframework.boot.context.properties.source.MapConfigurationPropertySource;
+import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.core.env.StandardEnvironment;
 
 /** 配置键的名字与默认值：键名写错不会报错，只会静默用默认值，所以钉住它。 */
 @DisplayName("入账任务的配置")
@@ -34,6 +38,26 @@ class DepositPropertiesTest {
         assertThat(call.find()).as("装配里应该有一处 new DepositPoster(…)").isTrue();
         assertThat(call.group(1)).as("容忍值必须来自配置").contains("properties.finalityToleranceBlocks()");
     }
+
+    @Test
+    @DisplayName("★ batch-size 配成 0 或负数、finality-tolerance-blocks 配成负数：拒绝启动、报错点名字段——batch-size 是两个取候选查询的 LIMIT，0 会让入账每轮取到 0 条、悄悄停掉")
+    void rejectsOutOfRangeValuesAtStartup() {
+        ApplicationContextRunner runner = new ApplicationContextRunner()
+                // 拿掉操作系统环境：开发机 shell 里的 CHAINPAY_DEPOSIT_* 不混进来
+                .withInitializer(context -> context.getEnvironment().getPropertySources()
+                        .remove(StandardEnvironment.SYSTEM_ENVIRONMENT_PROPERTY_SOURCE_NAME))
+                .withUserConfiguration(EnableDepositProperties.class);
+
+        runner.run(context -> assertThat(context.getBean(DepositProperties.class).batchSize()).as("默认值照常").isEqualTo(50));
+        Map.of("batch-size=0", "batchSize", "batch-size=-1", "batchSize", "finality-tolerance-blocks=-1", "finalityToleranceBlocks")
+                .forEach((setting, field) -> runner.withPropertyValues("chainpay.deposit." + setting).run(context -> assertThat(context)
+                        .as(setting).hasFailed().getFailure().rootCause().hasMessageContaining(field)));
+    }
+
+    /** 和生产一样经 @EnableConfigurationProperties 绑定：Binder 本身不做校验，校验在这一层。 */
+    @Configuration(proxyBeanMethods = false)
+    @EnableConfigurationProperties(DepositProperties.class)
+    static class EnableDepositProperties {}
 
     private static DepositProperties bind(Map<String, Object> properties) {
         return new Binder(new MapConfigurationPropertySource(properties))
