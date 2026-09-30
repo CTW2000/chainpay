@@ -61,13 +61,13 @@ public class DepositController {
         this.tenantScope = tenantScope;
     }
 
-    /** 一户一币一址，幂等：再申请返回同一个地址。 */
+    /** 一户一币一址，幂等：再申请返回同一个地址；那个地址被停用了就回 409 + 4006，不再发出去。 */
     @PostMapping("/deposit-addresses")
     public ApiResponse<AddressResponse> create(@RequestAttribute(ApiKeyAuthFilter.ATTR_MERCHANT_ID) long merchantId,
                                                @Valid @RequestBody CreateAddressRequest request) {
         return ApiResponse.ok(tenantScope.asMerchant(merchantId, () -> {
             DepositAddress allocated = addresses.allocate(merchantId, request.token());
-            String symbol = queries.balance(allocated.token()).symbol();
+            String symbol = queries.symbol(allocated.token());
             return new AddressResponse(EthAddress.checksummed(allocated.address()), allocated.token(), symbol, allocated.status());
         }));
     }

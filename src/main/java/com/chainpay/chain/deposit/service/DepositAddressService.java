@@ -17,9 +17,16 @@ import org.springframework.transaction.annotation.Transactional;
 /**
  * 分配收款地址：一户一币一址。
  *
- * <p>顺序：白名单核对 → 商户核对 → 已有就返回 → 确保账本账户 → 取序号 → 派生 → 插入。
+ * <p>顺序：白名单核对 → 商户核对 → 已有就返回（停用的不发）→ 确保账本账户 → 取序号 → 派生 → 插入。
  * 最后一步的唯一性由约束裁决：两个实例同时为同一商户申请，一个插进去、另一个 ON CONFLICT 什么都不做，
- * 然后读回赢家的地址；输的一方取走的序号作废（跳号无害）。地址主键冲突则不同：那是序号被重用或 xpub 配错，报出来。
+ * 然后读回赢家的地址；输的一方取走的序号作废（跳号无害）。
+ *
+ * <p>撞上表里已有的行（地址主键或序号唯一约束）则不是并发：同一把 xpub、不同序号派生不出同一个地址，
+ * 所以只可能是序列落后于表里用过的最大序号（比如重建库时只搬了数据、没拨序列），或者有人手工写过这张表——报出来，给出拨序列的 SQL。
+ * 失败时取走的序号同样作废（序列不随回滚退回），反复重试会让序列自己走过已用的范围、错误像是「消失」了：看到这句报错要去拨序列，别靠重试。
+ *
+ * <p>已有的地址被停用了就拒绝（4006），不原样发回去：入账只认 ACTIVE 的地址，打进停用地址的钱不会自动入账，连一行 deposit 都不会有。
+ * 一户一币一址不变，停用之后也不另分配。
  *
  * <p>整个过程在调用方的事务里（REQUIRED）：HTTP 调用方在 asMerchant 的事务中，RLS 变量已经设好；
  * 地址派生是纯计算，没有网络 IO，所以放在事务里不违反「网络在事务外」。
@@ -27,7 +34,7 @@ import org.springframework.transaction.annotation.Transactional;
  * <p><b>事务靠 Spring 代理生效</b>（见 CLAUDE.md「事务的两种写法」），代价是三条纪律，违反时响的程度各不相同：
  * <ul>
  *   <li>本类与 {@link #allocate} 都不能加 final：final 类生成不了代理，启动就失败；final 方法代理拦不住，启动只打一行 WARN，
- *       调用时方法体跑在代理对象上、字段全是 null，第一行就空指针，而且不在事务里；</li>
+ *       调用时方法体跑在代理对象上、字段全是 null，一碰字段（tokens.find）就空指针，而且不在事务里；</li>
  *   <li>本类里的其它方法不能通过 this 调 {@link #allocate}：自己调自己不经过代理，<b>不报错、悄悄没有事务</b>；</li>
  *   <li>在容器外 new 出来的实例没有代理：同样<b>不报错、悄悄没有事务</b>，测试里这样用时，事务必须由外层（如 asMerchant）提供。</li>
  * </ul>
@@ -44,6 +51,13 @@ public class DepositAddressService {
     /** 代币不在白名单里或已停用：对外是 2008，换个代币再来。 */
     public static class UnsupportedTokenException extends RuntimeException {
         public UnsupportedTokenException(String message) {
+            super(message);
+        }
+    }
+
+    /** 这个商户在这种币上的收款地址已被停用：对外是 4006。打进停用地址的钱不会自动入账，所以不再把它发出去。 */
+    public static class AddressDisabledException extends RuntimeException {
+        public AddressDisabledException(String message) {
             super(message);
         }
     }
@@ -75,7 +89,7 @@ public class DepositAddressService {
         }
         Optional<DepositAddress> existing = addresses.find(merchantId, token);
         if (existing.isPresent()) {
-            return existing.get();
+            return requireActive(existing.get());
         }
         long accountId = addresses.ensureAccount(merchantId, merchant.code(), chainToken.symbol());
         long index = addresses.nextIndex();
@@ -86,11 +100,20 @@ public class DepositAddressService {
                 return candidate;
             }
         } catch (DuplicateKeyException e) {
-            throw new IllegalStateException("序号 " + index + " 派生出的地址 " + address + " 已被占用："
-                    + "序号被重用，或 CHAINPAY_DEPOSIT_XPUB 配错（与别的环境共用了同一把 xpub）。不分配、不猜", e);
+            throw new IllegalStateException("序号 " + index + " 派生出的地址 " + address + " 撞上了表里已有的行：序列 deposit_address_index_seq "
+                    + "落后于表里用过的最大序号（比如重建库时只搬了数据、没拨序列），或者有人手工写过这张表。核对后拨序列："
+                    + "SELECT setval('deposit_address_index_seq', (SELECT max(derivation_index) FROM deposit_address))。不分配、不猜", e);
         }
         // 查过「没有」之后有人插了队：赢家的行已经提交，读回它
         return addresses.find(merchantId, token)
                 .orElseThrow(() -> new IllegalStateException("并发分配后读不到地址：" + merchantId + " " + token));
+    }
+
+    /** 发出去的已有地址必须是 ACTIVE：入账只认 ACTIVE 的地址，停用的发出去，商户拿去收的钱就卡住了。 */
+    private static DepositAddress requireActive(DepositAddress existing) {
+        if (!existing.isActive()) {
+            throw new AddressDisabledException("这个币的收款地址已停用，不再发放：打进去的钱不会自动入账。请联系运营处理");
+        }
+        return existing;
     }
 }

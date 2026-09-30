@@ -107,3 +107,26 @@ ORDER BY d.id;
 **崩溃演练**（只在开发库）：另开一个 psql 会话 `BEGIN; LOCK TABLE entry IN EXCLUSIVE MODE;` 握住锁。入账事务会在占坑、建镜像账户、写转账之后卡在写分录，5 秒后超时回滚、下一轮再卡；在卡住的那几秒里 `docker kill chainpay-app`，然后 `ROLLBACK;` 放锁。
 期望：`deposit` 仍是 0 行、`transfer` / `entry` 计数不变；`docker start chainpay-app` 后下一轮恰好记一次。
 锁别放在 `transfer` 上：`deposit` 的外键会让占坑那条 INSERT 先卡住，演练就只剩「一轮没跑完」。
+
+## 九、停用一个收款地址
+
+```sql
+UPDATE deposit_address SET status = 'DISABLED' WHERE address = '0x…';   -- 地址存小写
+```
+
+停用之后：
+
+- 打到这个地址的钱**不会入账**：入账只认 ACTIVE 的地址，`deposit` 表里连一行都不会有，要人来处理；
+- 商户再申请这个币的收款地址，拿到 409 + 4006，停用的地址不会再发给他；
+- 一户一币一址（`UNIQUE (merchant_id, token)`），系统不会给他另分配一个：要换新地址得人来定怎么做。
+
+## 十、分配地址报「撞上了表里已有的行」
+
+序列 `deposit_address_index_seq` 落后于表里用过的最大序号（常见于重建库时只搬了数据、没拨序列），这时每个新的分配都会失败。
+不是 xpub 的问题：同一把 xpub、不同序号派生不出同一个地址。核对表里的行没被人手工改过，然后拨序列：
+
+```sql
+SELECT setval('deposit_address_index_seq', (SELECT max(derivation_index) FROM deposit_address));
+```
+
+别靠重试：每次失败也会用掉一个序号，重试够多次错误会自己「消失」，但原因还在。

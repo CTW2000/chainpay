@@ -45,6 +45,13 @@ public final class DepositQueryService {
                 .toList();
     }
 
+    /** 代币的符号（LINK 这类）：只查白名单那一行，不算余额。 */
+    public String symbol(String token) {
+        String normalized = EthAddress.lowercase(token);
+        return repository.findToken(normalized).map(TokenRow::symbol)
+                .orElseThrow(() -> new UnsupportedTokenException("代币未登记：" + normalized));
+    }
+
     public Balance balance(String token) {
         String normalized = EthAddress.lowercase(token);
         TokenRow chainToken = repository.findToken(normalized)

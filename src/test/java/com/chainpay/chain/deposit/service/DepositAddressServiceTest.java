@@ -215,17 +215,32 @@ class DepositAddressServiceTest extends AbstractPostgresTest {
     }
 
     @Test
-    @DisplayName("★ 派生出的地址已被占用：不是「再取一个序号」，是 xpub 配错或序号重用，必须报出来")
-    void detectsAnOccupiedAddress() {
-        long evilcoAccount = jdbc.sql("INSERT INTO account(code, currency, kind, merchant_id) VALUES ('user:evilco:LINK', 'LINK', 'LIABILITY', :m) RETURNING id")
-                .param("m", evilcoId).query(Long.class).single();
-        jdbc.sql("""
-                        INSERT INTO deposit_address(address, merchant_id, token, account_id, derivation_index)
-                        VALUES (:address, :m, :link, :account, 999)
-                        """).param("address", HARDHAT_0).param("m", evilcoId).param("link", LINK).param("account", evilcoAccount).update();
+    @DisplayName("★ 地址被停用后再申请：拒绝并说明，不把它原样发回去（打进停用地址的钱不会入账），也不另分配一个")
+    void refusesToReissueADisabledAddress() {
+        DepositAddress first = tenantScope.asMerchant(acmeId, () -> service.allocate(acmeId, LINK));
+        jdbc.sql("UPDATE deposit_address SET status = 'DISABLED' WHERE address = :a").param("a", first.address()).update();
 
         assertThatThrownBy(() -> tenantScope.asMerchant(acmeId, () -> service.allocate(acmeId, LINK)))
-                .isInstanceOf(IllegalStateException.class).hasMessageContaining("xpub");
+                .isInstanceOf(DepositAddressService.AddressDisabledException.class)
+                .hasMessageContaining("停用")
+                .hasMessageNotContaining(first.address());
+        assertThat(jdbc.sql("SELECT count(*) FROM deposit_address WHERE merchant_id = :m").param("m", acmeId).query(Long.class).single())
+                .as("不另分配：一户一币一址").isOne();
+    }
+
+    @Test
+    @DisplayName("★ 序列落后于表（重建库时只搬了数据、没拨序列）：撞上已有的行就报错，点名序列并给出拨法——不是「再取一个序号」，也不是 xpub 的问题")
+    void detectsASequenceBehindTheTable() {
+        tenantScope.asMerchant(acmeId, () -> service.allocate(acmeId, LINK));                  // 用掉序号 0
+        jdbc.sql("ALTER SEQUENCE deposit_address_index_seq RESTART WITH 0").update();       // 序列退回 0：重建库时没拨序列
+
+        assertThatThrownBy(() -> tenantScope.asMerchant(evilcoId, () -> service.allocate(evilcoId, LINK)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("deposit_address_index_seq")
+                .hasMessageContaining("setval")
+                .hasMessageNotContaining("xpub");
+        assertThat(jdbc.sql("SELECT count(*) FROM deposit_address WHERE merchant_id = :m").param("m", evilcoId).query(Long.class).single())
+                .as("不分配、不猜").isZero();
     }
 
     @Test

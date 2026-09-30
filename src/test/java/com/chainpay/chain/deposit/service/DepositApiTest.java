@@ -68,6 +68,18 @@ class DepositApiTest extends AbstractDepositPostingTest {
     }
 
     @Test
+    @DisplayName("★ 收款地址被停用后再申请 → 409 + 4006，停用的地址不会再发出去")
+    void aDisabledAddressIsNotReissued() {
+        HttpResponse<String> first = signedPost(acmeSecret, "ak_acme", "/api/v1/deposit-addresses", "{\"token\":\"" + LINK + "\"}");
+        assertThat(first.statusCode()).isEqualTo(200);
+        jdbc.sql("UPDATE deposit_address SET status = 'DISABLED' WHERE merchant_id = (SELECT id FROM merchant WHERE code = 'acme')").update();
+
+        HttpResponse<String> again = signedPost(acmeSecret, "ak_acme", "/api/v1/deposit-addresses", "{\"token\":\"" + LINK + "\"}");
+        assertThat(again.statusCode()).isEqualTo(409);
+        assertThat(again.body()).contains("\"code\":\"4006\"").doesNotContain(ACME_CHECKSUMMED);
+    }
+
+    @Test
     @DisplayName("★ 代币不在白名单 → 400 + 2008；地址不成形 → 400 + 2001；没有凭证 → 401")
     void rejectsBadTokensAndAnonymousCallers() {
         HttpResponse<String> unknown = signedPost(acmeSecret, "ak_acme", "/api/v1/deposit-addresses", "{\"token\":\"0xcccccccccccccccccccccccccccccccccccccccc\"}");

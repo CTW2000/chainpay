@@ -1,6 +1,7 @@
 package com.chainpay.common.web;
 
 
+import com.chainpay.chain.deposit.service.DepositAddressService.AddressDisabledException;
 import com.chainpay.chain.deposit.service.DepositAddressService.UnsupportedTokenException;
 import com.chainpay.merchant.service.AdminService.AlreadyExistsException;
 import com.chainpay.ledger.service.LedgerException;
@@ -54,6 +55,12 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
     @ExceptionHandler(UnsupportedTokenException.class)
     public ResponseEntity<ApiResponse<Void>> handleUnsupportedToken(UnsupportedTokenException e) {
         return ResponseEntity.badRequest().body(ApiResponse.error(ErrorCode.TOKEN_NOT_SUPPORTED, e.getMessage()));
+    }
+
+    /** 收款地址已停用 → 409 + 4006：地址还在，但状态不允许再发给商户。消息里不带地址。 */
+    @ExceptionHandler(AddressDisabledException.class)
+    public ResponseEntity<ApiResponse<Void>> handleAddressDisabled(AddressDisabledException e) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(ApiResponse.error(ErrorCode.DEPOSIT_ADDRESS_DISABLED, e.getMessage()));
     }
 
     /** 提现的业务拒绝（白名单、平台地址、状态不对）：状态码与错误码由业务定。 */

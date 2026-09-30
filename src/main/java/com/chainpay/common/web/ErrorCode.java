@@ -89,6 +89,8 @@ public enum ErrorCode {
     PAYOUT_NOT_PENDING("4004", false),
     /** 注资登记指认的日志还没 finalized，或已不在主分支：会被重组翻掉的钱不进等式。 */
     NOT_FINALIZED("4005", false),
+    /** 这个币的收款地址已被运营停用：打进去的钱不会自动入账，所以不再发放。联系运营，别原样重试。 */
+    DEPOSIT_ADDRESS_DISABLED("4006", false),
 
     // ---- 5xxx 限流 ---------------------------------------------------
     /** 唯一一个「等一会儿再试就能成功」的错误。响应必带 {@code Retry-After}。 */
