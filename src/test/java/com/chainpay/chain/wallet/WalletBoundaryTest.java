@@ -40,4 +40,37 @@ class WalletBoundaryTest {
             }
         }
     }
+
+    /**
+     * 取舍 9：签名只有一个入口 {@code PayoutSigningGate}（签之前复核，web 写下的行不直接变成交易）。wallet 包之外，
+     * 除了它，只有装配类（*Config）能提到签名器——把它递给闸口、或只取地址；装配类里不许出现签名调用。
+     */
+    @Test
+    @DisplayName("★ wallet 包之外只有签名闸口拿着签名器签名；别的服务提都不能提签名器")
+    void onlyTheSigningGateSigns() throws IOException {
+        List<Path> holders;
+        try (Stream<Path> files = Files.walk(Path.of("src/main/java"))) {
+            holders = files.filter(p -> p.toString().endsWith(".java") && !p.toString().contains("/chain/wallet/"))
+                    .filter(p -> {
+                        try {
+                            return Files.readString(p).contains("HotWalletSigner");
+                        } catch (IOException e) {
+                            throw new java.io.UncheckedIOException(e);
+                        }
+                    })
+                    .toList();
+        }
+
+        assertThat(holders).as("闸口自己必须在匹配集合里").anyMatch(p -> p.endsWith("PayoutSigningGate.java"));
+        for (Path file : holders) {
+            String name = file.getFileName().toString();
+            String source = Files.readString(file);
+            if (name.equals("PayoutSigningGate.java")) {
+                assertThat(source).contains("signer.sign(");
+            } else {
+                assertThat(name).as(file + " 提到了签名器：签名只能经 PayoutSigningGate").endsWith("Config.java");
+                assertThat(source).as(file + " 是装配类，不能签名").doesNotContain(".sign(");
+            }
+        }
+    }
 }

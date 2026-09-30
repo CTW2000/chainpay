@@ -28,6 +28,7 @@ class PayoutStatusTest {
         assertThat(PENDING_APPROVAL.canMoveTo(REJECTED)).isTrue();
         assertThat(QUEUED.canMoveTo(SIGNED)).isTrue();
         assertThat(QUEUED.canMoveTo(FAILED)).as("估 gas 就 revert：没花 gas 就知道发不出去").isTrue();
+        assertThat(QUEUED.canMoveTo(PENDING_APPROVAL)).as("签名闸口复核：超限又没人核准，退回待核准").isTrue();
         assertThat(SIGNED.canMoveTo(BROADCAST)).isTrue();
         assertThat(BROADCAST.canMoveTo(MINED)).isTrue();
         assertThat(MINED.canMoveTo(CONFIRMED)).as("FINAL 之后结算").isTrue();

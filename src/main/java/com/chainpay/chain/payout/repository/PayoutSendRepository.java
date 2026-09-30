@@ -4,7 +4,11 @@ import com.chainpay.chain.payout.domain.PayoutAttempt;
 import com.chainpay.chain.payout.domain.QueuedPayout;
 import java.math.BigDecimal;
 import java.math.BigInteger;
+import java.time.Instant;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Optional;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
@@ -23,10 +27,84 @@ public class PayoutSendRepository {
     /** 结算或解冻一笔提现要知道的：币、金额、三个账户。 */
     public record Settlement(long payoutId, String symbol, BigDecimal amount, long userAccountId, long frozenAccountId, long custodyAccountId) {}
 
+    /**
+     * 复核要看的事实（{@link #lockForReview}）：签名、判失败、人工拒绝之前都按它核——这几步动的钱都来自 web 写的那一行。冻结分录、白名单状态、是不是平台地址都是库里查出来的结论，
+     * 不是 web 写进这一行的说法；两个账户按商户代码推（和 {@link #findQueued} 同一个推法），冻结分录要对上的就是它们。
+     */
+    public record ReviewFacts(long id, String status, long merchantId, String token, String symbol, String toAddress, BigDecimal amount,
+                               BigInteger rawValue, Instant createdAt, String approvedBy, Long userAccountId, Long frozenAccountId,
+                               String whitelistStatus, boolean platformAddress, boolean freezeMatches, BigDecimal perTxMax, BigDecimal dailyMax) {}
+
     private final JdbcClient jdbc;
 
     public PayoutSendRepository(JdbcClient jdbc) {
         this.jdbc = jdbc;
+    }
+
+    /**
+     * 锁住这笔提现（FOR UPDATE OF p：别的签名者、核准、拒绝都要等本事务提交），连同复核要看的事实一次读出。
+     * 冻结分录要同一商户、同币同额、从可用转进冻结、类型 WITHDRAWAL_FREEZE；白名单状态为空 = 这个商户的白名单里没有这个地址。
+     */
+    public Optional<ReviewFacts> lockForReview(long payoutId) {
+        return jdbc.sql("""
+                        SELECT p.id, p.status, p.merchant_id, p.token, t.symbol, p.to_address, p.amount, p.raw_value, p.created_at, p.approved_by,
+                               ua.id AS user_account, fa.id AS frozen_account,
+                               (SELECT a.status FROM payout_address a WHERE a.merchant_id = p.merchant_id AND a.address = p.to_address) AS whitelist_status,
+                               is_platform_address(p.to_address) AS platform_address,
+                               EXISTS (SELECT 1 FROM transfer f
+                                       WHERE f.id = p.freeze_transfer_id AND f.code = 'WITHDRAWAL_FREEZE' AND f.currency = t.symbol
+                                         AND f.amount = p.amount AND f.debit_account_id = ua.id AND f.credit_account_id = fa.id) AS freeze_matches,
+                               l.per_tx_max, l.daily_max
+                        FROM payout p
+                        JOIN merchant m ON m.id = p.merchant_id
+                        JOIN chain_token t ON t.address = p.token
+                        LEFT JOIN account ua ON ua.code = 'user:' || m.code || ':' || t.symbol
+                        LEFT JOIN account fa ON fa.code = 'user:' || m.code || ':' || t.symbol || ':frozen'
+                        LEFT JOIN payout_limit l ON l.token = p.token
+                        WHERE p.id = :id
+                        FOR UPDATE OF p
+                        """)
+                .param("id", payoutId)
+                .query((rs, i) -> new ReviewFacts(rs.getLong("id"), rs.getString("status"), rs.getLong("merchant_id"), rs.getString("token"),
+                        rs.getString("symbol"), rs.getString("to_address"), rs.getBigDecimal("amount"), rs.getBigDecimal("raw_value").toBigIntegerExact(),
+                        rs.getObject("created_at", OffsetDateTime.class).toInstant(), rs.getString("approved_by"),
+                        rs.getObject("user_account", Long.class), rs.getObject("frozen_account", Long.class), rs.getString("whitelist_status"),
+                        rs.getBoolean("platform_address"), rs.getBoolean("freeze_matches"), rs.getBigDecimal("per_tx_max"), rs.getBigDecimal("daily_max")))
+                .optional();
+    }
+
+    /**
+     * 同一商户的额度核对串行：事务级咨询锁，事务结束自动放开。不同商户互不等待。
+     * 不用商户那一行的行锁：FOR UPDATE 要 UPDATE 权限，系统角色对 merchant 只有 SELECT，不该为一把锁给它改商户表的权限。
+     */
+    public void lockMerchantForLimits(long merchantId) {
+        jdbc.sql("SELECT 1 FROM pg_advisory_xact_lock(hashtextextended('payout-limit:' || :m, 0))").param("m", merchantId).query(Integer.class).single();
+    }
+
+    /** 这个商户这种代币、在某笔申请的那一天（按申请时间，UTC）已经自动放行出去的总额：签了名、没人核准、没失败的。 */
+    public BigDecimal releasedWithoutApproval(long merchantId, String token, Instant requestedAt) {
+        return jdbc.sql("""
+                        SELECT COALESCE(SUM(amount), 0) FROM payout
+                        WHERE merchant_id = :m AND token = :t AND approved_by IS NULL
+                          AND status IN ('SIGNED', 'BROADCAST', 'MINED', 'CONFIRMED')
+                          AND created_at >= date_trunc('day', CAST(:at AS timestamptz) AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+                          AND created_at <  (date_trunc('day', CAST(:at AS timestamptz) AT TIME ZONE 'UTC') + interval '1 day') AT TIME ZONE 'UTC'
+                        """)
+                .param("m", merchantId).param("t", token).param("at", OffsetDateTime.ofInstant(requestedAt, ZoneOffset.UTC))
+                .query(BigDecimal.class).single();
+    }
+
+    /** 管理员核准：待核准 → 放行，同时写下是谁、何时（核准标记只有系统身份写得了，V31）。返回 false = 不在待核准。 */
+    public boolean approve(long payoutId, String approvedBy) {
+        return jdbc.sql("""
+                        UPDATE payout SET status = 'QUEUED', approved_by = :by, approved_at = now(), updated_at = now()
+                        WHERE id = :id AND status = 'PENDING_APPROVAL'
+                        """)
+                .param("id", payoutId).param("by", approvedBy).update() == 1;
+    }
+
+    public Optional<PayoutAttempt> findAttempt(long attemptId) {
+        return jdbc.sql("SELECT " + ATTEMPT_COLUMNS + " FROM payout_tx WHERE id = :id").param("id", attemptId).query(ATTEMPT).optional();
     }
 
     /** 排队中的提现，按申请顺序；连同发它需要的代币、收款人、原始金额与失败时解冻要用的两个账户。 */
@@ -145,10 +223,6 @@ public class PayoutSendRepository {
     public boolean moveAttempt(long attemptId, String from, String to) {
         return jdbc.sql("UPDATE payout_tx SET status = :to, updated_at = now() WHERE id = :id AND status = :from")
                 .param("id", attemptId).param("from", from).param("to", to).update() == 1;
-    }
-
-    public java.util.Optional<String> findStatus(long payoutId) {
-        return jdbc.sql("SELECT status FROM payout WHERE id = :id").param("id", payoutId).query(String.class).optional();
     }
 
     /** 人工拒绝：PENDING_APPROVAL → REJECTED，带原因与解冻转账（CHECK 约束要求两者同在）。 */

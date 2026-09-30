@@ -3,6 +3,7 @@ package com.chainpay.chain.payout.service;
 import com.chainpay.chain.deposit.service.DepositAddressService.UnsupportedTokenException;
 import com.chainpay.chain.payout.domain.PayoutStatus;
 import com.chainpay.chain.payout.repository.PayoutSendRepository;
+import com.chainpay.chain.payout.repository.PayoutSendRepository.ReviewFacts;
 import com.chainpay.chain.wallet.EthAddress;
 import com.chainpay.common.web.ErrorCode;
 import com.chainpay.ledger.service.LedgerAmounts;
@@ -57,23 +58,31 @@ public class PayoutApprovalService {
         return view;
     }
 
-    public void approve(long payoutId) {
+    /** 核准：待核准 → 放行，同时写下是谁核准的。签名闸口认这个标记：有它就不看限额（web 写不了它，V31）。 */
+    public void approve(long payoutId, String approvedBy) {
         PayoutStatus.PENDING_APPROVAL.require(PayoutStatus.QUEUED);
-        if (!repo.moveStatus(payoutId, PayoutStatus.PENDING_APPROVAL.name(), PayoutStatus.QUEUED.name())) {
+        if (!repo.approve(payoutId, approvedBy)) {
             throw new WithdrawalRejectedException(HttpStatus.CONFLICT, ErrorCode.PAYOUT_NOT_PENDING, "这笔提现不在等待核准的状态");
         }
-        log.info("提现 {} 已核准，进入队列", payoutId);
+        log.info("提现 {} 已由 {} 核准，进入队列", payoutId, approvedBy);
     }
 
+    /**
+     * 拒绝 = 解冻 + REJECTED + 原因。解冻的金额来自提现行，而这一行是 web 写的：先核冻结分录对得上（和签名闸口同一条查询），对不上就报错、不解冻——
+     * 否则被攻破的 web 插一行「待核准、金额比冻结的大」，管理员一拒绝就多解冻，挪走同一商户其它在途提现的冻结款。
+     * 对不上不停钱包：这一行停在待核准动不了钱，人就在现场；真有人核准它，签名闸口会停钱包。
+     */
     @Transactional(SystemLedger.QUALIFIER)
     public void reject(long payoutId, String reason) {
         PayoutStatus.PENDING_APPROVAL.require(PayoutStatus.REJECTED);
-        if (!repo.findStatus(payoutId).filter(PayoutStatus.PENDING_APPROVAL.name()::equals).isPresent()) {
-            throw new WithdrawalRejectedException(HttpStatus.CONFLICT, ErrorCode.PAYOUT_NOT_PENDING, "这笔提现不在等待核准的状态");
+        ReviewFacts t = repo.lockForReview(payoutId)
+                .filter(f -> PayoutStatus.PENDING_APPROVAL.name().equals(f.status()))
+                .orElseThrow(() -> new WithdrawalRejectedException(HttpStatus.CONFLICT, ErrorCode.PAYOUT_NOT_PENDING, "这笔提现不在等待核准的状态"));
+        if (!t.freezeMatches()) {
+            log.error("提现 {} 的冻结分录对不上，拒绝时不解冻：这一行不像按规矩申请来的，查 web", payoutId);
+            throw new IllegalStateException("提现 " + payoutId + " 的冻结分录对不上：不按它解冻，按安全事件处理");
         }
-        repo.lockStatus(payoutId);
-        PayoutSendRepository.Settlement t = repo.findSettlement(payoutId);
-        long reverse = ledger.reverse(t.payoutId(), t.symbol(), t.amount(), t.frozenAccountId(), t.userAccountId(), Instant.now());
+        long reverse = ledger.reverse(t.id(), t.symbol(), t.amount(), t.frozenAccountId(), t.userAccountId(), Instant.now());
         repo.markRejected(payoutId, "人工拒绝：" + reason, reverse);
         log.warn("提现 {} 已拒绝并解冻：{}", payoutId, reason);
     }

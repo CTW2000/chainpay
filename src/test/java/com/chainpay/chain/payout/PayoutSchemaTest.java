@@ -7,6 +7,7 @@ import com.chainpay.ledger.service.LedgerService.TransferCode;
 import com.chainpay.ledger.service.LedgerService.TransferCommand;
 import com.chainpay.support.AbstractPostgresTest;
 import java.math.BigDecimal;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -30,6 +31,7 @@ class PayoutSchemaTest extends AbstractPostgresTest {
     static final String LINK = "0x779877a7b0d9e8603169ddbd7836e478b4624789";
     static final String HOT = "0x1111111111111111111111111111111111111111";
     static final String DEST = "0x2222222222222222222222222222222222222222";
+    static final String ELSEWHERE = "0x3333333333333333333333333333333333333333";
 
     @Autowired
     private JdbcClient appJdbc;
@@ -42,6 +44,12 @@ class PayoutSchemaTest extends AbstractPostgresTest {
     private long acmeFreeze;
     private long acmeFreeze2;
     private long evilcoFreeze;
+
+    /** 提现表引用 merchant：别的测试类清场用 DELETE FROM merchant，这里留下的行会挡住它们。自己收拾。 */
+    @AfterEach
+    void cleanPayoutTables() {
+        jdbc.sql("TRUNCATE payout_tx, payout, payout_address, hot_wallet CASCADE").update();
+    }
 
     @BeforeEach
     void seedTwoMerchantsWithFrozenFunds() {
@@ -62,6 +70,8 @@ class PayoutSchemaTest extends AbstractPostgresTest {
         acmeFreeze2 = ledger.transfer(new TransferCommand("frz:acme:2", "LINK", BigDecimal.ONE, acmeUser, acmeFrozen, TransferCode.WITHDRAWAL_FREEZE, null));
         evilcoFreeze = ledger.transfer(new TransferCommand("frz:evilco:1", "LINK", BigDecimal.ONE, evilcoUser, evilcoFrozen, TransferCode.WITHDRAWAL_FREEZE, null));
         jdbc.sql("INSERT INTO hot_wallet(address, chain, next_nonce) VALUES (:a, 'sepolia', 0)").param("a", HOT).update();
+        whitelist(acmeId, DEST);                                         // 提现的收款地址有外键指向本商户的白名单
+        whitelist(evilcoId, DEST);
     }
 
     // ==================================================================
@@ -154,12 +164,11 @@ class PayoutSchemaTest extends AbstractPostgresTest {
     void merchantsSeeOnlyTheirOwnPayoutsAndAddresses() {
         insertPayout(acmeId, "k-r1", "QUEUED", acmeFreeze, null, null, null);
         insertPayout(evilcoId, "k-r2", "QUEUED", evilcoFreeze, null, null, null);
-        jdbc.sql("INSERT INTO payout_address(merchant_id, address) VALUES (:m, :a)").param("m", evilcoId).param("a", DEST).update();
 
         long payoutsSeen = tenantScope.asMerchant(acmeId, () -> appJdbc.sql("SELECT count(*) FROM payout").query(Long.class).single());
         long addressesSeen = tenantScope.asMerchant(acmeId, () -> appJdbc.sql("SELECT count(*) FROM payout_address").query(Long.class).single());
         assertThat(payoutsSeen).isEqualTo(1);
-        assertThat(addressesSeen).isZero();
+        assertThat(addressesSeen).as("只有自己那一条，evilco 名下同一个地址的那条看不到").isEqualTo(1);
 
         assertThatThrownBy(() -> tenantScope.asMerchant(acmeId, () -> appJdbc
                 .sql("INSERT INTO payout_address(merchant_id, address) VALUES (:m, :a)").param("m", evilcoId).param("a", HOT).update()))
@@ -207,7 +216,57 @@ class PayoutSchemaTest extends AbstractPostgresTest {
         assertThat(jdbc.sql("SELECT count(*) FROM pg_proc WHERE proname = 'is_system_scope'").query(Long.class).single()).isZero();
     }
 
+    // ==================================================================
+    // 库守（进程拆分 ③、取舍 8a）：被攻破的 web 用应用角色直接写库，也写不出 worker 会照签的行
+    // ==================================================================
+
+    @Test
+    @DisplayName("★ 应用角色插提现，状态只能是「待核准 / 放行」：插一行 SIGNED 被行级安全挡住")
+    void theAppRoleCanOnlyInsertInitialStatuses() {
+        assertThat(tenantScope.asMerchant(acmeId, () -> appInsert(acmeId, "k-a1", "QUEUED", acmeFreeze))).isEqualTo(1);
+        assertThatThrownBy(() -> tenantScope.asMerchant(acmeId, () -> appInsert(acmeId, "k-a2", "SIGNED", acmeFreeze2)))
+                .isInstanceOf(DataAccessException.class)
+                .hasStackTraceContaining("row-level security");
+    }
+
+    @Test
+    @DisplayName("★ 应用角色写不了核准标记：approved_by / approved_at 不在它能插入的列里")
+    void theAppRoleCannotWriteTheApprovalMarker() {
+        assertThatThrownBy(() -> tenantScope.asMerchant(acmeId, () -> appJdbc.sql("""
+                        INSERT INTO payout (merchant_id, idempotency_key, token, to_address, amount, raw_value, status, freeze_transfer_id,
+                                            approved_by, approved_at)
+                        VALUES (:m, 'k-a3', :t, :to, 1, 1000000000000000000, 'QUEUED', :f, 'ops', now())
+                        """).param("m", acmeId).param("t", LINK).param("to", DEST).param("f", acmeFreeze).update()))
+                .isInstanceOf(DataAccessException.class)
+                .hasStackTraceContaining("permission denied");
+    }
+
+    @Test
+    @DisplayName("★ 收款地址必须在这个商户自己的白名单里（外键）：只在别家白名单里的地址，连属主身份都插不进去")
+    void theTargetMustBeOnThisMerchantsWhitelist() {
+        whitelist(evilcoId, ELSEWHERE);                                  // 只在 evilco 的白名单里
+        assertThatThrownBy(() -> jdbc.sql("""
+                        INSERT INTO payout (merchant_id, idempotency_key, token, to_address, amount, raw_value, status, freeze_transfer_id)
+                        VALUES (:m, 'k-w1', :t, :to, 1, 1000000000000000000, 'QUEUED', :f)
+                        """).param("m", acmeId).param("t", LINK).param("to", ELSEWHERE).param("f", acmeFreeze).update())
+                .isInstanceOf(DataIntegrityViolationException.class)
+                .hasStackTraceContaining("payout_whitelist_fk");
+    }
+
     // ------------------------------------------------------------------
+
+    private void whitelist(long merchantId, String address) {
+        jdbc.sql("INSERT INTO payout_address(merchant_id, address) VALUES (:m, :a)").param("m", merchantId).param("a", address).update();
+    }
+
+    /** 以应用角色插一行提现（被攻破的 web 能做的事）：只写它有 INSERT 权限的八列。 */
+    private int appInsert(long merchantId, String key, String status, long freezeId) {
+        return appJdbc.sql("""
+                        INSERT INTO payout (merchant_id, idempotency_key, token, to_address, amount, raw_value, status, freeze_transfer_id)
+                        VALUES (:m, :k, :t, :to, 1, 1000000000000000000, :s, :f)
+                        """).param("m", merchantId).param("k", key).param("t", LINK).param("to", DEST).param("s", status).param("f", freezeId)
+                .update();
+    }
 
     private long merchant(String code) {
         return jdbc.sql("INSERT INTO merchant(code, name) VALUES (:c, :c) RETURNING id").param("c", code).query(Long.class).single();

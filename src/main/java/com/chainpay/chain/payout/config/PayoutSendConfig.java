@@ -6,10 +6,12 @@ import com.chainpay.chain.payout.service.FeePolicy;
 import com.chainpay.chain.payout.service.PayoutSendScheduler;
 import com.chainpay.chain.payout.service.PayoutSendWriter;
 import com.chainpay.chain.payout.service.PayoutSender;
+import com.chainpay.chain.payout.service.PayoutSigningGate;
 import com.chainpay.chain.payout.service.PayoutTrackScheduler;
 import com.chainpay.chain.payout.service.PayoutTrackWriter;
 import com.chainpay.chain.payout.service.PayoutTracker;
 import com.chainpay.chain.wallet.HotWalletSigner;
+import com.chainpay.ledger.service.LedgerService;
 import com.chainpay.ledger.system.SystemLedger;
 import java.math.BigInteger;
 import org.slf4j.Logger;
@@ -38,13 +40,19 @@ class PayoutSendConfig {
         return new FeePolicy(gwei(p.priorityFloorGwei()), gwei(p.maxFeeGwei()), p.gasLimitCap());
     }
 
+    /** 排队的提现只从它出去（签名，或发不出去时判失败）：热钱包签名器只交给它（取舍 9）。容器给的是代理，{@code sign} / {@code fail} 上的系统事务才生效。 */
     @Bean
-    PayoutSender payoutSender(@Qualifier(SystemLedger.QUALIFIER) JdbcClient systemJdbc, PayoutSendWriter writer, ChainReaders readers,
-                              HotWalletSigner signer, FeePolicy fees, PayoutProperties p, ChainIndexerProperties chain) {
+    PayoutSigningGate payoutSigningGate(@Qualifier(SystemLedger.QUALIFIER) JdbcClient systemJdbc,
+                                        @Qualifier(SystemLedger.QUALIFIER) LedgerService systemLedger, HotWalletSigner signer, PayoutProperties p) {
+        return new PayoutSigningGate(systemJdbc, systemLedger, signer, p.chainId());
+    }
+
+    @Bean
+    PayoutSender payoutSender(@Qualifier(SystemLedger.QUALIFIER) JdbcClient systemJdbc, PayoutSendWriter writer, PayoutSigningGate gate,
+                              ChainReaders readers, FeePolicy fees, PayoutProperties p, ChainIndexerProperties chain) {
         log.info("发送任务已装配：链号 {}，每轮最多 {} 笔，小费地板 {} gwei，总费率上限 {} gwei，gas 上限 {}",
                 p.chainId(), p.batchSize(), p.priorityFloorGwei(), p.maxFeeGwei(), p.gasLimitCap());
-        return new PayoutSender(systemJdbc, writer, readers.primary(), readers.sender(), signer, fees, p.chainId(), chain.chainName(),
-                p.batchSize(), p.stuckAfter());
+        return new PayoutSender(systemJdbc, writer, gate, readers.primary(), readers.sender(), fees, chain.chainName(), p.batchSize(), p.stuckAfter());
     }
 
     @Bean

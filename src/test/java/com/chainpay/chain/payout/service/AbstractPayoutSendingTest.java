@@ -6,11 +6,13 @@ import com.chainpay.ledger.service.LedgerService;
 import com.chainpay.ledger.service.LedgerService.TransferCode;
 import com.chainpay.ledger.service.LedgerService.TransferCommand;
 import com.chainpay.support.AbstractPostgresTest;
+import com.chainpay.support.TransactionalProxy;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -66,6 +68,18 @@ abstract class AbstractPayoutSendingTest extends AbstractPostgresTest {
         chain.answerEstimateGas(52_000);
         signer = HotWalletSigner.fromHex(HOT_KEY);
         requests = 0;
+        // 签名闸口的复核：收款地址要在本商户白名单里（外键）；没定限额的一律退回待核准。这里给一个宽松的限额，发送测试不被它挡住
+        jdbc.sql("INSERT INTO payout_address (merchant_id, address) VALUES (:m, :a)").param("m", acmeId).param("a", DEST).update();
+        jdbc.sql("""
+                        INSERT INTO payout_limit (token, per_tx_max, daily_max) VALUES (:t, 100, 1000)
+                        ON CONFLICT (token) DO UPDATE SET per_tx_max = 100, daily_max = 1000
+                        """).param("t", LINK).update();
+    }
+
+    /** 提现表引用 merchant：别的测试类清场用 DELETE FROM merchant，这里留下的行会挡住它们；留下的限额会改掉它们「没定限额」的前提。自己收拾。 */
+    @AfterEach
+    void cleanPayoutTables() {
+        jdbc.sql("TRUNCATE payout_tx, payout, payout_address, payout_limit, hot_wallet CASCADE").update();
     }
 
     /** 先冻结，再插一条 QUEUED 的申请。 */
@@ -84,14 +98,19 @@ abstract class AbstractPayoutSendingTest extends AbstractPostgresTest {
                 .query(Long.class).single();
     }
 
+    /** 签名闸口：测试里 new 的，用 {@link TransactionalProxy} 套上和容器一样的事务代理，事务开在系统事务管理器上。 */
+    protected PayoutSigningGate gate() {
+        return TransactionalProxy.of(new PayoutSigningGate(systemJdbc, systemLedgerService, signer, SEPOLIA), systemTransactionManager);
+    }
+
     protected PayoutSender sender() {
-        return new PayoutSender(systemJdbc, sendWriter, chain, chain, signer, new FeePolicy(GWEI, GWEI.multiply(BigInteger.valueOf(50)), 200_000), SEPOLIA, 10);
+        return new PayoutSender(systemJdbc, sendWriter, gate(), chain, chain, new FeePolicy(GWEI, GWEI.multiply(BigInteger.valueOf(50)), 200_000), 10);
     }
 
     /** 卡住多久算卡住由测试定；Duration.ZERO = 广播过的一律算卡住。 */
     protected PayoutSender sender(java.time.Duration stuckAfter) {
-        return new PayoutSender(systemJdbc, sendWriter, chain, chain, signer, new FeePolicy(GWEI, GWEI.multiply(BigInteger.valueOf(50)), 200_000),
-                SEPOLIA, "sepolia", 10, stuckAfter);
+        return new PayoutSender(systemJdbc, sendWriter, gate(), chain, chain, new FeePolicy(GWEI, GWEI.multiply(BigInteger.valueOf(50)), 200_000),
+                "sepolia", 10, stuckAfter);
     }
 
     /** 追踪任务：主节点与审计节点都是同一个假节点。 */

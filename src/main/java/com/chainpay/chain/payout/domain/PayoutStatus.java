@@ -10,12 +10,15 @@ import java.util.Set;
  * 没有表的话，「谁都能把任何状态改成任何状态」——一次并发或一次手误就把已结算的钱再解冻一遍。
  *
  * <pre>
- *   PENDING_APPROVAL ─→ QUEUED ─→ SIGNED ─→ BROADCAST ─→ MINED ─→ CONFIRMED
- *          │              │                      ↑          │
- *          ↓              ↓                      └──────────┤（块被重组掉，回去继续等）
- *       REJECTED        FAILED（估 gas 就 revert）          ↓
- *                                                        FAILED（回执 status 0 且 FINAL）
+ *   PENDING_APPROVAL ←─→ QUEUED ─→ SIGNED ─→ BROADCAST ─→ MINED ─→ CONFIRMED
+ *          │               │                      ↑          │
+ *          ↓               ↓                      └──────────┤（块被重组掉，回去继续等）
+ *       REJECTED         FAILED（估 gas 就 revert；             ↓
+ *                         收款地址排队时被停用）          FAILED（回执 status 0 且 FINAL）
  * </pre>
+ *
+ * <p>QUEUED 回 PENDING_APPROVAL 只有签名闸口会走：签名前复核发现超限又没人核准（限额在排队时被调低、同一商户的申请撞穿当日额度），
+ * 退回去等人。编号还没分出去，退回不留痕迹。
  *
  * <p>BROADCAST 没有直接到 FAILED 的边：广播之后只有链上的回执能宣布结局，代码不能凭「等太久」判失败——
  * 那笔可能正在别的节点的内存池里等着上链。等太久的对策是加价或换节点，不是判死。
@@ -25,7 +28,7 @@ public enum PayoutStatus {
 
     private static final Map<PayoutStatus, Set<PayoutStatus>> EDGES = Map.of(
             PENDING_APPROVAL, Set.of(QUEUED, REJECTED),
-            QUEUED, Set.of(SIGNED, FAILED),
+            QUEUED, Set.of(SIGNED, FAILED, PENDING_APPROVAL),
             SIGNED, Set.of(BROADCAST),
             BROADCAST, Set.of(MINED),
             MINED, Set.of(CONFIRMED, FAILED, BROADCAST),

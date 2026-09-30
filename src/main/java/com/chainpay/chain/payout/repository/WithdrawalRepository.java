@@ -98,13 +98,13 @@ public class WithdrawalRepository {
     }
 
     /**
-     * 本商户这种代币当日（UTC）已<b>自动放行</b>的合计：等人核准的不算（人核准时看得到全部），退了钱的不算。
-     * 当日上限管的是「一天里不经人手能出去多少」。RLS 已把行限在本商户。
+     * 本商户这种代币当日（UTC）已<b>自动放行</b>的合计：等人核准的、核准过的（带核准标记）都不算，退了钱的不算。
+     * 当日上限管的是「一天里不经人手能出去多少」。RLS 已把行限在本商户。签名闸口签名前按同一口径再算一遍（它不信这里的判断）。
      */
     public BigDecimal sumToday(String token) {
         return jdbc.sql("""
                         SELECT COALESCE(SUM(amount), 0) FROM payout
-                        WHERE token = :t AND status NOT IN ('PENDING_APPROVAL', 'FAILED', 'REJECTED')
+                        WHERE token = :t AND status NOT IN ('PENDING_APPROVAL', 'FAILED', 'REJECTED') AND approved_by IS NULL
                           AND created_at >= date_trunc('day', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
                         """)
                 .param("t", token).query(BigDecimal.class).single();

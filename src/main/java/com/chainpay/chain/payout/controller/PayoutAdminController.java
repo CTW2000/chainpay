@@ -1,13 +1,16 @@
 package com.chainpay.chain.payout.controller;
 
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
+import com.chainpay.admin.domain.AdminSession;
 import com.chainpay.chain.payout.service.PayoutApprovalService;
 import com.chainpay.chain.wallet.EthAddress;
 import com.chainpay.common.web.ApiResponse;
 import com.chainpay.ledger.service.LedgerAmounts;
+import com.chainpay.security.filter.AdminAuthFilter;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
@@ -39,10 +42,12 @@ public class PayoutAdminController {
         return ApiResponse.ok(approvals.pending());
     }
 
+    /** 核准人取自管理员会话（{@link AdminAuthFilter} 认过的人），不收请求体里的名字。 */
     @com.chainpay.admin.web.Sensitive
     @PostMapping("/payouts/{id}/approve")
-    public ApiResponse<Void> approve(@PathVariable long id) {
-        approvals.approve(id);
+    public ApiResponse<Void> approve(@PathVariable long id, HttpServletRequest http) {
+        AdminSession session = (AdminSession) http.getAttribute(AdminAuthFilter.SESSION_ATTRIBUTE);
+        approvals.approve(id, session.username());
         return ApiResponse.ok(null);
     }
 

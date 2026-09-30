@@ -155,7 +155,7 @@ SELECT * FROM ledger_judge();   -- 以 chainpay_system 身份跑；必须 0 行
   类与带注解的方法不能 final（final 类启动失败；final 方法启动只打一行 WARN，调用时字段全是 null）；不能 this 自调用；容器外 `new` 的实例没有事务（后两条完全静默）。
   删掉注解本身也静默（外层还有事务时测试照绿），所以守卫测试钉住「容器给的是代理、方法带 REQUIRED、类与方法都不是 final」（`DepositAddressServiceTest`、`IndexerWritersTransactionalTest`、`SystemTransactionalBeansTest`）。
 - **网络在事务外、写库在事务里**的类：事务那一段搬进写入类，网络那一侧留在原类。索引器（`BatchWriter` / `ChainHeadWriter` / `ReorgWriter` / `ReconcileWriter`）、
-  对账（`AuditWriter`）、入账（`DepositWriter`）、发送（`PayoutSendWriter`）、追踪（`PayoutTrackWriter`）都是这样。
+  对账（`AuditWriter`）、入账（`DepositWriter`）、发送（`PayoutSendWriter`；签名与判失败在签名闸口 `PayoutSigningGate`）、追踪（`PayoutTrackWriter`）都是这样。
   测试用 `IndexerWriters` 与 `AbstractDepositPostingTest.posterWith`（`TransactionalProxy` 给 new 出来的对象套上和容器同样的事务代理）。索引器后三个写入类的注解被删，只有守卫测试发现得了。
 - 生产代码不用 `TransactionTemplate`（`SystemLedger.inTransaction` 2026-09-23 删掉）。测试要临时开系统事务用基类的 `inSystemTransaction`；直接调账本的测试走 `SystemScopedLedger`，每次调用一个系统事务。
 - 嵌套靠传播方式：内层 REQUIRED 加入外层开的事务；系统账本的 `transfer` 是 MANDATORY，只加入、不自己开。
@@ -230,18 +230,26 @@ SELECT * FROM ledger_judge();   -- 以 chainpay_system 身份跑；必须 0 行
 
 - **账本先扣、链上后发生**：申请时 可用 → 冻结（`WITHDRAWAL_FREEZE`，商户连接）；FINAL 后 冻结 → 托管镜像（`WITHDRAWAL`，系统身份）；失败 冻结 → 可用（`WITHDRAWAL_REVERSE`）。
   结算过的不能再解冻，由「冻结账户不许为负」守，不靠代码记得。
-- 表：`hot_wallet`（`next_nonce` 是意图，真相在链上）、`payout`（每笔以冻结开始；结算与解冻互斥；状态与结局一一对应）、
+- 表：`hot_wallet`（`next_nonce` 是意图，真相在链上）、`payout`（每笔以冻结开始；结算与解冻互斥；状态与结局一一对应；收款地址外键指向本商户白名单；
+  应用角色插入时只能是待核准 / 放行、写不了核准标记 `approved_by` / `approved_at`，V31）、
   `payout_tx`（签好的原文先落库再广播；同编号只有一笔 MINED 由部分唯一索引守）、`payout_address`（白名单）。系统角色对这几张表都没有 DELETE。
 - 状态机是显式转换表（`PayoutStatus`、`PayoutTxStatus`）。**BROADCAST 没有到 FAILED 的边**：广播后只有回执能宣布结局。
 - **发送**（`PayoutSender.sendOnce`，顺序是硬的）：对账（链上计数 C 在事务外问；事务里锁热钱包行，核 C ≤ N ≤ C + U：C > N 是有人在别处用了这把钥匙，N > C + U 是有编号没有尝试记录，都整把钱包 HALTED，**重启不算恢复**）
-  → 原样重发所有 SIGNED 的尝试 → 排队的：事务外估 gas、取费率，事务里锁行、签名、落库、编号 +1，**提交之后才广播**。网络永远不在事务里。
+  → 原样重发所有 SIGNED 的尝试 → 排队的：事务外估 gas、取费率，交给签名闸口（一个系统事务：认领、复核、签名、落库、编号 +1），**提交之后才广播**；
+  发不出去的（估 gas 就 revert）也交给闸口判失败。网络永远不在事务里。
 - 广播的回答：成功 / already known → BROADCAST；没有 code（传输失败）→ 下一轮重发同一份原文；nonce too low → 看节点认不认识我们的哈希或兄弟尝试；
   其它带 code 的拒绝与 `underpriced` → 钱包 HALTED。四处问节点的地方都先接 `RpcAuthException` → 钱包 HALTED → 告警。
 - **追踪**（`PayoutTracker`）只读链、只改状态、只在最后一步记账：status 0 也是上链（编号已用、gas 已扣）；主节点说那块哈希变了 = 重组，退回 BROADCAST；
   两个节点的 finalized 都过了那块且哈希一致才结算或解冻。卡单（广播超过 3 分钟、没回执、节点还认着）→ 同编号加价 25% 替换，两个费率都有上限。
 - **申请**（`WithdrawalService.request`，顺序是硬的）：代币 → 金额 → 锁本商户的 merchant 行（同一商户的申请从这里起串行）→ 幂等键 → 平台自己的地址永远拒绝（问库里的是 / 否函数；热钱包要等发送任务第一轮对账、库里有了它那一行才认得出）→ 白名单 → 按限额定「放行 / 待核准」→ 冻结 → 插行（冻结与插行同一事务）。
-  限额没定过 = 一律人工；当日上限只算自动放行过的。
-- **已知缺口**：发送任务签名前不复核白名单、限额、核准与冻结；入账不重新派生收款地址——worker 不能信 web 写进库里的行（进程拆分第 ③ 步修）。
+  限额没定过 = 一律人工；当日上限只算自动放行过的（没有核准标记的），和签名闸口同一口径。核准人取自管理员会话，写进核准标记。
+- **签名闸口**（`PayoutSigningGate`，进程拆分 ③ 的 8a）：排队的提现只从这里出去——签名，或发不出去时判失败解冻。worker 不信 web 写的行：两条路都先按 id 重读这一行，
+  只核应用角色写不了的事实——冻结分录（同商户、同币同额、可用 → 冻结）、白名单里且 ACTIVE、不是平台地址；签名前还要有核准标记，或单笔与当日都在限额内。
+  不过按原因三种处置（用户 09-24 定）：像被攻破的（冻结对不上、白名单里没有、平台地址）→ 整把钱包停发、不解冻，这一行原地不动；商户停用了地址 → FAILED、解冻；
+  超限没人核准 → 退回待核准。人工拒绝同样先核冻结分录，对不上就报错、不解冻（解冻的金额也来自 web 写的行）。
+  锁的顺序：提现行 → 商户的额度锁（事务级咨询锁，同一商户的额度核对串行）→ 热钱包行；只有「拿编号 → 签名 → 记尝试」在钱包锁里，不同商户的复核互不等待。
+  当日额度按商户、按申请那天（UTC）算，只算没有核准标记、已经签出去的。
+- **已知缺口**：入账不重新派生收款地址——worker 不能信 web 写进收款地址表的行（进程拆分 ③ 的 8b 修）。闸口停发之后，把可疑的那一行移出队列还没有工具（钱包停着等人）。
   商户用应用角色仍能插入借方是冻结账户的转账（没有接口会这么做；数据库层的写入检查用户定先不做）。
 - 每种停发原因该做什么见 `docs/runbook/payout.md`，真环境演练步骤见 `docs/runbook/payout-drill.md`。给热钱包充币前先核对地址。
 
@@ -340,7 +348,7 @@ AI 写完代码后不要直接 commit：写完 + 跑测试 → 把改动留在�
 - **服务端没有收款私钥**：收款地址从账户层 xpub（m/44'/60'/0'）做 BIP-32 普通派生，助记词与 xprv 从头到尾不进服务器；主代码只有 `chain/wallet` 能碰私钥数学（`WalletBoundaryTest` 守）。
   xpub 泄露 = 隐私全丢（能枚举全部收款地址），但转不走钱。**xpub 加任意一个普通派生的子私钥 = 父私钥**，所以绝不能把收款树里的某个子私钥单独交出去。
 - **热钱包私钥**是服务端唯一的私钥：从 `CHAINPAY_PAYOUT_HOT_WALLET_KEY` 装入一次，只活在 `HotWalletSigner` 里（只暴露地址与签名，`toString` 只含地址，错误消息只说长度与范围）。
-  它必须与收款树隔离：另一句助记词（`tools/mnemonic.sh`），或同一句的硬化账户 `m/44'/60'/1'/0/0`（`tools/hotwallet.sh`）；**绝不能**从日常钱包导出收款树里某个账户的私钥当热钱包。payout 包只能拿签名器，拿不到裸私钥。
+  它必须与收款树隔离：另一句助记词（`tools/mnemonic.sh`），或同一句的硬化账户 `m/44'/60'/1'/0/0`（`tools/hotwallet.sh`）；**绝不能**从日常钱包导出收款树里某个账户的私钥当热钱包。payout 包只能拿签名器，拿不到裸私钥；签名器只交给签名闸口（`WalletBoundaryTest` 守）。
 - 离线工具（`tools/xpub.sh`、`hotwallet.sh`、`mnemonic.sh`）断网跑，不回显、不落盘、不记日志。`tools/check-secrets.sh` 扫仓库与任意目录里的私钥、xprv、助记词形态，命中只打印前 6 位；公开测试密钥在 `tools/check-secrets.allow` 里逐值放行（`SecretScanTest` 守）。
 - **签名的两条会丢钱的规矩**：k 由 RFC 6979 确定地算出（两笔撞同一个 k 就能解出私钥）；s 取 ≤ n/2（EIP-2，否则同一笔交易有两个哈希）。
 - **原语与协议编码用库，策略与业务自己写**：密码学原语用 BouncyCastle，RLP / EIP-1559 / 签名打包与恢复用 web3j 的 `crypto` 模块，我们只留不依赖 web3j 类型的薄包装，换库只动这一层；

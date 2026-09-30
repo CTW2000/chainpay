@@ -29,6 +29,7 @@ SELECT payout_id, nonce, block_number, reverted, updated_at FROM payout_tx WHERE
 | `编号 N 超过链上 C 笔与未终结尝试 U 之和` | 有分出去的编号没有对应的尝试记录——正常路径做不到，多半是人手工改过 `hot_wallet` 或 `payout_tx` | 查 `payout_tx` 里 `nonce` 的空洞：缺的编号要么在链上（那 C 应该更大，重新对账），要么真的没发过——这时 `next_nonce` 改回 C + U，再恢复 |
 | `节点拒绝广播编号 n（insufficient funds …）` | 热钱包的 **ETH** 不够付 gas（LINK 不够在估 gas 时就暴露，走不到这里） | 往热钱包地址充 Sepolia ETH，然后恢复。尝试留在 SIGNED，恢复后第一轮原样重发，编号不变 |
 | `编号 n 已被链上另一笔用掉（nonce too low），而节点不认识我们这笔` | 同第一行：这个编号被别处的一笔用掉了 | 同第一行 |
+| `提现 N 的冻结分录对不上` / `…不在这个商户的白名单里` / `…是平台自己的地址` | 签名闸口复核发现这一行不是按规矩申请来的：web 被攻破，或有人绕过接口直接写了库。这一笔原地不动（QUEUED），钱还冻着，没签也没解冻 | **按安全事件处理**：先停对外接请求的进程（现在只有一个 `app`，就停它），留现场（这一行、`created_at` 前后的日志）；**不要**改回 ACTIVE——那一行还在队列里，下一轮会再停。把它移出队列的工具还没有（进程拆分遗留），先停着等处理 |
 | `节点拒绝了我们的凭证` | RPC 的 key 失效或被撤销（HTTP 401 / 403）。它不会自己好，所以不当瞬时失败重试 | 换 `CHAINPAY_CHAIN_RPC_URL` 里的 key → 重启 → 按第三节改回 ACTIVE。签好的原文留在 SIGNED，恢复后原样重发，编号不变 |
 
 其它带错误码的拒绝（节点不认这笔交易的形状、gas 太低等）也走停发，原文在 `halt_reason` 里。
@@ -65,6 +66,8 @@ UPDATE hot_wallet SET next_nonce = <链上计数 或 C + U>, updated_at = now() 
 估 gas 就 revert（最常见：热钱包的 LINK 不够）的提现直接 FAILED、写 `failure_reason`、解冻退回商户可用余额，编号没分出去。
 给热钱包补上 LINK 后商户重新申请即可（从外部地址转入的要登记注资，见 `audit.md` 第五节）；**已 FAILED 的不会自动重发**。
 
+收款地址在排队期间被商户停用，签名闸口也判 FAILED（`failure_reason` 写明「在排队期间被商户停用」），同样解冻。商户重新启用或换地址后重新申请。
+
 ## 七、追踪与卡单
 
 追踪任务每 `track-interval`（15 秒）一轮，日志 `追踪：看了 N 个尝试，上链 …、结算 …、判失败 …、丢弃 …、作废 …、重组退回 …、等 FINAL …`。
@@ -96,7 +99,9 @@ SELECT * FROM payout_limit;
 |---|---|---|
 | 一笔提现 PENDING_APPROVAL | 超单笔上限、当日自动放行额度用完、或这种代币没定过限额 | 看收款地址与商户历史；`tools/admin.sh POST /admin/v1/payouts/<id>/approve` 进队列，或 `tools/admin.sh POST /admin/v1/payouts/<id>/reject '{"reason":"…"}'` 解冻退回。钱在等待期间冻着 |
 | 所有申请都进 PENDING_APPROVAL | 这种代币没有 `payout_limit` 行 | `tools/admin.sh PUT /admin/v1/payout-limits/<代币地址> '{"perTxMax":"…","dailyMax":"…"}'`（当日 ≥ 单笔）。没定过 = 一律人工是有意的 |
+| 一笔提现从 QUEUED 退回了 PENDING_APPROVAL（日志 WARN `提现 N 退回待核准：…`） | 签名闸口按限额复核不过：web 当时放行了，闸口不认（两边口径不一致，或 web 被攻破） | 看日志里的原因（超单笔 / 当日额度 / 没定限额），和普通待核准一样核准或拒绝；反复出现要查 web |
+| 拒绝时报 500、日志 ERROR `提现 N 的冻结分录对不上，拒绝时不解冻` | 这一行不是按规矩申请来的，按它的金额解冻会多解冻 | 同第二节「冻结分录对不上」：按安全事件处理，**不要**手工解冻 |
 | 商户说「提现被拒 2010」 | 目标是平台自己的收款地址（任何商户的） | 不放行：那是内部转账，不是提现；让商户换地址 |
 | 商户说「提现被拒 2009」 | 目标没登记或已停用 | 让商户先 `POST /api/v1/withdrawal-addresses` 登记 |
 
-核准与拒绝只改状态和账本，**不碰私钥**；核准后的那笔和普通申请一样由发送任务处理。
+核准与拒绝只改状态和账本，**不碰私钥**；核准后的那笔和普通申请一样由发送任务处理。核准会记下核准人（管理员会话的用户名），核准过的不占当日自动放行额度。

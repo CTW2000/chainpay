@@ -297,6 +297,8 @@ class AuditServiceTest extends AbstractDepositPostingTest {
                 .orElseGet(() -> jdbc.sql("SELECT id FROM account WHERE code = 'user:acme:LINK:frozen'").query(Long.class).single());
         long custody = jdbc.sql("SELECT id FROM account WHERE code = 'chain:custody:LINK'").query(Long.class).single();
         long freeze = ledger.transfer(new TransferCommand("withdrawal:" + key + ":freeze", "LINK", amount, acmeAccount, frozen, TransferCode.WITHDRAWAL_FREEZE, null));
+        jdbc.sql("INSERT INTO payout_address (merchant_id, address) VALUES (:m, :a) ON CONFLICT DO NOTHING")      // 收款地址要在白名单里（外键）
+                .param("m", acmeId).param("a", BOB).update();
         long id = jdbc.sql("INSERT INTO payout (merchant_id, idempotency_key, token, to_address, amount, raw_value, status, freeze_transfer_id) "
                         + "VALUES (:m, :k, :t, :to, :amt, :raw, 'MINED', :f) RETURNING id")
                 .param("m", acmeId).param("k", key).param("t", LINK).param("to", BOB).param("amt", amount)

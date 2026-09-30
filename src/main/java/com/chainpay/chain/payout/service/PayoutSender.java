@@ -1,21 +1,18 @@
 package com.chainpay.chain.payout.service;
 
-import com.chainpay.chain.erc20.Abi;
 import com.chainpay.chain.payout.domain.PayoutAttempt;
 import com.chainpay.chain.payout.domain.PayoutTxStatus;
 import com.chainpay.chain.payout.domain.QueuedPayout;
 import com.chainpay.chain.payout.domain.SendResult;
 import com.chainpay.chain.payout.repository.HotWalletRepository;
 import com.chainpay.chain.payout.repository.PayoutSendRepository;
-import com.chainpay.chain.payout.service.PayoutSendWriter.SignedRecord;
-import com.chainpay.chain.payout.service.PayoutSendWriter.TakenByAnotherInstance;
-import com.chainpay.chain.payout.service.PayoutSendWriter.WalletHalted;
+import com.chainpay.chain.payout.service.PayoutSigningGate.Refused;
+import com.chainpay.chain.payout.service.PayoutSigningGate.Signed;
+import com.chainpay.chain.payout.service.PayoutSigningGate.SignedRecord;
 import com.chainpay.chain.rpc.ChainReader;
 import com.chainpay.chain.rpc.ChainSender;
 import com.chainpay.chain.rpc.JsonRpcException;
 import com.chainpay.chain.rpc.RpcAuthException;
-import com.chainpay.chain.wallet.Eip1559Transaction;
-import com.chainpay.chain.wallet.HotWalletSigner;
 import com.chainpay.ledger.system.TransientDbFailure;
 import java.math.BigInteger;
 import java.time.Duration;
@@ -23,6 +20,7 @@ import java.time.Instant;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -36,11 +34,13 @@ import org.springframework.jdbc.core.simple.JdbcClient;
  *   <li><b>重发</b>：SIGNED 与 DROPPED 的尝试原样重发——SIGNED 是进程死在提交与广播之间留下的，DROPPED 是节点忘了的；
  *       节点回 already known 也算成功。</li>
  *   <li><b>加价</b>：广播太久还没上链、节点还认着的，同编号再签一笔费率更高的替身（见 {@link #bumpStuck}）。</li>
- *   <li><b>排队的</b>：每笔先在事务外估 gas、取费率（合约 revert = 这笔发不出去，判失败并解冻，编号还没分）；
- *       再在一个事务里锁行、拿编号、签名、写 SIGNED 尝试、编号 +1、提交；<b>提交之后</b>才广播；成功再开短事务改 BROADCAST。</li>
+ *   <li><b>排队的</b>：每笔先在事务外估 gas、取费率（合约 revert = 这笔发不出去，交给闸口判失败并解冻——解冻的金额来自 web 写的行，闸口先复核；编号还没分）；
+ *       再交给签名闸口（{@link PayoutSigningGate}）：一个事务里认领、复核、拿编号、签名、写 SIGNED 尝试、编号 +1、提交；
+ *       <b>提交之后</b>才广播；成功再开短事务改 BROADCAST。复核不过的，闸口已经按原因处置（停发 / 判失败 / 退回待核准）。</li>
  * </ol>
  * 网络永远不在事务里：握着行锁等节点会把另一个实例和连接池一起拖住。广播的回答按 {@link Outcome} 分类：瞬时的下一轮再来，
- * 结构性的停整把钱包——编号是全局的，一笔卡住后面全部卡住。几条写要一起成败的（对账、签名落库、记 BROADCAST、判失败）在 {@link PayoutSendWriter}。
+ * 结构性的停整把钱包——编号是全局的，一笔卡住后面全部卡住。这个类手里没有私钥：签名只经闸口；
+ * 几条写要一起成败的：签名与判失败在闸口，对账、记 BROADCAST 在 {@link PayoutSendWriter}。
  */
 public final class PayoutSender {
 
@@ -50,37 +50,35 @@ public final class PayoutSender {
     private final PayoutSendRepository repo;
     private final HotWalletRepository wallets;
     private final PayoutSendWriter writer;
+    private final PayoutSigningGate gate;
     private final ChainReader primary;
     private final ChainSender sender;
-    private final HotWalletSigner signer;
     private final FeePolicy fees;
-    private final long chainId;
     private final String chainName;
     private final int batchSize;
     private final Duration stuckAfter;
 
-    public PayoutSender(JdbcClient systemJdbc, PayoutSendWriter writer, ChainReader primary, ChainSender sender, HotWalletSigner signer,
-                        FeePolicy fees, long chainId, int batchSize) {
-        this(systemJdbc, writer, primary, sender, signer, fees, chainId, "chain-" + chainId, batchSize, Duration.ofMinutes(3));
+    public PayoutSender(JdbcClient systemJdbc, PayoutSendWriter writer, PayoutSigningGate gate, ChainReader primary, ChainSender sender,
+                        FeePolicy fees, int batchSize) {
+        this(systemJdbc, writer, gate, primary, sender, fees, "chain-" + gate.chainId(), batchSize, Duration.ofMinutes(3));
     }
 
-    public PayoutSender(JdbcClient systemJdbc, PayoutSendWriter writer, ChainReader primary, ChainSender sender, HotWalletSigner signer,
-                        FeePolicy fees, long chainId, String chainName, int batchSize, Duration stuckAfter) {
+    public PayoutSender(JdbcClient systemJdbc, PayoutSendWriter writer, PayoutSigningGate gate, ChainReader primary, ChainSender sender,
+                        FeePolicy fees, String chainName, int batchSize, Duration stuckAfter) {
         this.repo = new PayoutSendRepository(systemJdbc);
         this.wallets = new HotWalletRepository(systemJdbc);
         this.writer = writer;
+        this.gate = gate;
         this.stuckAfter = stuckAfter;
         this.primary = primary;
         this.sender = sender;
-        this.signer = signer;
         this.fees = fees;
-        this.chainId = chainId;
         this.chainName = chainName;
         this.batchSize = batchSize;
     }
 
     public SendResult sendOnce() {
-        String wallet = signer.address().toLowerCase(Locale.ROOT);
+        String wallet = gate.wallet();
         Counters k = new Counters();
 
         // 1. 对账：链上计数在事务外问，核对与停发在事务里做
@@ -134,7 +132,7 @@ public final class PayoutSender {
         List<QueuedPayout> queue = repo.findQueued(batchSize);
         for (QueuedPayout payout : queue) {
             k.examined++;
-            byte[] data = transferCalldata(payout.toAddress(), payout.rawValue());
+            byte[] data = PayoutSigningGate.transferCalldata(payout.toAddress(), payout.rawValue());   // 只为估 gas；签名时闸口按库里那一行重算
 
             FeePolicy.Fees quoted;
             try {
@@ -146,32 +144,45 @@ public final class PayoutSender {
                 if (e.code() == null) {
                     return k.retryLater("估 gas 或取费率时节点失败：" + e.getMessage());
                 }
-                if (writer.fail(payout, "估 gas 失败，这笔发不出去（节点说：" + e.getMessage() + "）")) {
-                    k.failed++;
+                SendResult stop = failThroughGate(payout.id(), "估 gas 失败，这笔发不出去（节点说：" + e.getMessage() + "）", k);
+                if (stop != null) {
+                    return stop;
                 }
                 continue;
             } catch (FeePolicy.FeeTooHighException e) {
                 return k.retryLater(e.getMessage());
             } catch (FeePolicy.GasTooHighException e) {
-                if (writer.fail(payout, e.getMessage())) {
-                    k.failed++;
+                SendResult stop = failThroughGate(payout.id(), e.getMessage(), k);
+                if (stop != null) {
+                    return stop;
                 }
                 continue;
             }
 
-            SignedRecord record;
+            PayoutSigningGate.Result result;
             try {
-                record = writer.signAndRecord(signer, chainId, wallet, payout, data, quoted);
-            } catch (TakenByAnotherInstance e) {
-                continue;
-            } catch (WalletHalted e) {
-                return k.halted(e.getMessage());
+                result = gate.sign(payout.id(), quoted);
             } catch (RuntimeException e) {
                 if (!TransientDbFailure.isTransient(e)) {
                     throw e;
                 }
-                return k.retryLater("分配编号时数据库瞬时失败：" + e.getMessage());
+                return k.retryLater("签名时数据库瞬时失败：" + e.getMessage());
             }
+            if (result instanceof Refused refused) {
+                switch (refused.kind()) {
+                    case TAKEN, BACK_TO_APPROVAL -> {
+                        continue;                                                             // 别的实例先签了 / 退回待核准：看下一笔
+                    }
+                    case FAILED -> {
+                        k.failed++;
+                        continue;
+                    }
+                    case WALLET_HALTED -> {
+                        return k.halted(refused.reason());
+                    }
+                }
+            }
+            SignedRecord record = ((Signed) result).record();
             k.signed++;
 
             Outcome outcome = broadcast(record.rawHex(), record.txHash(), record.nonce(), List::of);   // 新编号没有兄弟
@@ -289,22 +300,19 @@ public final class PayoutSender {
             } catch (JsonRpcException e) {
                 return new Outcome(Kind.TRANSIENT, "取费率时节点失败：" + e.getMessage());
             }
-            Eip1559Transaction old = Eip1559Transaction.decode(HexFormat.of().parseHex(a.rawHex().substring(2))).transaction();
-            Eip1559Transaction tx = new Eip1559Transaction(chainId, a.nonce(), f.maxPriorityFeePerGas(), f.maxFeePerGas(), a.gasLimit(),
-                    old.to(), old.value(), old.data());
-            Eip1559Transaction.Signed signedTx = signer.sign(tx);
-            String rawHex = "0x" + HexFormat.of().formatHex(signedTx.raw());
-            String txHash = "0x" + HexFormat.of().formatHex(signedTx.hash());
-            long attemptId = repo.insertAttempt(a.payoutId(), wallet, a.nonce(), txHash, rawHex,
-                    a.gasLimit(), f.maxFeePerGas(), f.maxPriorityFeePerGas());
+            Optional<SignedRecord> replacement = gate.signReplacement(a.id(), f);                  // 签名只经闸口：原文它自己按 id 从库里读
+            if (replacement.isEmpty()) {
+                continue;                                                                   // 不是这把钱包的尝试
+            }
+            SignedRecord signed = replacement.get();
             log.warn("提现 {} 的编号 {} 卡了超过 {}：加价重发，总费率 {} → {}", a.payoutId(), a.nonce(), stuckAfter, a.maxFeePerGas(), f.maxFeePerGas());
-            Outcome outcome = broadcast(rawHex, txHash, a.nonce(), () -> siblingsOf(a));
+            Outcome outcome = broadcast(signed.rawHex(), signed.txHash(), a.nonce(), () -> siblingsOf(a));
             switch (outcome.kind()) {
                 case OK -> {
-                    writer.markBroadcast(attemptId, a.payoutId(), PayoutTxStatus.SIGNED);
+                    writer.markBroadcast(signed.attemptId(), a.payoutId(), PayoutTxStatus.SIGNED);
                     k.bumped++;
                 }
-                case REPLACED -> repo.moveAttempt(attemptId, PayoutTxStatus.SIGNED.name(), PayoutTxStatus.REPLACED.name());
+                case REPLACED -> repo.moveAttempt(signed.attemptId(), PayoutTxStatus.SIGNED.name(), PayoutTxStatus.REPLACED.name());
                 case TRANSIENT, HALT -> {
                     return outcome;
                 }
@@ -327,14 +335,24 @@ public final class PayoutSender {
         return "节点拒绝了我们的凭证（" + e.getMessage() + "）：key 失效或被撤销，重试永远没用；换 key 重启后把钱包改回 ACTIVE";
     }
 
+    /** 这一笔发不出去：交给闸口判失败（闸口先复核这一行，像被攻破的就停钱包、不解冻）。返回 null = 看下一笔；不是 null = 这一轮到此为止。 */
+    private SendResult failThroughGate(long payoutId, String reason, Counters k) {
+        Refused r = gate.fail(payoutId, reason);
+        switch (r.kind()) {
+            case FAILED -> k.failed++;
+            case WALLET_HALTED -> {
+                return k.halted(r.reason());
+            }
+            default -> {
+                // 别的实例先定了结局：看下一笔
+            }
+        }
+        return null;
+    }
+
     private void haltWallet(String wallet, String reason) {
         log.error("热钱包 {} 停发：{}", wallet, reason);
         wallets.halt(wallet, reason);
-    }
-
-    /** transfer(address,uint256) 的 calldata，编码在 {@link Abi#transfer}（ABI 编码只在那一处）。 */
-    static byte[] transferCalldata(String to, BigInteger rawValue) {
-        return HexFormat.of().parseHex(Abi.transfer(to, rawValue).substring(2));
     }
 
     private static final class Counters {

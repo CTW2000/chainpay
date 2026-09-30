@@ -6,12 +6,14 @@ import com.chainpay.chain.deposit.service.AbstractDepositPostingTest;
 import com.chainpay.chain.payout.service.FeePolicy;
 import com.chainpay.chain.payout.service.PayoutSendWriter;
 import com.chainpay.chain.payout.service.PayoutSender;
+import com.chainpay.chain.payout.service.PayoutSigningGate;
 import com.chainpay.chain.support.FakeChain;
 import com.chainpay.chain.wallet.EthAddress;
 import com.chainpay.chain.wallet.HotWalletSigner;
 import com.chainpay.security.crypto.SecretCipher;
 import com.chainpay.security.filter.AdminAuthFilter;
 import com.chainpay.support.SignedRequests;
+import com.chainpay.support.TransactionalProxy;
 import java.math.BigInteger;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -206,7 +208,20 @@ class WithdrawalApiTest extends AbstractDepositPostingTest {
     }
 
     @Test
-    @DisplayName("★ 管理接口：待核准列表；核准 → QUEUED；拒绝 → REJECTED + 解冻 + 原因；再核准 → 409 + 4004；没令牌 → 401")
+    @DisplayName("★ 核准过的不占自动额度：超单笔的大额经人核准后，同一天的小额照样自动放行（当日上限管的是不经人手能出去多少）")
+    void approvedPayoutsDoNotUseTheAutomaticAllowance() {
+        whitelist(DEST);
+        setLimit("3", "4");
+        long big = Long.parseLong(field(withdraw(acmeSecret, "ak_acme", DEST, "3.5", "w-1").body(), "id"));
+        assertThat(adminPost("/admin/v1/payouts/" + big + "/approve", "").statusCode()).isEqualTo(200);
+
+        HttpResponse<String> small = withdraw(acmeSecret, "ak_acme", DEST, "3", "w-2");
+
+        assertThat(small.body()).as("核准过的 3.5 带核准标记，不算自动放行：0 + 3 ≤ 4").contains("\"status\":\"QUEUED\"");
+    }
+
+    @Test
+    @DisplayName("★ 管理接口：待核准列表；核准 → QUEUED 并记下核准人；拒绝 → REJECTED + 解冻 + 原因；再核准 → 409 + 4004；没令牌 → 401")
     void adminApprovesOrRejects() {
         whitelist(DEST);
         long approveMe = Long.parseLong(field(withdraw(acmeSecret, "ak_acme", DEST, "1", "w-1").body(), "id"));
@@ -222,6 +237,8 @@ class WithdrawalApiTest extends AbstractDepositPostingTest {
 
         assertThat(approved.statusCode()).isEqualTo(200);
         assertThat(payoutStatus(approveMe)).isEqualTo("QUEUED");
+        assertThat(jdbc.sql("SELECT approved_by FROM payout WHERE id = :id").param("id", approveMe).query(String.class).single())
+                .as("核准标记记下是谁：取自管理员会话，签名闸口见到它才不看限额").isEqualTo("ops");
         assertThat(rejected.statusCode()).isEqualTo(200);
         assertThat(payoutStatus(rejectMe)).isEqualTo("REJECTED");
         assertThat(jdbc.sql("SELECT failure_reason FROM payout WHERE id = :id").param("id", rejectMe).query(String.class).single()).contains("收款人可疑");
@@ -243,7 +260,8 @@ class WithdrawalApiTest extends AbstractDepositPostingTest {
         long id = Long.parseLong(field(withdraw(acmeSecret, "ak_acme", DEST, "1", "w-1").body(), "id"));
         FakeChain node = new FakeChain().withBlocks(5);
         HotWalletSigner signer = HotWalletSigner.fromHex(HOT_KEY);
-        new PayoutSender(systemJdbc, sendWriter, node, node, signer, new FeePolicy(BigInteger.TEN.pow(9), BigInteger.TEN.pow(9).multiply(BigInteger.valueOf(50)), 200_000), 11_155_111L, 10).sendOnce();
+        PayoutSigningGate gate = TransactionalProxy.of(new PayoutSigningGate(systemJdbc, systemLedgerService, signer, 11_155_111L), systemTransactionManager);
+        new PayoutSender(systemJdbc, sendWriter, gate, node, node, new FeePolicy(BigInteger.TEN.pow(9), BigInteger.TEN.pow(9).multiply(BigInteger.valueOf(50)), 200_000), 10).sendOnce();
 
         String mine = signedGet(acmeSecret, "ak_acme", "/api/v1/withdrawals?token=" + LINK).body();
         String theirs = signedGet(evilSecret, "ak_evilco", "/api/v1/withdrawals").body();
