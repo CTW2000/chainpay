@@ -13,6 +13,7 @@ import com.chainpay.ops.health.AuditHealthIndicator;
 import com.chainpay.ops.health.DepositHealthIndicator;
 import com.chainpay.ops.health.HotWalletHealthIndicator;
 import com.chainpay.ops.health.IndexerHealthIndicator;
+import java.time.Clock;
 import java.time.Duration;
 import java.util.Optional;
 import org.springframework.beans.factory.ObjectProvider;
@@ -37,11 +38,14 @@ class OpsHealthConfig {
     }
 
     @Bean
-    DepositHealthIndicator depositHealthIndicator(ObjectProvider<DepositPostingScheduler> scheduler) {
+    DepositHealthIndicator depositHealthIndicator(ObjectProvider<DepositPostingScheduler> scheduler, Clock clock,
+                                                  @Value("${chainpay.deposit.post-interval:30s}") Duration interval) {
         DepositPostingScheduler posting = scheduler.getIfAvailable();
         return new DepositHealthIndicator(posting != null,
                 () -> posting == null ? Optional.empty() : posting.lastTick(),
-                () -> posting == null ? 0 : posting.consecutiveFailures());
+                () -> posting == null ? 0 : posting.consecutiveFailures(),
+                () -> posting == null ? null : posting.lastTickAt(),
+                interval, clock);
     }
 
     /** 私钥推出的地址是 EIP-55 大小写混写的，库里一律存小写：按库的写法去查，否则永远查不到那一行，停发了也报 UP（OpsHealthWiringTest）。 */

@@ -31,6 +31,7 @@ HTTP：UP / DEGRADED / UNKNOWN = 200；DOWN = 503。`DEGRADED` 是本项目多�
 | `deposit` | UNKNOWN | 这个进程不入账：web 进程，或节点地址写成了 false | 同上 |
 | `deposit` | DEGRADED | 连续 5 轮没跑完（节点答不上来、库在抖） | 看 `reason`；恢复后自己回 UP |
 | `deposit` | DOWN | 上一轮 HALTED：节点拒绝了凭证 | 换 RPC key 后重启，见 `deposit.md` |
+| `deposit` | DOWN，`reason` 写着「没跑完一轮 / 没跑过一轮」 | 超过 10 个周期（约 5 分钟）没跑完一轮：卡住了，或调度根本没开 | 见 `deposit.md` 第二节 |
 | `hotWallet` | DOWN | 钱包 HALTED（编号被别处用掉之类） | 按 `payout.md`「钱包 HALTED」 |
 | `audit` | DOWN + `stale: true` | 判官沉默超过两个周期（含从没跑过） | 看日志里对账为什么没跑；`tools/admin.sh POST /admin/v1/audit/run` 手工跑一轮 |
 | `audit` | DOWN + `lastRun: run N DIFF` | 上一轮有差异 | `tools/admin.sh GET /admin/v1/audit` 看逐条差异，按 `audit.md` |

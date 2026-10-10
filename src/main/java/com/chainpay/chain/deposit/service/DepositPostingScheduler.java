@@ -11,7 +11,10 @@ import org.springframework.scheduling.annotation.Scheduled;
 
 /**
  * 定时跑入账任务，独立于索引器：索引器停了，已 FINAL 的钱照记；入账停了，索引照走。
- * 意外异常只记 ERROR、下一轮重试（同一笔反复失败会每轮报一次，人看得见）。
+ * 意外异常记 ERROR、下一轮重试（反复失败会每轮报一次，人看得见）：第一次见到某个异常附完整堆栈，才知道出在哪一行；
+ * 同一个异常接着出现只打一行，免得每 30 秒刷一遍堆栈。
+ *
+ * <p>{@link #lastTickAt} 给健康项量「多久没跑完一轮」：只看上一轮的结局，看不见一轮卡住、或者根本没在跑。
  *
  * <p><b>停下就不再碰节点</b>：一轮 HALTED（节点撤了我们的凭证）之后，每轮直接返回记住的那个结果、不再调 {@code postOnce}——
  * 重试永远没用，就不该每 30 秒再撞一次。闸门只在内存里：换 key 后<b>重启</b>才会再试；健康项照常读到 HALTED = DOWN。
@@ -26,6 +29,8 @@ public final class DepositPostingScheduler {
     private final AtomicInteger consecutiveFailures = new AtomicInteger();
     /** 停下的那一轮；非空 = 闸门关着，之后不再碰节点。 */
     private final AtomicReference<PostingResult> halted = new AtomicReference<>();
+    /** 上一轮抛出的意外异常（toString）。只有调度线程读写、别的线程不看，所以是普通字段。 */
+    private String lastUnexpected;
 
     public DepositPostingScheduler(DepositPoster poster) {
         this.poster = poster;
@@ -41,6 +46,7 @@ public final class DepositPostingScheduler {
         }
         try {
             PostingResult r = poster.postOnce();
+            lastUnexpected = null;                                   // 这一轮没抛：连续的那一段结束了
             if (r.halted()) {
                 halted.set(r);
                 log.error("入账停下了，重试没用，要人处理；之后每轮不再碰节点，换 key 后重启：{}（本轮已记 {} 笔）", r.detail(), r.credited());
@@ -51,8 +57,14 @@ public final class DepositPostingScheduler {
             }
             return remember(r);
         } catch (RuntimeException e) {
-            log.error("入账任务异常，这一轮中止，下一轮重试：{}", e.toString());
-            return remember(PostingResult.retryLater(0, 0, 0, 0, 0, 0, e.toString()));
+            String brief = e.toString();
+            if (brief.equals(lastUnexpected)) {
+                log.error("入账任务异常（和上一轮同一个），这一轮中止，下一轮重试：{}", brief);
+            } else {
+                log.error("入账任务异常，这一轮中止，下一轮重试", e);   // 第一次见到它：附完整堆栈，才知道出在哪一行
+            }
+            lastUnexpected = brief;
+            return remember(PostingResult.retryLater(0, 0, 0, 0, 0, 0, brief));
         }
     }
 

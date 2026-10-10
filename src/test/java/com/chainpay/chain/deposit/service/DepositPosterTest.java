@@ -19,6 +19,7 @@ import java.math.BigInteger;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.DisplayName;
 import org.springframework.jdbc.CannotGetJdbcConnectionException;
 import org.junit.jupiter.api.Test;
@@ -545,6 +546,58 @@ class DepositPosterTest extends AbstractDepositPostingTest {
         assertThat(blockCalls.get()).as("停下之后一次节点都没再问").isEqualTo(callsWhenHalted);
         assertThat(scheduler.lastTick().orElseThrow().halted()).as("健康项读到的依据仍是 HALTED = DOWN").isTrue();
         assertThat(scheduler.lastTickAt()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("★ 意外异常：第一次附完整堆栈（才知道出在哪一行），同一个异常接着出现只打一行；换了一种、或恢复一轮之后再出现，都重新附堆栈")
+    void unexpectedFailuresLogTheStackOncePerStreak() {
+        pay(5, TEN_LINK);
+        indexUpTo(100, 90, 50);
+        AtomicReference<RuntimeException> failure = new AtomicReference<>(new IllegalStateException("意外 A"));
+        chain.beforeBlock(n -> {
+            RuntimeException f = failure.get();
+            if (f != null) {
+                throw f;
+            }
+        });
+        DepositPostingScheduler scheduler = new DepositPostingScheduler(poster());
+
+        List<ILoggingEvent> errors = errorsOf(DepositPostingScheduler.class, () -> {
+            scheduler.tick();                                          // A：带堆栈
+            scheduler.tick();                                          // A 又来：只打一行
+            failure.set(new IllegalArgumentException("意外 B"));
+            scheduler.tick();                                          // B：带堆栈
+            failure.set(null);
+            scheduler.tick();                                          // 恢复：这一轮跑完（记上块 5），不打 ERROR
+            chain.withBlocks(200);
+            audit.withBlocks(200);
+            pay(150, TEN_LINK);
+            indexUpTo(200, 190, 180);
+            failure.set(new IllegalArgumentException("意外 B"));
+            scheduler.tick();                                          // 恢复之后 B 再来（和恢复前最后一个同一个）：新的一段，重新带堆栈
+        });
+
+        assertThat(errors).hasSize(4);
+        assertThat(errors.get(0).getThrowableProxy()).as("第一次：带堆栈").isNotNull();
+        assertThat(errors.get(1).getThrowableProxy()).as("同一个异常又来：只打一行").isNull();
+        assertThat(errors.get(1).getFormattedMessage()).contains("意外 A");
+        assertThat(errors.get(2).getThrowableProxy()).as("换了一种异常：再附堆栈").isNotNull();
+        assertThat(errors.get(3).getThrowableProxy()).as("恢复之后同一个异常再出现：再附堆栈").isNotNull();
+    }
+
+    /** 抓某个 logger 的 ERROR 事件：带不带堆栈也是契约，出事时人第一眼看的就是它。 */
+    private static List<ILoggingEvent> errorsOf(Class<?> source, Runnable work) {
+        Logger logger = (Logger) LoggerFactory.getLogger(source);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            work.run();
+        } finally {
+            logger.detachAppender(appender);
+            appender.stop();
+        }
+        return appender.list.stream().filter(event -> event.getLevel() == Level.ERROR).toList();
     }
 
     @Test

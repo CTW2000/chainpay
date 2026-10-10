@@ -13,7 +13,11 @@ import com.chainpay.ops.health.DepositHealthIndicator;
 import com.chainpay.ops.health.HotWalletHealthIndicator;
 import com.chainpay.ops.health.IndexerHealthIndicator;
 import com.chainpay.ops.health.Statuses;
+import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.DisplayName;
@@ -149,10 +153,13 @@ class HealthIndicatorsTest {
     @DisplayName("入账")
     class DepositPosting {
 
+        private static final Instant T0 = Instant.parse("2026-09-30T00:00:00Z");
+        private static final Duration INTERVAL = Duration.ofSeconds(30);
+
         @Test
         @DisplayName("没装配（web 进程，或节点地址写成 false）：UNKNOWN，说明这个进程不入账")
         void notAssembledIsUnknown() {
-            Health h = new DepositHealthIndicator(false, Optional::empty, () -> 0).health();
+            Health h = new DepositHealthIndicator(false, Optional::empty, () -> 0, () -> null, INTERVAL, new MovableClock(T0)).health();
             assertThat(h.getStatus()).isEqualTo(Status.UNKNOWN);
             assertThat(h.getDetails().get("reason").toString()).contains("不入账").contains("CHAINPAY_CHAIN_RPC_URL=false");
         }
@@ -160,7 +167,38 @@ class HealthIndicatorsTest {
         @Test
         @DisplayName("装配了、还没跑过一轮：UP")
         void assembledBeforeTheFirstRoundIsUp() {
-            assertThat(new DepositHealthIndicator(true, Optional::empty, () -> 0).health().getStatus()).isEqualTo(Status.UP);
+            assertThat(new DepositHealthIndicator(true, Optional::empty, () -> 0, () -> null, INTERVAL, new MovableClock(T0)).health().getStatus())
+                    .isEqualTo(Status.UP);
+        }
+
+        @Test
+        @DisplayName("★ 上一轮结束后超过 10 个周期（5 分钟）没再跑完一轮：DOWN——一轮卡住（挂在节点或数据库上）、抛了接不住的 Error，结局都停在上一轮的 UP；没超过就不报")
+        void silenceAfterTheLastRoundIsDown() {
+            MovableClock clock = new MovableClock(T0);
+            PostingResult completed = new PostingResult(1, 1, 0, 0, 0, 0, PostingResult.Ending.COMPLETED, null);
+            DepositHealthIndicator indicator = new DepositHealthIndicator(true, () -> Optional.of(completed), () -> 0, () -> T0, INTERVAL, clock);
+
+            clock.set(T0.plus(Duration.ofMinutes(4)));
+            assertThat(indicator.health().getStatus()).as("慢，但还在转：不报").isEqualTo(Status.UP);
+
+            clock.set(T0.plus(Duration.ofMinutes(6)));
+            Health h = indicator.health();
+            assertThat(h.getStatus()).isEqualTo(Status.DOWN);
+            assertThat(h.getDetails().get("reason").toString()).contains("没跑完一轮");
+        }
+
+        @Test
+        @DisplayName("★ 装配后一直没跑过一轮、超过 10 个周期：DOWN——调度根本没开（@EnableScheduling 没挂上），以前会一直报「还没跑过一轮：UP」")
+        void neverRunningIsDown() {
+            MovableClock clock = new MovableClock(T0);
+            DepositHealthIndicator indicator = new DepositHealthIndicator(true, Optional::empty, () -> 0, () -> null, INTERVAL, clock);
+
+            assertThat(indicator.health().getStatus()).as("刚装配完：UP").isEqualTo(Status.UP);
+
+            clock.set(T0.plus(Duration.ofMinutes(6)));
+            Health h = indicator.health();
+            assertThat(h.getStatus()).isEqualTo(Status.DOWN);
+            assertThat(h.getDetails().get("reason").toString()).contains("没跑过一轮");
         }
 
         @Test
@@ -187,8 +225,37 @@ class HealthIndicatorsTest {
             assertThat(h.getDetails().get("credited")).isEqualTo(2);
         }
 
+        /** 上一轮刚结束（时间就是「现在」）：只看结局，不涉及沉默多久。 */
         private DepositHealthIndicator indicator(PostingResult last, int unfinishedRounds) {
-            return new DepositHealthIndicator(true, () -> Optional.of(last), () -> unfinishedRounds);
+            return new DepositHealthIndicator(true, () -> Optional.of(last), () -> unfinishedRounds, () -> T0, INTERVAL, new MovableClock(T0));
+        }
+    }
+
+    /** 能拨的钟：健康项构造时记下「装配时刻」，之后按它量沉默了多久。 */
+    static final class MovableClock extends Clock {
+        private Instant now;
+
+        MovableClock(Instant now) {
+            this.now = now;
+        }
+
+        void set(Instant now) {
+            this.now = now;
+        }
+
+        @Override
+        public Instant instant() {
+            return now;
+        }
+
+        @Override
+        public ZoneId getZone() {
+            return ZoneOffset.UTC;
+        }
+
+        @Override
+        public Clock withZone(ZoneId zone) {
+            return this;
         }
     }
 }
