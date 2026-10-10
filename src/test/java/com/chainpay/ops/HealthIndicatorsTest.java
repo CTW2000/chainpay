@@ -37,10 +37,14 @@ class HealthIndicatorsTest {
     @DisplayName("索引器")
     class Indexer {
 
+        private static final Instant T0 = Instant.parse("2026-09-30T00:00:00Z");
+        private static final Duration POLL = Duration.ofSeconds(12);
+        private static final Duration CATCH_UP = Duration.ofMinutes(5);
+
         @Test
         @DisplayName("没装配（web 进程，或节点地址写成 false）：UNKNOWN，原因里写明")
         void notAssembledIsUnknown() {
-            Health h = new IndexerHealthIndicator(false, Optional::empty).health();
+            Health h = new IndexerHealthIndicator(false, Optional::empty, () -> null, POLL, CATCH_UP, new MovableClock(T0)).health();
             assertThat(h.getStatus()).isEqualTo(Status.UNKNOWN);
             assertThat(h.getDetails().get("reason").toString()).contains("web 进程").contains("CHAINPAY_CHAIN_RPC_URL=false");
         }
@@ -48,7 +52,39 @@ class HealthIndicatorsTest {
         @Test
         @DisplayName("装配了、状态表还没有行（从没停过）：UP")
         void assembledWithoutStateRowIsUp() {
-            assertThat(new IndexerHealthIndicator(true, Optional::empty).health().getStatus()).isEqualTo(Status.UP);
+            assertThat(new IndexerHealthIndicator(true, Optional::empty, () -> T0, POLL, CATCH_UP, new MovableClock(T0)).health().getStatus())
+                    .isEqualTo(Status.UP);
+        }
+
+        @Test
+        @DisplayName("★ 上一轮结束后超过「追赶预算 + 10 个轮询周期」（7 分钟）没再跑完一轮：DOWN——任务卡住了，状态表里却还写着 RUNNING；追赶中的长轮（6 分钟）不算")
+        void silenceAfterTheLastTickIsDown() {
+            MovableClock clock = new MovableClock(T0);
+            IndexerHealthIndicator indicator = new IndexerHealthIndicator(true,
+                    () -> Optional.of(new IndexerState("sepolia:link:transfer", IndexerStatus.RUNNING, null, T0)), () -> T0, POLL, CATCH_UP, clock);
+
+            clock.set(T0.plus(Duration.ofMinutes(6)));
+            assertThat(indicator.health().getStatus()).as("落后时一轮可以连追 5 分钟：还在预算内，不报").isEqualTo(Status.UP);
+
+            clock.set(T0.plus(Duration.ofMinutes(8)));
+            Health h = indicator.health();
+            assertThat(h.getStatus()).isEqualTo(Status.DOWN);
+            assertThat(h.getDetails().get("reason").toString()).contains("没跑完一轮");
+            assertThat(h.getDetails().get("persisted")).as("状态表里写的照样给出来").isEqualTo("RUNNING");
+        }
+
+        @Test
+        @DisplayName("★ 装配后一直没跑过一轮、超过 7 分钟：DOWN——调度根本没开；状态表没有行也不再算「从没停过 = UP」")
+        void neverTickingIsDown() {
+            MovableClock clock = new MovableClock(T0);
+            IndexerHealthIndicator indicator = new IndexerHealthIndicator(true, Optional::empty, () -> null, POLL, CATCH_UP, clock);
+
+            assertThat(indicator.health().getStatus()).as("刚装配完：UP").isEqualTo(Status.UP);
+
+            clock.set(T0.plus(Duration.ofMinutes(8)));
+            Health h = indicator.health();
+            assertThat(h.getStatus()).isEqualTo(Status.DOWN);
+            assertThat(h.getDetails().get("reason").toString()).contains("没跑过一轮");
         }
 
         @Test
@@ -62,7 +98,8 @@ class HealthIndicatorsTest {
         }
 
         private IndexerHealthIndicator indicator(IndexerStatus status, String reason) {
-            return new IndexerHealthIndicator(true, () -> Optional.of(new IndexerState("sepolia:link:transfer", status, reason, Instant.now())));
+            return new IndexerHealthIndicator(true, () -> Optional.of(new IndexerState("sepolia:link:transfer", status, reason, Instant.now())),
+                    () -> T0, POLL, CATCH_UP, new MovableClock(T0));
         }
     }
 

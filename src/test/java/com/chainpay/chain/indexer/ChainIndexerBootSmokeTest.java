@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.chainpay.chain.indexer.config.ChainReaders;
 import com.chainpay.chain.indexer.domain.TickOutcome;
 import com.chainpay.chain.indexer.service.ChainIndexerScheduler;
+import com.chainpay.ops.health.IndexerHealthIndicator;
 import com.chainpay.security.filter.AdminAuthFilter;
 import com.chainpay.support.AbstractPostgresTest;
 import com.sun.net.httpserver.HttpServer;
@@ -102,6 +103,9 @@ class ChainIndexerBootSmokeTest extends AbstractPostgresTest {
         }
         assertThat(running.lastTick()).as("调度器该已经跑过至少一轮").isPresent();
         assertThat(running.lastTick().get().outcome()).isEqualTo(TickOutcome.RETRY_LATER);
+        assertThat(context.getBean(IndexerHealthIndicator.class).health().getDetails().get("lastTickAt"))
+                .as("健康项量沉默用的「上一轮结束时间」接在了这个调度器上：接错了，要上线 7 分钟后才会以 DOWN 的样子暴露")
+                .isNotNull().isNotEqualTo("null");
 
         HttpResponse<String> response = HttpClient.newHttpClient().send(HttpRequest.newBuilder(
                         URI.create("http://localhost:" + port + "/admin/v1/indexer"))

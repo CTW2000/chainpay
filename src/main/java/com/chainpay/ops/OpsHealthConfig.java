@@ -32,9 +32,13 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 class OpsHealthConfig {
 
     @Bean
-    IndexerHealthIndicator indexerHealthIndicator(ObjectProvider<ChainIndexerScheduler> scheduler, IndexerStateRepository states,
-                                                  @Value("${chainpay.chain.cursor-name}") String cursorName) {
-        return new IndexerHealthIndicator(scheduler.getIfAvailable() != null, () -> states.find(cursorName));
+    IndexerHealthIndicator indexerHealthIndicator(ObjectProvider<ChainIndexerScheduler> scheduler, IndexerStateRepository states, Clock clock,
+                                                  @Value("${chainpay.chain.cursor-name}") String cursorName,
+                                                  @Value("${chainpay.chain.poll-interval}") Duration pollInterval,
+                                                  @Value("${chainpay.chain.catch-up-budget}") Duration catchUpBudget) {
+        ChainIndexerScheduler indexer = scheduler.getIfAvailable();
+        return new IndexerHealthIndicator(indexer != null, () -> states.find(cursorName),
+                () -> indexer == null ? null : indexer.lastTickAt(), pollInterval, catchUpBudget, clock);
     }
 
     @Bean

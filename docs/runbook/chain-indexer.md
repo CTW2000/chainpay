@@ -37,6 +37,7 @@ tools/admin.sh GET /admin/v1/indexer          # 先 eval "$(tools/admin.sh login
 | finalized 倒退 / finalized 区块 N 换了哈希 | 主节点对不可逆的部分改口：节点坏了，或链上出了灾难 | 用区块浏览器核对 N 的哈希与 `chain_head`；换主节点；确认一致后改回 RUNNING、重启 |
 | 两个节点对 finalized 块 N 意见不同 | 至少一个节点坏了，代码不知道信谁 | 用第三方（区块浏览器）查 N 的哈希，判断谁错，换掉错的那个；改回 RUNNING、重启 |
 | 节点拒绝了我们的凭证（HTTP 401 / 403） | key 失效或被撤销，重试永远没用 | 到提供商控制台换 key，更新 `CHAINPAY_CHAIN_RPC_URL`（或审计的那个）；改回 RUNNING、重启 |
+| 没跑完一轮 / 没跑过一轮（健康项 DOWN，状态表可能还写着 RUNNING） | 索引任务超过约 7 分钟（追赶预算 + 10 个轮询周期）没结束一轮：一轮卡住（多半挂在节点或数据库上）、抛了接不住的错误，或者调度根本没开 | 看日志里最后一条索引日志是什么时候、停在哪。卡住的，重启进程就会恢复；「装配后一直没跑过」是装配问题（定时任务的开关），不是节点的事。两种都不用改 `indexer_state` |
 | 代币未登记 / 代币已停用 / decimals 不一致 | 白名单、配置、链三者不一致 | 核对 `chain_token` 与 `chainpay.chain.token-address`；决定是改表还是改配置；改回 RUNNING、重启 |
 | 没有书签，也没配 chainpay.chain.start-block | 第一次启动没告诉它从哪开始 | 配 `CHAINPAY_CHAIN_START_BLOCK`（当前链头减几百，十进制，不能是未来的块）；改回 RUNNING、重启 |
 | 单块 N 的日志也取不到 | 提供商在这个高度答不出（归档范围、套餐限制）。**链头两块以内**的单块失败不算——那是负载均衡的各后端头不一致（"block range extends beyond current head block"），按瞬时处理、下一轮再来，不会走到这一行 | 换提供商；改回 RUNNING、重启 |

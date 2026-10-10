@@ -28,6 +28,7 @@ HTTP：UP / DEGRADED / UNKNOWN = 200；DOWN = 503。`DEGRADED` 是本项目多�
 | `indexer` | UNKNOWN | 这个进程不索引：web 进程，或节点地址写成了 false | web 上正常；worker 上是配错了——配真的节点地址，重启 |
 | `indexer` | DEGRADED | 连续瞬时失败（节点在抖） | `tools/admin.sh GET /admin/v1/indexer`；恢复后自己回 RUNNING |
 | `indexer` | DOWN | HALTED，`reason` 里是原因 | 按 `chain-indexer.md` 处理，处理完才能复位 |
+| `indexer` | DOWN，`reason` 写着「没跑完一轮 / 没跑过一轮」 | 超过「追赶预算 + 10 个轮询周期」（默认约 7 分钟）没跑完一轮：卡住了，或调度根本没开；状态表里可能还写着 RUNNING | 见 `chain-indexer.md` 第二节 |
 | `deposit` | UNKNOWN | 这个进程不入账：web 进程，或节点地址写成了 false | 同上 |
 | `deposit` | DEGRADED | 连续 5 轮没跑完（节点答不上来、库在抖） | 看 `reason`；恢复后自己回 UP |
 | `deposit` | DOWN | 上一轮 HALTED：节点拒绝了凭证 | 换 RPC key 后重启，见 `deposit.md` |
